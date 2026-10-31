@@ -1,0 +1,34 @@
+# Linux AppImage (x86_64) packaging (plan S8.9). Run via `npm run dist` (builds `out/` first).
+appId: dev.stefanos.harness
+productName: harness
+executableName: harness
+copyright: Copyright (c) Stefanos Michelakis
+asar: true
+
+directories:
+  output: release
+  buildResources: build
+
+# Only the built app ships. The main bundle inlines hono, zod, ignore, eventsource-parser… (electron.vite.config.ts)
+# and the renderer bundle inlines React etc., so no `node_modules` is packaged at all.
+files:
+  - out/**
+  - package.json
+  - "!**/*.map"
+  - "!node_modules"
+
+electronLanguages:
+  - en-US
+
+linux:
+  target:
+    - target: AppImage
+      arch: x64
+  category: Development
+  icon: build/icon.png
+  synopsis: Chat with LLMs about your local code projects
+  desktop:
+    entry:
+      StartupWMClass: harness
+
+artifactName: harness-${version}-x86_64.${ext}
