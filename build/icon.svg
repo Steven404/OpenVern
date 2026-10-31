@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <title>harness</title>
+  <!-- Accent rounded square (#f2cc8f) with the design's spark glyph (assistant avatar in docs/design/Main.dc.html),
+       drawn in #161316. The glyph is the design's 24x24 path scaled 12x and centred. -->
+  <rect x="24" y="24" width="464" height="464" rx="130" fill="#f2cc8f"/>
+  <g transform="translate(112 112) scale(12)" fill="none" stroke="#161316" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8"/>
+  </g>
+</svg>
