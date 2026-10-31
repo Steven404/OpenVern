@@ -109,7 +109,7 @@ describe('Chat options (D9)', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
     await waitFor(() => expect(del).toHaveBeenCalledWith(chat.id));
     await waitFor(() => expect(location()).toBe('/new'));
-    expect(await screen.findByTestId('new-chat-placeholder')).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1, name: /What are we building/ })).toBeTruthy();
     await waitFor(() => expect(screen.queryByRole('link', { name: chat.title })).toBeNull());
     expect(document.title).toBe('harness');
   });

@@ -15,7 +15,7 @@ const ctrl = (key: string) => fireEvent.keyDown(window, { key, ctrlKey: true });
 describe('App shell and routing', () => {
   it('shows the sidebar and the New chat screen at #/new, with New chat marked current', async () => {
     renderApp({ route: '/new' });
-    expect(await screen.findByTestId('new-chat-placeholder')).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1, name: /What are we building/ })).toBeTruthy();
     expect(screen.getByText('harness')).toBeTruthy();
     expect(screen.getByRole('button', { name: /New chat/ }).getAttribute('aria-current')).toBe('page');
     expect(document.title).toBe('harness');
@@ -24,14 +24,14 @@ describe('App shell and routing', () => {
   it('redirects unknown routes to #/new', async () => {
     renderApp({ route: '/nope/nothing' });
     await waitFor(() => expect(location()).toBe('/new'));
-    expect(await screen.findByTestId('new-chat-placeholder')).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1, name: /What are we building/ })).toBeTruthy();
   });
 
   it('renders the chat screen at #/chat/:id and sets the document title', async () => {
     const { client, chat } = await seeded();
     renderApp({ client, route: `/chat/${chat.id}` });
-    expect(await screen.findByTestId('conversation-placeholder')).toBeTruthy();
-    expect(screen.getByTestId('composer-placeholder')).toBeTruthy();
+    expect(await screen.findByRole('region', { name: 'Conversation' })).toBeTruthy();
+    expect(await screen.findByPlaceholderText('Reply to harness…')).toBeTruthy();
     await waitFor(() => expect(document.title).toBe(`${chat.title} — harness`));
     expect(screen.getByRole('heading', { level: 1, name: chat.title })).toBeTruthy();
   });
@@ -48,7 +48,7 @@ describe('Ctrl+N', () => {
   it('opens New chat with the current chat’s project preselected', async () => {
     const { client, chat } = await seeded();
     renderApp({ client, route: `/chat/${chat.id}` });
-    await screen.findByTestId('conversation-placeholder');
+    await screen.findByRole('region', { name: 'Conversation' });
     // The shortcut reads the project from the chats list: wait until it has loaded.
     await screen.findAllByRole('link', { name: chat.title });
     ctrl('n');

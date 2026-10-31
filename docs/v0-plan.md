@@ -704,31 +704,33 @@ the orchestrator swaps the imports when both land. S6's "New chat" button / `Ctr
 **Owns:** `src/renderer/{features/conversation,features/composer,features/new-chat,stores/runs.ts,styles/shiki-theme.ts}`. **Depends on:** S0, S6.1 primitives. Develop with `VITE_API=mock`.
 
 **Streaming state**
-- [ ] S7.1 `runs` store (Zustand), keyed by chat id: consumes `AgentEvent`s from `sendMessage`/`retry` and keeps an in-flight view (pending user message, streaming assistant text, running tools). Navigating away does **not** cancel a run; returning shows its progress. On `done` it refetches the chat and invalidates chats/projects queries; `chat_updated` patches the cached summaries immediately.
-- [ ] S7.2 Stop: aborts the fetch (server saves `stopped`); stopped messages show a muted "Stopped" label.
+- [x] S7.1 `runs` store (Zustand), keyed by chat id: consumes `AgentEvent`s from `sendMessage`/`retry` and keeps an in-flight view (pending user message, streaming assistant text, running tools). Navigating away does **not** cancel a run; returning shows its progress. On `done` it refetches the chat and invalidates chats/projects queries; `chat_updated` patches the cached summaries immediately.
+- [x] S7.2 Stop: aborts the fetch (server saves `stopped`); stopped messages show a muted "Stopped" label.
 
 **Conversation (D10–D14)**
-- [ ] S7.3 Group messages into turns: each user message, then one `AssistantTurn` article (one avatar header) containing its assistant texts and tool rows **in order**.
-- [ ] S7.4 Markdown: GFM (lists, tables, task lists, links, inline code, blockquotes, headings scaled down), styled from tokens; links open externally; render throttled to one update per animation frame while streaming.
-- [ ] S7.5 Code blocks: Shiki with a theme built from tokens, lazy-loaded languages, highlight only completed blocks while streaming (plain mono before that).
-- [ ] S7.6 Tool rows: running → spinner; done → ✓ `--color-success` or ✕ `--color-danger`; name, `summary`, duration (`0.2s`, `1.4s`, `12s`); a `<button aria-expanded>` that reveals formatted args and the output (mono, max-height 320px, scroll).
-- [ ] S7.7 Waiting indicator before the first token ("Thinking…", mono, faint, subtle pulse); auto-scroll that sticks to the bottom only while the user is at the bottom.
-- [ ] S7.8 Error card for `error` events and `status: 'error'` messages: danger-tinted border, the message, and an action — "Open settings" for key/credit errors, "Retry" (calls `retry`) when `retryable` or after a stop.
+- [x] S7.3 Group messages into turns: each user message, then one `AssistantTurn` article (one avatar header) containing its assistant texts and tool rows **in order**.
+- [x] S7.4 Markdown: GFM (lists, tables, task lists, links, inline code, blockquotes, headings scaled down), styled from tokens; links open externally; render throttled to one update per animation frame while streaming.
+- [x] S7.5 Code blocks: Shiki with a theme built from tokens, lazy-loaded languages, highlight only completed blocks while streaming (plain mono before that).
+- [x] S7.6 Tool rows: running → spinner; done → ✓ `--color-success` or ✕ `--color-danger`; name, `summary`, duration (`0.2s`, `1.4s`, `12s`); a `<button aria-expanded>` that reveals formatted args and the output (mono, max-height 320px, scroll).
+- [x] S7.7 Waiting indicator before the first token ("Thinking…", mono, faint, subtle pulse); auto-scroll that sticks to the bottom only while the user is at the bottom.
+- [x] S7.8 Error card for `error` events and `status: 'error'` messages: danger-tinted border, the message, and an action — "Open settings" for key/credit errors, "Retry" (calls `retry`) when `retryable` or after a stop.
 
 **Composer (D15, D16, D18)**
-- [ ] S7.9 Two variants as designed (reply: rows 2, "Reply to harness…"; new: rows 3, "Ask a question, paste a snippet, or describe a task…", project chip). Textarea auto-grows to 40% of the viewport. Enter sends, Shift+Enter inserts a newline, no send while IME composing or while a run is active. Send disabled when there is no text and no attachment, or while an upload is in progress.
-- [ ] S7.10 **Model picker:** trigger shows the model name without the `Provider: ` prefix; popover with a cmdk search (name and id) listing models with provider, context (e.g. `200K`) and badges "Tools" / "Vision". Choosing sets the composer's model and `PATCH /settings { lastModel }`. A chat opens with its own `model`; `#/new` uses `lastModel` → `DEFAULT_MODEL` → fallback (§4.5). No key → the trigger reads "Add API key" and opens Settings.
-- [ ] S7.11 **Attach (+):** opens a menu with one item, **"Add files"**, which opens the OS file picker (`<input type="file" multiple>`). Text **and** images are allowed: `accept = TEXT_ACCEPT + ',' + IMAGE_ACCEPT` when the selected model supports images, and `accept = TEXT_ACCEPT` (no images) when it does not. Each picked file uploads immediately (chip shows a spinner); limits from `LIMITS`; server rejections show on the chip in danger colour.
-- [ ] S7.12 **Model switch rule:** if the composer holds image attachments and the user switches to a model without image input, remove those images from the composer (and `deleteAttachment` them) and show, directly below the composer, in `--color-danger`: **"This model does not support image input"**. The text clears on the next send, the next file added, or the next model change. As a last guard, an image that still reaches a non-vision model at send time is removed with the same message.
-- [ ] S7.13 Attachment chips in the composer (name, size, × remove; images as 40px thumbnails) and in sent user bubbles (images as thumbnails up to 240px wide via `attachmentUrl`).
-- [ ] S7.14 Notices below the composer, above the hint: no key → "Add your OpenRouter API key to start chatting." + "Open settings" (send disabled); project chat with a model without tools → muted "This model can't use tools, so it won't read your project files."
+- [x] S7.9 Two variants as designed (reply: rows 2, "Reply to harness…"; new: rows 3, "Ask a question, paste a snippet, or describe a task…", project chip). Textarea auto-grows to 40% of the viewport. Enter sends, Shift+Enter inserts a newline, no send while IME composing or while a run is active. Send disabled when there is no text and no attachment, or while an upload is in progress.
+- [x] S7.10 **Model picker:** trigger shows the model name without the `Provider: ` prefix; popover with a cmdk search (name and id) listing models with provider, context (e.g. `200K`) and badges "Tools" / "Vision". Choosing sets the composer's model and `PATCH /settings { lastModel }`. A chat opens with its own `model`; `#/new` uses `lastModel` → `DEFAULT_MODEL` → fallback (§4.5). No key → the trigger reads "Add API key" and opens Settings.
+- [x] S7.11 **Attach (+):** opens a menu with one item, **"Add files"**, which opens the OS file picker (`<input type="file" multiple>`). Text **and** images are allowed: `accept = TEXT_ACCEPT + ',' + IMAGE_ACCEPT` when the selected model supports images, and `accept = TEXT_ACCEPT` (no images) when it does not. Each picked file uploads immediately (chip shows a spinner); limits from `LIMITS`; server rejections show on the chip in danger colour.
+- [x] S7.12 **Model switch rule:** if the composer holds image attachments and the user switches to a model without image input, remove those images from the composer (and `deleteAttachment` them) and show, directly below the composer, in `--color-danger`: **"This model does not support image input"**. The text clears on the next send, the next file added, or the next model change. As a last guard, an image that still reaches a non-vision model at send time is removed with the same message.
+- [x] S7.13 Attachment chips in the composer (name, size, × remove; images as 40px thumbnails) and in sent user bubbles (images as thumbnails up to 240px wide via `attachmentUrl`).
+- [x] S7.14 Notices below the composer, above the hint: no key → "Add your OpenRouter API key to start chatting." + "Open settings" (send disabled); project chat with a model without tools → muted "This model can't use tools, so it won't read your project files."
 
 **New chat screen (D17, D18)**
-- [ ] S7.15 Hero + composer (new) + project chip menu ("No project", every project, "Add project…" → New project modal). Preselect: the project passed in by "New chat here", else the project of the chat you came from, else "No project".
-- [ ] S7.16 First send: `createChat({ projectId, model })` → navigate to `#/chat/:id` → `sendMessage` with the text and attachments; the chat appears in the sidebar immediately and gets its title via `chat_updated`.
-- [ ] S7.17 Component tests: Enter vs Shift+Enter; `accept` follows the model; image removal + red message on model switch, and when it clears; stop button; turn grouping; tool row states.
+- [x] S7.15 Hero + composer (new) + project chip menu ("No project", every project, "Add project…" → New project modal). Preselect: the project passed in by "New chat here", else the project of the chat you came from, else "No project".
+- [x] S7.16 First send: `createChat({ projectId, model })` → navigate to `#/chat/:id` → `sendMessage` with the text and attachments; the chat appears in the sidebar immediately and gets its title via `chat_updated`.
+- [x] S7.17 Component tests: Enter vs Shift+Enter; `accept` follows the model; image removal + red message on model switch, and when it clears; stop button; turn grouping; tool row states.
 
 **Acceptance:** against `MockApiClient`, side by side with the design at 1440×900, the conversation and both composers match; every rule above works.
+
+**S7 notes (as built):** `useRunsStore` (`send`, `retry`, `stop`, `dismissError`, `selectIsRunning`, `patchChatSummary`). After an abort without `done` the store polls `GET /chats/:id` (≤ ~1.8 s) until the `stopped` message is persisted. Retry resends via `sendMessage` when the user message never reached the server. Shiki loads per language on demand (no wasm, JS regex engine). Wired into the shell by the orchestrator (placeholders removed).
 
 ### S8 — Electron shell and Linux packaging · M
 
@@ -828,7 +830,7 @@ Run on: web dev (Chrome or Firefox), Electron dev, and the AppImage on CachyOS a
 | S5 API server + composition | Claude Sonnet 5.5 | `v0/s5-api-server` | [x] |
 | S6 UI: shell, sidebar, projects, settings, header | Claude Sonnet 5.5 | `v0/s6-ui-shell` | [x] |
 | S6.1 UI primitives (early PR) | Claude Sonnet 5.5 | `v0/s6-1-ui-primitives` | [x] |
-| S7 UI: conversation, composer, models, attachments | | | [ ] |
+| S7 UI: conversation, composer, models, attachments | Claude Sonnet 5.5 | `v0/s7-ui-chat` | [x] |
 | S8 Electron shell + AppImage | Claude Sonnet 5.5 | `v0/s8-electron-shell` (wave 2 part) | [ ] |
 | S8.1 `protocol.handle` streaming spike | Claude Sonnet 5.5 | `v0/s8-electron-shell` | [x] |
 | S9 Integration, QA, release | | | [ ] |

@@ -1,10 +1,9 @@
 // `#/chat/:id` — ChatHeader (S6) + Conversation (S7) + ReplyComposer (S7).
-// S7 swap: replace the `./placeholders` import below with
-//   import { Conversation } from '@renderer/features/conversation';
-//   import { ReplyComposer } from '@renderer/features/composer';
 
 import { Button } from '@renderer/components/ui';
 import { ChatHeader } from '@renderer/features/chat-header';
+import { ReplyComposer } from '@renderer/features/composer';
+import { Conversation } from '@renderer/features/conversation';
 import { ApiError } from '@renderer/lib/api-client';
 import { useApiClient } from '@renderer/lib/api-context';
 import { queryKeys } from '@renderer/lib/query-keys';
@@ -12,7 +11,6 @@ import { paths } from '@renderer/lib/routes';
 import type { ChatSummary } from '@shared/types';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router';
-import { Conversation, ReplyComposer } from './placeholders';
 import { useChats } from './queries';
 
 /** The chats list is patched live by `chat_updated`; `chat(id)` is the fallback before the list has the chat. */

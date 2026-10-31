@@ -10,7 +10,11 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const projectButton = (name: string) => screen.findByRole('button', { name: new RegExp(`^${name}`) });
+// Scoped to the sidebar: the New chat screen's project chip ("Project: …") would otherwise match `^P`.
+const projectButton = async (name: string) =>
+  within(await screen.findByRole('complementary', { name: 'Sidebar' })).findByRole('button', {
+    name: new RegExp(`^${name}`),
+  });
 
 describe('Sidebar projects (D5, D6)', () => {
   it('lists projects with their chat counts and starts collapsed', async () => {

@@ -1,8 +1,7 @@
 // App root: providers (TanStack Query + ApiClient) → hash router → shell.
 //   #/new (default, and any unknown route) · #/chat/:id
-// S7 swap: replace the `./placeholders` import below with `import { NewChatScreen } from '@renderer/features/new-chat';`
-// (and `ChatScreen.tsx` for `Conversation` / `ReplyComposer`).
 
+import { NewChatScreen } from '@renderer/features/new-chat';
 import type { ApiClient } from '@renderer/lib/api-client';
 import { ApiClientProvider } from '@renderer/lib/api-context';
 import { createApiClient } from '@renderer/lib/create-api-client';
@@ -12,7 +11,6 @@ import { type ReactNode, useState } from 'react';
 import { HashRouter, Navigate, Route, Routes } from 'react-router';
 import { AppShell } from './AppShell';
 import { ChatScreen } from './ChatScreen';
-import { NewChatScreen } from './placeholders';
 
 export function createQueryClient(): QueryClient {
   return new QueryClient({
