@@ -21,7 +21,7 @@ export function modelProvider(model: ModelInfo): string {
 
 /**
  * Model for `#/new`: `lastModel` → `DEFAULT_MODEL` → first model with tools + images (plan §4.5).
- * `null` when the list is empty / not loaded and neither candidate exists.
+ * While the list is not loaded yet it optimistically returns `lastModel` / `DEFAULT_MODEL`.
  */
 export function resolveDefaultModel(lastModel: string | null | undefined, models: ModelInfo[] | undefined): string {
   const candidates = [lastModel, DEFAULT_MODEL].filter((m): m is string => !!m);
