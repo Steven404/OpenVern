@@ -657,16 +657,18 @@ Complexity: **L** low · **M** medium · **H** high. Waves are in §7.
 
 **Owns:** `src/server/**`, `src/core/index.ts`. **Depends on:** S0 (routes), wiring needs S1–S4 merged.
 
-- [ ] S5.1 `createApp(core, { mode })` → Hono app with every route in §4.3, zod-validated bodies, `ApiErrorBody` errors, unknown routes `404 not_found`.
-- [ ] S5.2 Security middleware per §3.3 (`X-Harness-Client`, `Host`, `Origin`), applied to `/api/*`.
-- [ ] S5.3 `PUT /settings/openrouter-key` → `provider.validateKey` then `settings.setApiKey`.
-- [ ] S5.4 Streaming routes: `streamSSE`, pass the request's abort signal into `agent.runTurn`, write each `AgentEvent` as `data:` frames, close after `done`. Run-level validation (chat exists, no active run, images vs model) happens **before** the stream opens and returns JSON errors.
-- [ ] S5.5 Attachments upload (multipart, size checked while reading) and content download with correct `Content-Type`.
-- [ ] S5.6 `createCore(deps)` composition root (§4.8): storage services, model catalog, provider (OpenRouter or the injected one), tools, agent; runs `attachments.cleanupOrphans()` at startup.
-- [ ] S5.7 `src/server/dev.ts`: `createCore` with `FileSecretStore`, `.dev-data`, `HARNESS_FAKE_PROVIDER=1` support, serve on `127.0.0.1:8787` via `@hono/node-server`, log requests.
-- [ ] S5.8 Route tests with `app.request()` against a temp data dir + `FakeProvider`: every route's happy path and main errors; SSE event order for a tool turn; abort by disconnect saves `stopped`; `409` on concurrent runs; middleware rejections.
+- [x] S5.1 `createApp(core, { mode })` → Hono app with every route in §4.3, zod-validated bodies, `ApiErrorBody` errors, unknown routes `404 not_found`.
+- [x] S5.2 Security middleware per §3.3 (`X-Harness-Client`, `Host`, `Origin`), applied to `/api/*`.
+- [x] S5.3 `PUT /settings/openrouter-key` → `provider.validateKey` then `settings.setApiKey`.
+- [x] S5.4 Streaming routes: `streamSSE`, pass the request's abort signal into `agent.runTurn`, write each `AgentEvent` as `data:` frames, close after `done`. Run-level validation (chat exists, no active run, images vs model) happens **before** the stream opens and returns JSON errors.
+- [x] S5.5 Attachments upload (multipart, size checked while reading) and content download with correct `Content-Type`.
+- [x] S5.6 `createCore(deps)` composition root (§4.8): storage services, model catalog, provider (OpenRouter or the injected one), tools, agent; runs `attachments.cleanupOrphans()` at startup.
+- [x] S5.7 `src/server/dev.ts`: `createCore` with `FileSecretStore`, `.dev-data`, `HARNESS_FAKE_PROVIDER=1` support, serve on `127.0.0.1:8787` via `@hono/node-server`, log requests.
+- [x] S5.8 Route tests with `app.request()` against a temp data dir + `FakeProvider`: every route's happy path and main errors; SSE event order for a tool turn; abort by disconnect saves `stopped`; `409` on concurrent runs; middleware rejections.
 
 **Acceptance:** with `HARNESS_FAKE_PROVIDER=1 npm run dev:server`, a scripted `curl` session (documented in the PR) creates a project and a chat and streams a tool turn.
+
+**S5 notes (as built):** `createApp(core, { mode, version })` (`src/server/app.ts`), `createCore(deps)` (`src/core/index.ts`). Curl walkthrough in `src/server/README.md`. Streams open with `: ok` and send `: keepalive` every 15 s. Disconnect = `stream.onAbort` **or** `c.req.raw.signal`. Middleware rejections are `403` with code `invalid_request`. The security middleware also checks the URL host (Electron may omit `Host`). For `app://` in tests use `app.request(new Request('app://harness/…'))`.
 
 ### S6 — UI: shell, sidebar, projects, settings, chat header · M
 
@@ -821,7 +823,7 @@ Run on: web dev (Chrome or Firefox), Electron dev, and the AppImage on CachyOS a
 | S2 OpenRouter provider + model catalog | Claude Sonnet 5.5 | `v0/s2-openrouter` | [x] |
 | S3 Project tools (read-only) | Claude Sonnet 5.5 | `v0/s3-project-tools` | [x] |
 | S4 Agent loop | Claude Sonnet 5.5 | `v0/s4-agent-loop` | [x] |
-| S5 API server + composition | | | [ ] |
+| S5 API server + composition | Claude Sonnet 5.5 | `v0/s5-api-server` | [x] |
 | S6 UI: shell, sidebar, projects, settings, header | | | [ ] |
 | S6.1 UI primitives (early PR) | Claude Sonnet 5.5 | `v0/s6-1-ui-primitives` | [x] |
 | S7 UI: conversation, composer, models, attachments | | | [ ] |
@@ -845,7 +847,7 @@ Run on: web dev (Chrome or Firefox), Electron dev, and the AppImage on CachyOS a
 | AppImage needs `fuse2` (installed here) and unprivileged user namespaces for Chromium's sandbox (enabled on Arch/CachyOS kernels) | check on the Arch install |
 | Shiki cost while streaming → highlight completed blocks only | by design |
 | Big projects: walkers are capped and abortable | by design |
-| `<img src={attachmentUrl(id)}>` cannot send the `X-Harness-Client` header that §3.3 requires on every `/api` request. S5 must exempt `GET /api/attachments/:id/content` (e.g. allow it when `Sec-Fetch-Site` is `same-origin`/`none`), or S7 loads thumbnails via `fetch` + blob URLs | open (S5/S7) |
+| `<img src={attachmentUrl(id)}>` cannot send the `X-Harness-Client` header that §3.3 requires on every `/api` request | **resolved (S5):** `GET /api/attachments/:id/content` is exempt from the header when `Sec-Fetch-Site` is `same-origin`/`none`, or the URL scheme is `app:` without `Sec-Fetch-Site`; Host/Origin still enforced; served with `CORP: same-origin`, `CSP: default-src 'none'; sandbox`, `nosniff`. Verify thumbnails in the AppImage during S9 |
 
 ## 11. After V0 (backlog, not in scope)
 
