@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { APP_NAME } from '@shared/constants';
 import { app, BrowserWindow, shell } from 'electron';
-import { devRendererUrl, isAppUrl } from './origin';
+import { devRendererUrl, isAppUrl, PROD_ORIGIN } from './origin';
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -79,9 +79,7 @@ export function createMainWindow(): BrowserWindow {
   if (devUrl) {
     void win.loadURL(devUrl);
   } else {
-    // TODO(S8.3): replace with `void win.loadURL('app://harness/')` once `protocol.handle('app', …)` serves the
-    // renderer and `/api/*` (see index.ts). Until then the built renderer is loaded straight from disk.
-    void win.loadFile(join(import.meta.dirname, '../renderer/index.html'));
+    void win.loadURL(`${PROD_ORIGIN}/`);
   }
   return win;
 }

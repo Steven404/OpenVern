@@ -8,6 +8,9 @@ export default defineConfig({
   main: {
     resolve: { alias: aliases },
     build: {
+      // Bundle hono, zod, ignore, eventsource-parser… into out/main/index.js so the AppImage needs no node_modules
+      // (`electron` and Node built-ins stay external).
+      externalizeDeps: false,
       rolldownOptions: { input: { index: fromRoot('./src/main/index.ts') } },
     },
   },
