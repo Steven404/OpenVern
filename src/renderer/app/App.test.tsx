@@ -1,14 +1,122 @@
-import { render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { App } from './App';
+import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { location, renderApp, resetUi, seededClient } from './test-utils';
 
-afterEach(() => vi.unstubAllEnvs());
+beforeEach(resetUi);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
-describe('App placeholder', () => {
-  it('renders the logo and reports API health from the mock client', async () => {
-    vi.stubEnv('VITE_API', 'mock');
-    render(<App />);
-    expect(screen.getByRole('heading', { name: 'harness.' })).toBeTruthy();
-    expect(await screen.findByText(/API dev/)).toBeTruthy();
+const seeded = seededClient;
+
+const ctrl = (key: string) => fireEvent.keyDown(window, { key, ctrlKey: true });
+
+describe('App shell and routing', () => {
+  it('shows the sidebar and the New chat screen at #/new, with New chat marked current', async () => {
+    renderApp({ route: '/new' });
+    expect(await screen.findByTestId('new-chat-placeholder')).toBeTruthy();
+    expect(screen.getByText('harness')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /New chat/ }).getAttribute('aria-current')).toBe('page');
+    expect(document.title).toBe('harness');
+  });
+
+  it('redirects unknown routes to #/new', async () => {
+    renderApp({ route: '/nope/nothing' });
+    await waitFor(() => expect(location()).toBe('/new'));
+    expect(await screen.findByTestId('new-chat-placeholder')).toBeTruthy();
+  });
+
+  it('renders the chat screen at #/chat/:id and sets the document title', async () => {
+    const { client, chat } = await seeded();
+    renderApp({ client, route: `/chat/${chat.id}` });
+    expect(await screen.findByTestId('conversation-placeholder')).toBeTruthy();
+    expect(screen.getByTestId('composer-placeholder')).toBeTruthy();
+    await waitFor(() => expect(document.title).toBe(`${chat.title} — harness`));
+    expect(screen.getByRole('heading', { level: 1, name: chat.title })).toBeTruthy();
+  });
+
+  it('shows a not-found state for an unknown chat', async () => {
+    renderApp({ route: '/chat/does-not-exist' });
+    expect(await screen.findByText(/doesn't exist/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Start a new chat' }));
+    await waitFor(() => expect(location()).toBe('/new'));
+  });
+});
+
+describe('Ctrl+N', () => {
+  it('opens New chat with the current chat’s project preselected', async () => {
+    const { client, chat } = await seeded();
+    renderApp({ client, route: `/chat/${chat.id}` });
+    await screen.findByTestId('conversation-placeholder');
+    // The shortcut reads the project from the chats list: wait until it has loaded.
+    await screen.findAllByRole('link', { name: chat.title });
+    ctrl('n');
+    await waitFor(() => expect(location()).toBe(`/new?project=${chat.projectId}`));
+  });
+
+  it('is ignored while a dialog is open', async () => {
+    renderApp({ route: '/chat/does-not-exist' });
+    fireEvent.click(await screen.findByRole('button', { name: 'Settings' }));
+    await screen.findByRole('dialog', { name: 'Settings' });
+    ctrl('n');
+    expect(location()).toBe('/chat/does-not-exist');
+  });
+});
+
+describe('sidebar collapse (D2) and responsive (D19)', () => {
+  it('collapses, shows an Open sidebar button, persists, and reopens', async () => {
+    renderApp();
+    fireEvent.click(await screen.findByRole('button', { name: 'Collapse sidebar' }));
+    expect(screen.queryByRole('complementary')).toBeNull();
+    expect(window.localStorage.getItem('harness.sidebarCollapsed')).toBe('1');
+    const open = screen.getByRole('button', { name: 'Open sidebar' });
+    await waitFor(() => expect(document.activeElement).toBe(open));
+    fireEvent.click(open);
+    expect(await screen.findByRole('complementary')).toBeTruthy();
+    expect(window.localStorage.getItem('harness.sidebarCollapsed')).toBe('0');
+    await waitFor(() => expect(document.activeElement?.getAttribute('aria-label')).toBe('Collapse sidebar'));
+  });
+
+  it('Ctrl+B toggles the sidebar', async () => {
+    renderApp();
+    await screen.findByRole('complementary');
+    ctrl('b');
+    expect(screen.queryByRole('complementary')).toBeNull();
+    ctrl('b');
+    expect(screen.getByRole('complementary')).toBeTruthy();
+  });
+
+  it('starts collapsed at ≤ 760px and opens as an overlay that closes on navigation', async () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query.includes('max-width: 760px'),
+      media: query,
+      addEventListener() {},
+      removeEventListener() {},
+    }));
+    const { client, chat, project } = await seeded();
+    renderApp({ client });
+    expect(screen.queryByRole('complementary')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Open sidebar' }));
+    const sidebar = await screen.findByRole('complementary');
+    expect(sidebar.className).toContain('fixed');
+    fireEvent.click(await within(sidebar).findByRole('button', { name: new RegExp(`^${project.name}`) }));
+    fireEvent.click(await within(sidebar).findByRole('link', { name: chat.title }));
+    await waitFor(() => expect(screen.queryByRole('complementary')).toBeNull());
+    await waitFor(() => expect(location()).toBe(`/chat/${chat.id}`));
+  });
+
+  it('Escape closes the overlay', async () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: true,
+      media: query,
+      addEventListener() {},
+      removeEventListener() {},
+    }));
+    renderApp();
+    fireEvent.click(screen.getByRole('button', { name: 'Open sidebar' }));
+    await screen.findByRole('complementary');
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('complementary')).toBeNull());
   });
 });
