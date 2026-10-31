@@ -1,0 +1,51 @@
+/* Design tokens (plan §5.1). Tailwind v4 turns each `--color-*` / `--font-*` into utilities (`bg-surface`, `font-display`, …). */
+
+@import "@fontsource-variable/bricolage-grotesque";
+@import "@fontsource-variable/figtree";
+@import "@fontsource-variable/jetbrains-mono";
+
+@theme {
+  --color-bg: #161316;
+  --color-sidebar: #120f12;
+  --color-surface: #221c21;
+  --color-surface-raised: #2a2228;
+  --color-surface-raised-hover: #352b33;
+  --color-surface-raised-active: #31282f;
+  --color-bubble: #2b2329;
+  --color-tool: #1c171b;
+  --color-code: #100d10;
+
+  --color-border: #2a2229;
+  --color-border-header: #241d23;
+  --color-border-tool: #332a31;
+  --color-border-bubble: #372d35;
+  --color-border-control: #3d3139;
+  --color-border-hover: #4d3e48;
+  --color-border-focus: #5e4c58;
+
+  --color-text: #f0e6e6;
+  --color-text-body: #e2d6d7;
+  --color-text-code: #e8dddd;
+  --color-text-secondary: #d3c6c8;
+  --color-text-chat: #b9abae;
+  --color-text-muted: #aa9a9f;
+  --color-text-faint: #96878d;
+
+  --color-accent: #f2cc8f;
+  --color-accent-2: #e07a5f;
+  --color-success: #b8d4a0;
+  --color-danger: #ff8f87;
+
+  --color-overlay-row: rgb(240 230 230 / 0.05);
+  --color-overlay-ghost: rgb(240 230 230 / 0.07);
+  --color-overlay-current: rgb(240 230 230 / 0.08);
+
+  --font-display: "Bricolage Grotesque Variable", "Bricolage Grotesque", sans-serif;
+  --font-sans: "Figtree Variable", "Figtree", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
+
+  --width-sidebar: 272px;
+  --width-conversation: 760px;
+  --width-new-chat: 720px;
+  --height-header: 64px;
+}

@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>[APPNAME] — chat</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&amp;family=Figtree:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;background:#161316}
+a{color:#f0e6e6}a:hover{color:#ffffff}
+.v-root{height:100vh;min-height:720px}
+.v-btn{transition:background-color .15s ease,border-color .15s ease,color .15s ease}
+.v-row:hover{background:rgba(240,230,230,0.05)}
+.v-ghost:hover{background:rgba(240,230,230,0.07);color:#f0e6e6}
+.v-new:hover{background:#352b33;border-color:#4d3e48}
+.v-btn:focus-visible,.v-input:focus-visible{outline:2px solid #f2cc8f;outline-offset:2px}
+.v-composer:focus-within{border-color:#5e4c58}
+.v-input::placeholder{color:#96878d}
+@media (max-width:760px){.v-root{height:auto}.v-side{flex:1 1 100% !important;border-right:0 !important;border-bottom:1px solid #2e252d}}
+</style>
+</helmet>
+<div class="v-root" style="display: flex; flex-wrap: wrap; width: 100%; background: #161316; color: #f0e6e6; font-family: Figtree, system-ui, sans-serif; font-size: 15px; line-height: 1.5; box-sizing: border-box">
+
+  <!-- Sidebar -->
+  <aside class="v-side" style="flex: 0 0 272px; display: flex; flex-direction: column; background: #120f12; border-right: 1px solid #2a2229; box-sizing: border-box; min-height: 0">
+    <div style="display: flex; align-items: center; justify-content: space-between; padding: 18px 16px 14px 20px">
+      <span style="font-family: 'Bricolage Grotesque', sans-serif; font-weight: 700; font-size: 21px; letter-spacing: -0.02em; color: #f0e6e6">[APPNAME]<span style="color: {{accent}}">.</span></span>
+      <button class="v-btn v-ghost" type="button" aria-label="Collapse sidebar" style="width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 10px; background: transparent; color: #aa9a9f; cursor: pointer">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"></rect><path d="M9 4v16"></path></svg>
+      </button>
+    </div>
+
+    <div style="padding: 0 12px 8px">
+      <button class="v-btn v-new" type="button" style="width: 100%; min-height: 44px; display: flex; align-items: center; gap: 10px; padding: 0 12px; border: 1px solid #3d3139; border-radius: 12px; background: #2a2228; color: #f0e6e6; font: inherit; font-weight: 500; cursor: pointer; box-sizing: border-box">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+        <span style="flex: 1; text-align: left">New chat</span>
+        <span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #aa9a9f; border: 1px solid #3d3139; border-radius: 6px; padding: 1px 6px">Ctrl N</span>
+      </button>
+    </div>
+
+    <nav aria-label="Projects" style="flex: 1; overflow-y: auto; padding: 18px 12px 12px; min-height: 0">
+      <div style="display: flex; align-items: center; justify-content: space-between; padding: 0 8px 8px 8px">
+        <h2 style="margin: 0; font-family: 'JetBrains Mono', monospace; font-weight: 500; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: #aa9a9f">Projects</h2>
+        <button class="v-btn v-ghost" type="button" aria-label="New project" style="width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 8px; background: transparent; color: #aa9a9f; cursor: pointer">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+        </button>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <sc-for list="{{projects}}" as="p" hint-placeholder-count="3">
+          <div>
+            <button class="v-btn v-row" type="button" aria-expanded="{{p.open}}" onClick="{{p.toggle}}" style="width: 100%; min-height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 8px; border: 0; border-radius: 9px; background: transparent; color: #f0e6e6; font: inherit; font-size: 14px; font-weight: 500; cursor: pointer; text-align: left">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#96878d" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="{{p.chevron}}"><path d="M9 6l6 6-6 6"></path></svg>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#e07a5f" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2h8.5A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"></path></svg>
+              <span style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{p.name}}</span>
+              <span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #96878d">{{p.count}}</span>
+            </button>
+            <sc-if value="{{p.open}}" hint-placeholder-val="{{true}}">
+              <ul style="list-style: none; margin: 2px 0 6px; padding: 0 0 0 30px; display: flex; flex-direction: column; gap: 1px">
+                <sc-for list="{{p.chats}}" as="c" hint-placeholder-count="3">
+                  <li>
+                    <a class="v-btn v-row" href="#" aria-current="{{c.current}}" style="{{c.style}}">{{c.title}}</a>
+                  </li>
+                </sc-for>
+              </ul>
+            </sc-if>
+          </div>
+        </sc-for>
+      </div>
+    </nav>
+
+    <div style="padding: 10px 12px 14px; border-top: 1px solid #2a2229; display: flex; align-items: center; gap: 4px">
+      <button class="v-btn v-ghost" type="button" aria-label="Settings" style="min-height: 40px; display: inline-flex; align-items: center; gap: 10px; padding: 0 10px; border: 0; border-radius: 10px; background: transparent; color: #d3c6c8; font: inherit; font-size: 14px; cursor: pointer">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        <span>Settings</span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- Main chat -->
+  <main style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; min-height: 0; height: 100%">
+    <header style="display: flex; align-items: center; gap: 12px; padding: 14px 24px; border-bottom: 1px solid #241d23; min-height: 64px; box-sizing: border-box">
+      <span style="font-family: 'JetBrains Mono', monospace; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: #aa9a9f">stefanos-ai-harness /</span>
+      <h1 style="margin: 0; flex: 1; min-width: 0; font-size: 15px; font-weight: 600; color: #f0e6e6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">Agent loop and tool calls</h1>
+      <button class="v-btn v-ghost" type="button" aria-label="Chat options" style="width: 40px; height: 40px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 10px; background: transparent; color: #aa9a9f; cursor: pointer">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6"></circle><circle cx="12" cy="12" r="1.6"></circle><circle cx="19" cy="12" r="1.6"></circle></svg>
+      </button>
+    </header>
+
+    <section aria-label="Conversation" style="flex: 1; overflow-y: auto; padding: 40px 24px 24px; min-height: 0">
+      <div style="max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 32px">
+
+        <div style="align-self: flex-end; max-width: 78%; background: #2b2329; border: 1px solid #372d35; border-radius: 18px 18px 6px 18px; padding: 12px 16px; color: #f0e6e6; font-size: 15.5px">How should the agent loop handle tool calls? I want it simple: send messages, run any tools the model asks for, feed the results back, repeat.</div>
+
+        <article style="display: flex; flex-direction: column; gap: 14px; color: #e2d6d7; font-size: 15.5px; line-height: 1.65">
+          <div style="display: flex; align-items: center; gap: 10px">
+            <span aria-hidden="true" style="width: 26px; height: 26px; border-radius: 8px; background: {{accent}}; color: #161316; display: inline-flex; align-items: center; justify-content: center; font-family: 'Bricolage Grotesque', sans-serif; font-weight: 700; font-size: 14px"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8"></path></svg></span>
+            <span style="font-weight: 600; color: #f0e6e6; font-size: 14px">[APPNAME]</span>
+          </div>
+
+          <p style="margin: 0">That shape is right. Keep the loop as one function that only stops when the model's reply contains no tool calls.</p>
+
+          <div style="border: 1px solid #332a31; border-radius: 12px; background: #1c171b; display: flex; align-items: center; gap: 10px; padding: 10px 14px; font-size: 13.5px; color: #d3c6c8">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#b8d4a0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5L20 7"></path></svg>
+            <span style="font-family: 'JetBrains Mono', monospace; font-size: 12.5px">read_file</span>
+            <span style="color: #aa9a9f; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">src/agent/loop.ts</span>
+            <span style="font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: #96878d">0.2s</span>
+          </div>
+
+          <pre style="margin: 0; background: #100d10; border: 1px solid #2a2229; border-radius: 12px; padding: 16px 18px; overflow-x: auto; font-family: 'JetBrains Mono', monospace; font-size: 13px; line-height: 1.7; color: #e8dddd"><code><span style="color: #e07a5f">while</span> (<span style="color: #e07a5f">true</span>) {
+  <span style="color: #e07a5f">const</span> reply = <span style="color: #e07a5f">await</span> model.send(messages)
+  messages.push(reply)
+  <span style="color: #e07a5f">if</span> (!reply.toolCalls.length) <span style="color: #e07a5f">break</span>
+  <span style="color: #e07a5f">for</span> (<span style="color: #e07a5f">const</span> call <span style="color: #e07a5f">of</span> reply.toolCalls) {
+    messages.push(<span style="color: #e07a5f">await</span> tools.run(call))
+  }
+}</code></pre>
+
+          <p style="margin: 0">Two guards are worth adding early: a maximum number of turns, so a confused model can't spin forever, and a confirmation step before any tool that writes to disk.</p>
+        </article>
+      </div>
+    </section>
+
+    <div style="padding: 8px 24px 20px">
+      <form class="v-composer" style="max-width: 760px; margin: 0 auto; background: #221c21; border: 1px solid #3d3139; border-radius: 18px; padding: 14px 14px 10px 18px; box-sizing: border-box; display: flex; flex-direction: column; gap: 8px">
+        <label for="composer" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Message</label>
+        <textarea id="composer" class="v-input" rows="2" placeholder="Reply to [APPNAME]…" style="resize: none; border: 0; outline: 0; background: transparent; color: #f0e6e6; font: inherit; font-size: 15.5px; line-height: 1.5"></textarea>
+        <div style="display: flex; align-items: center; gap: 6px">
+          <button class="v-btn v-ghost" type="button" aria-label="Attach file" style="width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 10px; background: transparent; color: #aa9a9f; cursor: pointer">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+          </button>
+          <span style="flex: 1"></span>
+          <button class="v-btn v-ghost" type="button" style="min-height: 36px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border: 0; border-radius: 10px; background: transparent; color: #d3c6c8; font: inherit; font-size: 13.5px; cursor: pointer">
+            [Model name]
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
+          </button>
+          <button class="v-btn" type="submit" aria-label="Send message" style="width: 38px; height: 38px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 12px; background: {{accent}}; color: #161316; cursor: pointer">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"></path></svg>
+          </button>
+        </div>
+      </form>
+      <p style="max-width: 760px; margin: 8px auto 0; text-align: center; font-size: 12px; color: #96878d">Enter to send · Shift + Enter for a new line</p>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#f2cc8f","options":["#f2cc8f","#e07a5f"]},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { open: { harness: true, notes: false, site: false } };
+  }
+  renderVals() {
+    const accent = this.props.accent ?? '#f2cc8f';
+    const base = 'display: block; padding: 7px 10px; border-radius: 8px; font-size: 13.5px; text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; ';
+    const chat = (title, current) => ({
+      title,
+      current: current ? 'page' : 'false',
+      style: base + (current
+        ? 'background: rgba(240,230,230,0.08); color: #f0e6e6; box-shadow: inset 2px 0 0 ' + accent + ';'
+        : 'color: #b9abae;')
+    });
+    const data = [
+      { id: 'harness', name: 'stefanos-ai-harness', chats: [chat('Agent loop and tool calls', true), chat('Streaming replies over SSE'), chat('Settings: what goes in v1')] },
+      { id: 'notes', name: 'Offline Notes App', chats: [chat('Sync conflict strategy'), chat('SQLite schema review')] },
+      { id: 'site', name: 'Portfolio site', chats: [chat('Theme toggle transition')] }
+    ];
+    return {
+      accent,
+      projects: data.map((p) => {
+        const open = !!this.state.open[p.id];
+        return {
+          ...p,
+          open,
+          count: String(p.chats.length),
+          chevron: 'transition: transform .15s ease; transform: rotate(' + (open ? 90 : 0) + 'deg)',
+          toggle: () => this.setState({ open: { ...this.state.open, [p.id]: !open } })
+        };
+      })
+    };
+  }
+}
+</script>
+</body>
+</html>

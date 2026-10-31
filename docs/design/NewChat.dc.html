@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>[APPNAME] — new chat</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&amp;family=Figtree:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;background:#161316}
+a{color:#f0e6e6}a:hover{color:#ffffff}
+.v-root{height:100vh;min-height:720px}
+.v-btn{transition:background-color .15s ease,border-color .15s ease,color .15s ease}
+.v-row:hover{background:rgba(240,230,230,0.05)}
+.v-ghost:hover{background:rgba(240,230,230,0.07);color:#f0e6e6}
+.v-new:hover{background:#352b33;border-color:#4d3e48}
+.v-chip:hover{background:#2b2329;border-color:#4d3e48;color:#f0e6e6}
+.v-btn:focus-visible,.v-input:focus-visible{outline:2px solid #f2cc8f;outline-offset:2px}
+.v-composer:focus-within{border-color:#5e4c58}
+.v-input::placeholder{color:#96878d}
+@media (max-width:760px){.v-root{height:auto}.v-side{flex:1 1 100% !important;border-right:0 !important;border-bottom:1px solid #2e252d}}
+</style>
+</helmet>
+<div class="v-root" style="display: flex; flex-wrap: wrap; width: 100%; background: #161316; color: #f0e6e6; font-family: Figtree, system-ui, sans-serif; font-size: 15px; line-height: 1.5; box-sizing: border-box">
+
+  <aside class="v-side" style="flex: 0 0 272px; display: flex; flex-direction: column; background: #120f12; border-right: 1px solid #2a2229; box-sizing: border-box; min-height: 0">
+    <div style="display: flex; align-items: center; justify-content: space-between; padding: 18px 16px 14px 20px">
+      <span style="font-family: 'Bricolage Grotesque', sans-serif; font-weight: 700; font-size: 21px; letter-spacing: -0.02em; color: #f0e6e6">[APPNAME]<span style="color: {{accent}}">.</span></span>
+      <button class="v-btn v-ghost" type="button" aria-label="Collapse sidebar" style="width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 10px; background: transparent; color: #aa9a9f; cursor: pointer">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"></rect><path d="M9 4v16"></path></svg>
+      </button>
+    </div>
+
+    <div style="padding: 0 12px 8px">
+      <button class="v-btn v-new" type="button" aria-current="page" style="width: 100%; min-height: 44px; display: flex; align-items: center; gap: 10px; padding: 0 12px; border: 1px solid #4d3e48; border-radius: 12px; background: #31282f; color: #f0e6e6; font: inherit; font-weight: 500; cursor: pointer; box-sizing: border-box">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+        <span style="flex: 1; text-align: left">New chat</span>
+        <span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #aa9a9f; border: 1px solid #3d3139; border-radius: 6px; padding: 1px 6px">Ctrl N</span>
+      </button>
+    </div>
+
+    <nav aria-label="Projects" style="flex: 1; overflow-y: auto; padding: 18px 12px 12px; min-height: 0">
+      <div style="display: flex; align-items: center; justify-content: space-between; padding: 0 8px 8px 8px">
+        <h2 style="margin: 0; font-family: 'JetBrains Mono', monospace; font-weight: 500; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: #aa9a9f">Projects</h2>
+        <button class="v-btn v-ghost" type="button" aria-label="New project" style="width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 8px; background: transparent; color: #aa9a9f; cursor: pointer">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+        </button>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <sc-for list="{{projects}}" as="p" hint-placeholder-count="3">
+          <button class="v-btn v-row" type="button" aria-expanded="false" style="width: 100%; min-height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 8px; border: 0; border-radius: 9px; background: transparent; color: #f0e6e6; font: inherit; font-size: 14px; font-weight: 500; cursor: pointer; text-align: left">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#96878d" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#e07a5f" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2h8.5A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"></path></svg>
+            <span style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{p.name}}</span>
+            <span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #96878d">{{p.count}}</span>
+          </button>
+        </sc-for>
+      </div>
+    </nav>
+
+    <div style="padding: 10px 12px 14px; border-top: 1px solid #2a2229; display: flex; align-items: center; gap: 4px">
+      <button class="v-btn v-ghost" type="button" aria-label="Settings" style="min-height: 40px; display: inline-flex; align-items: center; gap: 10px; padding: 0 10px; border: 0; border-radius: 10px; background: transparent; color: #d3c6c8; font: inherit; font-size: 14px; cursor: pointer">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        <span>Settings</span>
+      </button>
+    </div>
+  </aside>
+
+  <main style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; justify-content: center; align-items: center; padding: 48px 24px 72px; box-sizing: border-box; min-height: 0">
+    <div style="width: 100%; max-width: 720px; display: flex; flex-direction: column; gap: 28px">
+      <h1 style="margin: 0; text-align: center; font-family: 'Bricolage Grotesque', sans-serif; font-weight: 700; font-size: 44px; line-height: 1.1; letter-spacing: -0.03em; color: #f0e6e6">What are we building<span style="color: {{accent}}">?</span></h1>
+
+      <form class="v-composer" style="background: #221c21; border: 1px solid #3d3139; border-radius: 20px; padding: 16px 14px 10px 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 24px 64px -32px rgba(0,0,0,0.6)">
+        <label for="composer-new" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Message</label>
+        <textarea id="composer-new" class="v-input" rows="3" placeholder="Ask a question, paste a snippet, or describe a task…" style="resize: none; border: 0; outline: 0; background: transparent; color: #f0e6e6; font: inherit; font-size: 16px; line-height: 1.5"></textarea>
+        <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap">
+          <button class="v-btn v-ghost" type="button" aria-label="Attach file" style="width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 10px; background: transparent; color: #aa9a9f; cursor: pointer">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+          </button>
+          <button class="v-btn v-chip" type="button" style="min-height: 32px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border: 1px solid #3d3139; border-radius: 999px; background: transparent; color: #d3c6c8; font: inherit; font-size: 13px; cursor: pointer">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#e07a5f" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2h8.5A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"></path></svg>
+            No project
+          </button>
+          <span style="flex: 1"></span>
+          <button class="v-btn v-ghost" type="button" style="min-height: 36px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border: 0; border-radius: 10px; background: transparent; color: #d3c6c8; font: inherit; font-size: 13.5px; cursor: pointer">
+            [Model name]
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
+          </button>
+          <button class="v-btn" type="submit" aria-label="Send message" style="width: 38px; height: 38px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 12px; background: {{accent}}; color: #161316; cursor: pointer">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"></path></svg>
+          </button>
+        </div>
+      </form>
+
+      <p style="margin: 0; text-align: center; font-family: 'JetBrains Mono', monospace; font-size: 12px; letter-spacing: 0.06em; color: #aa9a9f">Enter to send · Shift + Enter for a new line</p>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#f2cc8f","options":["#f2cc8f","#e07a5f"]},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {
+      accent: this.props.accent ?? '#f2cc8f',
+      projects: [
+        { name: 'stefanos-ai-harness', count: '3' },
+        { name: 'Offline Notes App', count: '2' },
+        { name: 'Portfolio site', count: '1' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

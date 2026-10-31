@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023"],
+    "types": ["node"]
+  },
+  "include": [
+    "src/shared/**/*",
+    "src/core/**/*",
+    "src/server/**/*",
+    "src/main/**/*",
+    "src/preload/**/*",
+    "scripts/**/*.ts",
+    "*.config.ts",
+    "renderer.vite.ts"
+  ]
+}
