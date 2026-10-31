@@ -1,34 +1,63 @@
-// Placeholder until S6 builds the shell: proves fonts, tokens and the API pipeline work.
+// App root: providers (TanStack Query + ApiClient) → hash router → shell.
+//   #/new (default, and any unknown route) · #/chat/:id
+// S7 swap: replace the `./placeholders` import below with `import { NewChatScreen } from '@renderer/features/new-chat';`
+// (and `ChatScreen.tsx` for `Conversation` / `ReplyComposer`).
 
-import { APP_NAME } from '@shared/constants';
-import { useEffect, useMemo, useState } from 'react';
-import { createApiClient } from '../lib/create-api-client';
+import type { ApiClient } from '@renderer/lib/api-client';
+import { ApiClientProvider } from '@renderer/lib/api-context';
+import { createApiClient } from '@renderer/lib/create-api-client';
+import { paths } from '@renderer/lib/routes';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { type ReactNode, useState } from 'react';
+import { HashRouter, Navigate, Route, Routes } from 'react-router';
+import { AppShell } from './AppShell';
+import { ChatScreen } from './ChatScreen';
+import { NewChatScreen } from './placeholders';
 
-type Health = { state: 'loading' } | { state: 'ok'; text: string } | { state: 'error'; text: string };
+export function createQueryClient(): QueryClient {
+  return new QueryClient({
+    defaultOptions: { queries: { staleTime: 30_000, refetchOnWindowFocus: false, retry: 1 } },
+  });
+}
+
+/** QueryClient + ApiClient context. Tests pass their own `client` / `queryClient`. */
+export function AppProviders({
+  client,
+  queryClient,
+  children,
+}: {
+  client?: ApiClient;
+  queryClient?: QueryClient;
+  children: ReactNode;
+}) {
+  const [defaultClient] = useState(createApiClient);
+  const [defaultQueryClient] = useState(createQueryClient);
+  return (
+    <QueryClientProvider client={queryClient ?? defaultQueryClient}>
+      <ApiClientProvider client={client ?? defaultClient}>{children}</ApiClientProvider>
+    </QueryClientProvider>
+  );
+}
+
+/** Routes only (needs a router above it): `HashRouter` in the app, `MemoryRouter` in tests. */
+export function AppRoutes() {
+  return (
+    <Routes>
+      <Route element={<AppShell />}>
+        <Route path="new" element={<NewChatScreen />} />
+        <Route path="chat/:id" element={<ChatScreen />} />
+        <Route path="*" element={<Navigate to={paths.newChat()} replace />} />
+      </Route>
+    </Routes>
+  );
+}
 
 export function App() {
-  const api = useMemo(createApiClient, []);
-  const [health, setHealth] = useState<Health>({ state: 'loading' });
-
-  useEffect(() => {
-    api.health().then(
-      (h) => setHealth({ state: 'ok', text: `API ${h.mode} · v${h.version}` }),
-      (err: unknown) => setHealth({ state: 'error', text: err instanceof Error ? err.message : String(err) }),
-    );
-  }, [api]);
-
   return (
-    <main className="flex h-full flex-col items-center justify-center gap-4">
-      <h1 className="font-display text-[56px] font-bold tracking-[-0.02em] text-text">
-        {APP_NAME}
-        <span className="text-accent">.</span>
-      </h1>
-      <p
-        data-testid="health"
-        className={`font-mono text-xs ${health.state === 'error' ? 'text-danger' : 'text-text-faint'}`}
-      >
-        {health.state === 'loading' ? 'Checking API…' : health.text}
-      </p>
-    </main>
+    <AppProviders>
+      <HashRouter>
+        <AppRoutes />
+      </HashRouter>
+    </AppProviders>
   );
 }
