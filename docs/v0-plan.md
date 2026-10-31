@@ -585,14 +585,14 @@ Complexity: **L** low · **M** medium · **H** high. Waves are in §7.
 
 **Owns:** `src/core/storage/**`. **Depends on:** S0.
 
-- [ ] S1.1 `resolveDataDir()`: `HARNESS_DATA_DIR` or the value passed in; creates the tree of §3.5 on first run.
-- [ ] S1.2 `json-file` helper: typed read with schema validation, atomic write, per-file mutex; corrupt file → backed up as `*.corrupt-<ts>` and treated as missing (logged).
-- [ ] S1.3 `FileSecretStore` (`secrets.json`, mode `0600`, `enc: 'plain'`). The `SecretStore` interface is in §4.8; the `safeStorage` implementation is S8.
-- [ ] S1.4 `SettingsService`: `get(): PublicSettings`, `getApiKey()`, `setApiKey(key)` (stores only; validation is done by the route via the provider), `clearApiKey()`, `update({ lastModel })`. `keyHint` = first 9 chars + `…` + last 4.
-- [ ] S1.5 `ProjectsService`: `list()` (with `chatCount`, sorted by name), `get`, `create({ rootPath, name? })` (expands `~`, resolves realpath, checks it is a readable directory, rejects duplicates by realpath), `rename`, `remove` (moves its chats to `projectId: null`).
-- [ ] S1.6 `ChatsService`: `list`, `get`, `create`, `update` (title, projectId, model), `remove`, `appendMessage`, `truncateAfterLastUser` (for retry), keeps `chats/index.json` in sync and rebuilds it if missing.
-- [ ] S1.7 `AttachmentsService`: `create({ name, bytes })` sniffs the type (magic bytes for png/jpeg/gif/webp → image; valid UTF-8 with no NUL in the first 8 KB → text; else `unsupported_file`), enforces `LIMITS`, `get`, `readBytes`, `bindToChat(ids, chatId)`, `remove` (unbound only), `removeForChat`, `cleanupOrphans()` (unbound and > 24 h, on startup).
-- [ ] S1.8 Unit tests (temp dirs): atomic writes under concurrent calls, index rebuild, project removal re-homes chats, attachment sniffing and limits, secrets file permissions.
+- [x] S1.1 `resolveDataDir()`: `HARNESS_DATA_DIR` or the value passed in; creates the tree of §3.5 on first run.
+- [x] S1.2 `json-file` helper: typed read with schema validation, atomic write, per-file mutex; corrupt file → backed up as `*.corrupt-<ts>` and treated as missing (logged).
+- [x] S1.3 `FileSecretStore` (`secrets.json`, mode `0600`, `enc: 'plain'`). The `SecretStore` interface is in §4.8; the `safeStorage` implementation is S8.
+- [x] S1.4 `SettingsService`: `get(): PublicSettings`, `getApiKey()`, `setApiKey(key)` (stores only; validation is done by the route via the provider), `clearApiKey()`, `update({ lastModel })`. `keyHint` = first 9 chars + `…` + last 4.
+- [x] S1.5 `ProjectsService`: `list()` (with `chatCount`, sorted by name), `get`, `create({ rootPath, name? })` (expands `~`, resolves realpath, checks it is a readable directory, rejects duplicates by realpath), `rename`, `remove` (moves its chats to `projectId: null`).
+- [x] S1.6 `ChatsService`: `list`, `get`, `create`, `update` (title, projectId, model), `remove`, `appendMessage`, `truncateAfterLastUser` (for retry), keeps `chats/index.json` in sync and rebuilds it if missing.
+- [x] S1.7 `AttachmentsService`: `create({ name, bytes })` sniffs the type (magic bytes for png/jpeg/gif/webp → image; valid UTF-8 with no NUL in the first 8 KB → text; else `unsupported_file`), enforces `LIMITS`, `get`, `readBytes`, `bindToChat(ids, chatId)`, `remove` (unbound only), `removeForChat`, `cleanupOrphans()` (unbound and > 24 h, on startup).
+- [x] S1.8 Unit tests (temp dirs): atomic writes under concurrent calls, index rebuild, project removal re-homes chats, attachment sniffing and limits, secrets file permissions.
 
 **Acceptance:** all services covered by tests; no Electron import anywhere in `core`.
 
@@ -813,7 +813,7 @@ Run on: web dev (Chrome or Firefox), Electron dev, and the AppImage on CachyOS a
 | Section | Owner (agent/model) | Branch / PR | Done |
 |---|---|---|---|
 | S0 Foundation, tooling, contracts | Claude Opus 5.5 | `v0/s0-foundation` | [x] |
-| S1 Storage, settings, secrets | | | [ ] |
+| S1 Storage, settings, secrets | Claude Sonnet 5.5 | `v0/s1-storage` | [x] |
 | S2 OpenRouter provider + model catalog | | | [ ] |
 | S3 Project tools (read-only) | | | [ ] |
 | S4 Agent loop | | | [ ] |
