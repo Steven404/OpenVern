@@ -682,6 +682,15 @@ Complexity: **L** low · **M** medium · **H** high. Waves are in §7.
 
 **Acceptance:** against `MockApiClient`, side by side with the design at 1440×900, the sidebar and header match (spacing, colours, type, hover/focus states), and every action in D1–D9 works.
 
+**S6 ↔ S7 seams (orchestrator, wave 2b):** S6 and S7 run in parallel. Shared, already committed:
+`src/renderer/lib/api-context.tsx` (`ApiClientProvider`, `useApiClient`), `src/renderer/lib/query-keys.ts`,
+`src/renderer/lib/routes.ts` (`paths`, `#/new?project=<id>`), `src/renderer/stores/ui.ts` (`openSettings`,
+`openNewProject`). S7 exports `NewChatScreen` (no props; reads `?project=`) from `features/new-chat/index.ts`,
+`Conversation` (`{ chatId: Id }`) from `features/conversation/index.ts` and `ReplyComposer` (`{ chat: ChatSummary }`)
+from `features/composer/index.ts`. S6 renders local placeholders with those names/props in `src/renderer/app/placeholders.tsx`;
+the orchestrator swaps the imports when both land. S6's "New chat" button / `Ctrl+N` navigate to
+`paths.newChat(<current chat's projectId>)` so "the project of the chat you came from" preselects (S7.15).
+
 ### S7 — UI: conversation, composer, model picker, attachments, streaming · H
 
 **Owns:** `src/renderer/{features/conversation,features/composer,features/new-chat,stores/runs.ts,styles/shiki-theme.ts}`. **Depends on:** S0, S6.1 primitives. Develop with `VITE_API=mock`.
