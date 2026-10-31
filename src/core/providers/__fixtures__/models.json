@@ -1,0 +1,90 @@
+{
+  "data": [
+    {
+      "id": "anthropic/claude-sonnet-4.5",
+      "canonical_slug": "anthropic/claude-4.5-sonnet-20250929",
+      "name": "Anthropic: Claude Sonnet 4.5",
+      "created": 1759161676,
+      "context_length": 1000000,
+      "architecture": {
+        "modality": "text+image->text",
+        "input_modalities": ["text", "image", "file"],
+        "output_modalities": ["text"],
+        "tokenizer": "Claude",
+        "instruct_type": null
+      },
+      "pricing": { "prompt": "0.000003", "completion": "0.000015", "request": "0", "image": "0.0048" },
+      "top_provider": { "context_length": 1000000, "max_completion_tokens": 64000, "is_moderated": false },
+      "per_request_limits": null,
+      "supported_parameters": ["max_tokens", "temperature", "tool_choice", "tools", "reasoning"],
+      "default_parameters": null
+    },
+    {
+      "id": "deepseek/deepseek-chat-v3.1",
+      "name": "DeepSeek: DeepSeek V3.1",
+      "created": 1755779628,
+      "context_length": 163840,
+      "architecture": {
+        "modality": "text->text",
+        "input_modalities": ["text"],
+        "output_modalities": ["text"],
+        "tokenizer": "DeepSeek"
+      },
+      "pricing": { "prompt": "0.00000020", "completion": "0.0000008" },
+      "top_provider": { "context_length": 163840, "max_completion_tokens": null, "is_moderated": false },
+      "supported_parameters": ["max_tokens", "temperature", "tools"]
+    },
+    {
+      "id": "google/gemini-2.5-flash-image",
+      "name": "Google: Gemini 2.5 Flash Image",
+      "context_length": 32768,
+      "architecture": {
+        "modality": "text+image->text+image",
+        "input_modalities": ["image", "text"],
+        "output_modalities": ["image", "text"]
+      },
+      "pricing": { "prompt": "0.0000003", "completion": "0.0000025" },
+      "top_provider": { "context_length": 32768, "max_completion_tokens": 8192, "is_moderated": false },
+      "supported_parameters": ["max_tokens", "temperature"]
+    },
+    {
+      "id": "black-forest-labs/flux-pro",
+      "name": "Black Forest Labs: FLUX Pro",
+      "context_length": 4096,
+      "architecture": {
+        "modality": "text->image",
+        "input_modalities": ["text"],
+        "output_modalities": ["image"]
+      },
+      "pricing": { "prompt": "0", "completion": "0" },
+      "top_provider": { "context_length": 4096, "max_completion_tokens": null, "is_moderated": false },
+      "supported_parameters": []
+    },
+    {
+      "id": "openrouter/auto",
+      "name": "Auto Router",
+      "context_length": 2000000,
+      "architecture": {
+        "modality": "text+image->text",
+        "input_modalities": ["text", "image"],
+        "output_modalities": ["text"]
+      },
+      "pricing": { "prompt": "-1", "completion": "-1" },
+      "top_provider": { "context_length": null, "max_completion_tokens": null, "is_moderated": false },
+      "supported_parameters": ["tools", "max_tokens"]
+    },
+    {
+      "id": "meta-llama/llama-3.3-70b-instruct:free",
+      "name": "Meta: Llama 3.3 70B Instruct (free)",
+      "context_length": null,
+      "architecture": {
+        "modality": "text->text",
+        "input_modalities": ["text"],
+        "output_modalities": ["text"]
+      },
+      "pricing": { "prompt": "0", "completion": "0" },
+      "top_provider": { "context_length": 65536, "max_completion_tokens": null, "is_moderated": false },
+      "supported_parameters": ["max_tokens", "temperature"]
+    }
+  ]
+}
