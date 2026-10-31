@@ -1,39 +1,33 @@
-// Electron main process. S0 stub: opens one window on the dev URL (or the built renderer). S8 owns the real shell.
+// Electron main process entry (S8). Dev: loads the Vite dev server; the API runs as a separate process.
 
-import { join } from 'node:path';
-import { APP_NAME } from '@shared/constants';
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, Menu } from 'electron';
+import { registerIpc } from './ipc';
+import { isDev } from './origin';
+import { createMainWindow, focusMainWindow } from './window';
 
-function createWindow() {
-  const win = new BrowserWindow({
-    width: 1440,
-    height: 900,
-    minWidth: 800,
-    minHeight: 600,
-    title: APP_NAME,
-    backgroundColor: '#161316',
-    show: false,
-    webPreferences: {
-      preload: join(import.meta.dirname, '../preload/index.cjs'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
+// TODO(S8.3): before `app.whenReady()`, call
+//   protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: true, secure: true,
+//     supportFetchAPI: true, stream: true } }]);
+// and, once ready in prod (not isDev()), create `core` via createCore(…) (S8.4 SafeStorageSecretStore) and register
+// `protocol.handle('app', …)` in ./protocol.ts: `/api/*` -> createApp(core).fetch, everything else -> built renderer
+// files with SPA fallback + CSP. Spike S8.1 (scripts/spikes/protocol-stream) confirmed streaming works that way.
+
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on('second-instance', () => focusMainWindow());
+
+  void app.whenReady().then(() => {
+    if (!isDev()) Menu.setApplicationMenu(null); // dev keeps the default menu (DevTools, reload)
+    registerIpc();
+    createMainWindow();
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
+    });
   });
-  win.once('ready-to-show', () => win.show());
 
-  const devUrl = process.env.ELECTRON_RENDERER_URL;
-  if (devUrl) void win.loadURL(devUrl);
-  else void win.loadFile(join(import.meta.dirname, '../renderer/index.html'));
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') app.quit();
+  });
 }
-
-app.whenReady().then(() => {
-  createWindow();
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
-  });
-});
-
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
-});
