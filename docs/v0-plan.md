@@ -600,19 +600,21 @@ Complexity: **L** low · **M** medium · **H** high. Waves are in §7.
 
 **Owns:** `src/core/providers/{openrouter,models}.ts` (+ tests, fixtures). **Depends on:** S0.
 
-- [ ] S2.1 `createOpenRouterProvider({ getApiKey, fetch? })` implementing `Provider` over raw `fetch` to `https://openrouter.ai/api/v1`. Headers: `Authorization: Bearer`, `X-OpenRouter-Title: harness` (also send legacy `X-Title`); add `HTTP-Referer` only once the project has a public URL.
-- [ ] S2.2 `stream()`: `POST /chat/completions` with `stream: true`. Map `ProviderMessage` → OpenAI-style messages (system first; user `content` parts: `text` / `image_url` with a `data:` URL; assistant `content` + `tool_calls`; tool `role: 'tool'` + `tool_call_id`). Tools map to `{ type: 'function', function: { name, description, parameters } }`.
-- [ ] S2.3 Parse the SSE stream with `readSSE`: ignore `:` comment lines, stop at `[DONE]`, emit `text_delta`; **accumulate `tool_calls` deltas by `index`** (id/name arrive once, `arguments` arrives in pieces) and emit each `tool_call` when the choice finishes; treat the final usage chunk as accounting (emit `usage` once, do not emit a second `finish`).
-- [ ] S2.4 Mid-stream errors: a chunk with a top-level `error` (and `finish_reason: "error"`) → throw `ProviderError`. Pre-stream errors are plain JSON with an HTTP status.
-- [ ] S2.5 Error mapping: 401 → `invalid_api_key` · 402 → `insufficient_credits` · 429 → `rate_limited` (retryable) · context-length messages → `context_length_exceeded` · "no endpoints … tool use" → `model_no_tools` · model not found → `model_unavailable` · 5xx/502/503 → `provider_error` (retryable) · fetch failure → `network_error` (retryable).
-- [ ] S2.6 Abort: passing `signal` to `fetch` cancels upstream (OpenRouter stops billing for supported providers).
-- [ ] S2.7 `reasoning_details`: if deltas carry `reasoning_details`, collect them and emit one `meta` event; when an assistant `ProviderMessage` has `providerMeta`, send it back as `reasoning_details` on that message. Do **not** request reasoning explicitly in V0. (Check OpenRouter's reasoning + tool-calling docs before implementing.)
-- [ ] S2.8 `validateKey(key)`: `GET /api/v1/key`; 2xx → ok, 401/403 → `invalid_api_key`, otherwise mapped as above.
-- [ ] S2.9 `listModels()`: `GET /api/v1/models` (send the key; the current spec requires auth). Keep models whose `architecture.output_modalities` includes `text`; map per `ModelInfo` (pricing strings are USD per token → ×1e6 for per-MTok).
-- [ ] S2.10 `createModelCatalog({ provider, cacheFile })`: `list({ refresh })` with 1 h TTL in memory + `cache/models.json`; on fetch failure serve the stale cache if any; `get(id)` for capability lookups (unknown id → `supportsTools: true, supportsImages: false`).
-- [ ] S2.11 Tests with recorded fixtures (no network): text-only stream; stream split at awkward chunk boundaries; parallel tool calls; keepalive comments; mid-stream error; usage chunk; error mapping table; models mapping.
+- [x] S2.1 `createOpenRouterProvider({ getApiKey, fetch? })` implementing `Provider` over raw `fetch` to `https://openrouter.ai/api/v1`. Headers: `Authorization: Bearer`, `X-OpenRouter-Title: harness` (also send legacy `X-Title`); add `HTTP-Referer` only once the project has a public URL.
+- [x] S2.2 `stream()`: `POST /chat/completions` with `stream: true`. Map `ProviderMessage` → OpenAI-style messages (system first; user `content` parts: `text` / `image_url` with a `data:` URL; assistant `content` + `tool_calls`; tool `role: 'tool'` + `tool_call_id`). Tools map to `{ type: 'function', function: { name, description, parameters } }`.
+- [x] S2.3 Parse the SSE stream with `readSSE`: ignore `:` comment lines, stop at `[DONE]`, emit `text_delta`; **accumulate `tool_calls` deltas by `index`** (id/name arrive once, `arguments` arrives in pieces) and emit each `tool_call` when the choice finishes; treat the final usage chunk as accounting (emit `usage` once, do not emit a second `finish`).
+- [x] S2.4 Mid-stream errors: a chunk with a top-level `error` (and `finish_reason: "error"`) → throw `ProviderError`. Pre-stream errors are plain JSON with an HTTP status.
+- [x] S2.5 Error mapping: 401 → `invalid_api_key` · 402 → `insufficient_credits` · 429 → `rate_limited` (retryable) · context-length messages → `context_length_exceeded` · "no endpoints … tool use" → `model_no_tools` · model not found → `model_unavailable` · 5xx/502/503 → `provider_error` (retryable) · fetch failure → `network_error` (retryable).
+- [x] S2.6 Abort: passing `signal` to `fetch` cancels upstream (OpenRouter stops billing for supported providers).
+- [x] S2.7 `reasoning_details`: if deltas carry `reasoning_details`, collect them and emit one `meta` event; when an assistant `ProviderMessage` has `providerMeta`, send it back as `reasoning_details` on that message. Do **not** request reasoning explicitly in V0. (Check OpenRouter's reasoning + tool-calling docs before implementing.)
+- [x] S2.8 `validateKey(key)`: `GET /api/v1/key`; 2xx → ok, 401/403 → `invalid_api_key`, otherwise mapped as above.
+- [x] S2.9 `listModels()`: `GET /api/v1/models` (send the key; the current spec requires auth). Keep models whose `architecture.output_modalities` includes `text`; map per `ModelInfo` (pricing strings are USD per token → ×1e6 for per-MTok).
+- [x] S2.10 `createModelCatalog({ provider, cacheFile })`: `list({ refresh })` with 1 h TTL in memory + `cache/models.json`; on fetch failure serve the stale cache if any; `get(id)` for capability lookups (unknown id → `supportsTools: true, supportsImages: false`).
+- [x] S2.11 Tests with recorded fixtures (no network): text-only stream; stream split at awkward chunk boundaries; parallel tool calls; keepalive comments; mid-stream error; usage chunk; error mapping table; models mapping.
 
 **Acceptance:** fixtures cover every bullet above; a manual script `npx tsx scripts/try-openrouter.ts "hello"` (key from env) streams to stdout.
+
+**S2 notes (as built):** run the script as `OPENROUTER_API_KEY=… npx tsx --tsconfig tsconfig.node.json scripts/try-openrouter.ts "hello" [model]` (tsx needs the node tsconfig for `@shared/*` aliases; `dev:server` passes it too). Fixtures are hand-built from the documented wire format. `reasoning_details` fragments are merged by `index` and emitted as one `meta` — **still unverified against a live reasoning model with tools (needs a key; S9)**. After a failed model fetch the catalog backs off for 60 s (`refresh: true` bypasses).
 
 ### S3 — Project tools (read-only) · M
 
@@ -816,7 +818,7 @@ Run on: web dev (Chrome or Firefox), Electron dev, and the AppImage on CachyOS a
 |---|---|---|---|
 | S0 Foundation, tooling, contracts | Claude Opus 5.5 | `v0/s0-foundation` | [x] |
 | S1 Storage, settings, secrets | Claude Sonnet 5.5 | `v0/s1-storage` | [x] |
-| S2 OpenRouter provider + model catalog | | | [ ] |
+| S2 OpenRouter provider + model catalog | Claude Sonnet 5.5 | `v0/s2-openrouter` | [x] |
 | S3 Project tools (read-only) | Claude Sonnet 5.5 | `v0/s3-project-tools` | [x] |
 | S4 Agent loop | Claude Sonnet 5.5 | `v0/s4-agent-loop` | [x] |
 | S5 API server + composition | | | [ ] |
@@ -838,7 +840,7 @@ Run on: web dev (Chrome or Firefox), Electron dev, and the AppImage on CachyOS a
 |---|---|
 | Streaming through `protocol.handle` (S8.1). Fallback: fixed-port localhost server + per-launch token | **resolved: incremental** (Electron 45.2.1, KDE Wayland; 200 ms frames arrive 199–201 ms apart for GET and POST; evidence `scripts/spikes/protocol-stream/`). No fallback. **Caveat:** on client abort the request's `signal` does **not** fire in main — only the response stream's `cancel()` (Hono: `stream.onAbort`). S5 must detect disconnects via `stream.onAbort`, not `c.req.raw.signal`. Wayland is auto-detected (no ozone flag) |
 | OpenRouter capability metadata (`supported_parameters`, `input_modalities`) may be wrong for some models → errors are mapped (`model_no_tools`, `model_no_image_input`) and shown | accepted |
-| `reasoning_details` round-trip for reasoning models with tools (S2.7) | verify during S2 |
+| `reasoning_details` round-trip for reasoning models with tools (S2.7) | implemented from docs; verify live in S9 (needs a key) |
 | `Ctrl+N` can't be captured in browsers | accepted (Electron only) |
 | AppImage needs `fuse2` (installed here) and unprivileged user namespaces for Chromium's sandbox (enabled on Arch/CachyOS kernels) | check on the Arch install |
 | Shiki cost while streaming → highlight completed blocks only | by design |

@@ -12,7 +12,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "dev:server": "tsx watch --clear-screen=false src/server/dev.ts",
+    "dev:server": "tsx watch --clear-screen=false --tsconfig tsconfig.node.json src/server/dev.ts",
     "dev:web": "concurrently -k -n server,web -c yellow,cyan \"npm:dev:server\" \"vite --config vite.web.config.ts\"",
     "dev": "concurrently -k -n server,electron -c yellow,cyan \"npm:dev:server\" \"electron-vite dev\"",
     "build": "electron-vite build",
