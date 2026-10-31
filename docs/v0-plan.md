@@ -618,16 +618,16 @@ Complexity: **L** low · **M** medium · **H** high. Waves are in §7.
 
 **Owns:** `src/core/tools/**` (except `types.ts`). **Depends on:** S0.
 
-- [ ] S3.1 `sandbox.resolve(root, relPath)`: rejects absolute paths outside root, `..` escapes and symlinks whose realpath leaves the root → `ok:false` "Path is outside the project".
-- [ ] S3.2 Deny list → `ok:false` "Access to this file is blocked": `.env`, `.env.*` (except `.env.example`/`.env.sample`), `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`, `*.p12`, `.git/` internals.
-- [ ] S3.3 Ignore rules: always skip `.git`, `node_modules`, `dist`, `build`, `out`, `.next`, `.turbo`, `.cache`, `coverage`, `target`, `.venv`, `venv`, `__pycache__`; honour `.gitignore` files at every depth (`ignore` package).
-- [ ] S3.4 `list_files { path = ".", depth = 2 (max 5) }` → indented tree, dirs suffixed `/`, max `listFilesMaxEntries`, says when truncated. Summary: the path.
-- [ ] S3.5 `read_file { path, start_line?, end_line? }` → lines prefixed with their numbers, capped at `readFileMaxLines` / `readFileMaxBytes`, header with total line count and the range shown; binary files (NUL in first 8 KB) → `ok:false` "Binary file". Summary: the path (+ range).
-- [ ] S3.6 `search { query, is_regex = false, path = ".", glob? }` → `path:line: text` lines, case-insensitive, max `searchMaxMatches`, skips files > `searchMaxFileBytes` and binaries, respects ignores. Pure Node (no ripgrep dependency). Summary: `"query" in path`.
-- [ ] S3.7 Args validated with zod; `spec.parameters` from `z.toJSONSchema`; descriptions written for the model (when to use which tool, that paths are relative to the project root).
-- [ ] S3.8 `renderTree(root, { depth, maxEntries })` for the system prompt (shares the walker).
-- [ ] S3.9 All tools honour `ctx.signal` and stop walking when aborted.
-- [ ] S3.10 Tests on a fixture project: traversal and symlink escapes, deny list, nested `.gitignore`, truncation, binary detection, regex vs literal search.
+- [x] S3.1 `sandbox.resolve(root, relPath)`: rejects absolute paths outside root, `..` escapes and symlinks whose realpath leaves the root → `ok:false` "Path is outside the project".
+- [x] S3.2 Deny list → `ok:false` "Access to this file is blocked": `.env`, `.env.*` (except `.env.example`/`.env.sample`), `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`, `*.p12`, `.git/` internals.
+- [x] S3.3 Ignore rules: always skip `.git`, `node_modules`, `dist`, `build`, `out`, `.next`, `.turbo`, `.cache`, `coverage`, `target`, `.venv`, `venv`, `__pycache__`; honour `.gitignore` files at every depth (`ignore` package).
+- [x] S3.4 `list_files { path = ".", depth = 2 (max 5) }` → indented tree, dirs suffixed `/`, max `listFilesMaxEntries`, says when truncated. Summary: the path.
+- [x] S3.5 `read_file { path, start_line?, end_line? }` → lines prefixed with their numbers, capped at `readFileMaxLines` / `readFileMaxBytes`, header with total line count and the range shown; binary files (NUL in first 8 KB) → `ok:false` "Binary file". Summary: the path (+ range).
+- [x] S3.6 `search { query, is_regex = false, path = ".", glob? }` → `path:line: text` lines, case-insensitive, max `searchMaxMatches`, skips files > `searchMaxFileBytes` and binaries, respects ignores. Pure Node (no ripgrep dependency). Summary: `"query" in path`.
+- [x] S3.7 Args validated with zod; `spec.parameters` from `z.toJSONSchema`; descriptions written for the model (when to use which tool, that paths are relative to the project root).
+- [x] S3.8 `renderTree(root, { depth, maxEntries })` for the system prompt (shares the walker).
+- [x] S3.9 All tools honour `ctx.signal` and stop walking when aborted.
+- [x] S3.10 Tests on a fixture project: traversal and symlink escapes, deny list, nested `.gitignore`, truncation, binary detection, regex vs literal search.
 
 **Acceptance:** tests pass; on a ~10k-file repo, `list_files` (depth 2) and a literal `search` each finish in under 2 s.
 
@@ -635,19 +635,21 @@ Complexity: **L** low · **M** medium · **H** high. Waves are in §7.
 
 **Owns:** `src/core/agent/**`. **Depends on:** S0 contracts (develop against `FakeProvider` and stub tools; real S2/S3 are swapped in by S5).
 
-- [ ] S4.1 `createAgentService({ chats, attachments, models, provider, tools, settings })` exposing `runTurn({ chatId, newUserMessage?, model, signal, emit }): Promise<void>` — never throws; every failure becomes events.
-- [ ] S4.2 One active run per chat (`isRunning(chatId)`, used by S5 to return `409`), and `abort(chatId)`.
-- [ ] S4.3 `newUserMessage` → persist `UserMessage` (bind its attachments), emit `user_message`. Without it (retry) → `chats.truncateAfterLastUser`.
-- [ ] S4.4 Loop, at most `MAX_AGENT_STEPS` model calls: `assistant_start` → stream (`text_delta`, collect tool calls, meta, usage) → persist assistant message → `assistant_end` → if no tool calls, stop; else run each tool **sequentially**, persist a `ToolMessage` and emit `tool_call` then `tool_result` per call. Unknown tool or bad args → `ok:false` result fed back to the model. Hitting the cap → `error` `max_steps_reached`.
-- [ ] S4.5 Abort: stop the stream and any running tool, persist the partial assistant message as `stopped`, emit `assistant_end` + `done`.
-- [ ] S4.6 Provider error mid-turn: persist the partial assistant message with `status: 'error'` + `error`, emit `assistant_end`, then `error`, then `done`.
-- [ ] S4.7 `history.ts`: `Chat.messages` → `ProviderMessage[]`. Text attachments become `<attached_file name="…">…</attached_file>` text parts before the user's text. Images become `image` parts **only if** the model supports images, else a text part `[Image "<name>" omitted: the current model does not accept images]`. Stopped/error assistant messages are included with whatever text they have; tool calls without a result get a synthetic `ok:false` "Interrupted" result so the history stays valid.
-- [ ] S4.8 Tools are offered only when the chat has a project **and** the model `supportsTools`.
-- [ ] S4.9 `system-prompt.ts`. Project chat: identity (`harness`, a coding assistant in a desktop app), date, project name + root, read-only capabilities and limits, "read before you claim", paths relative to root, answer in Markdown, plus `renderTree(depth 2, systemPromptTreeEntries)`. Loose chat: short assistant prompt, date, Markdown.
-- [ ] S4.10 `title.ts`: after the first completed turn while the title is `NEW_CHAT_TITLE`, ask the same model (no tools, `maxTokens: 30`, 10 s timeout) for a 3–6 word title from the first user message (truncated to 1,000 chars); fallback = first 60 chars of the message. Save, emit `chat_updated`. Also emit `chat_updated` when `model`/`updatedAt` change.
-- [ ] S4.11 Tests with `FakeProvider` scripts: text only; tool → text; two tool calls in one message; unknown tool; invalid args; abort mid-stream; abort mid-tool; provider error mid-stream; max steps; retry truncation; image omission for non-vision models; no tools for loose chats or non-tool models.
+- [x] S4.1 `createAgentService({ chats, attachments, models, provider, tools, settings })` exposing `runTurn({ chatId, newUserMessage?, model, signal, emit }): Promise<void>` — never throws; every failure becomes events.
+- [x] S4.2 One active run per chat (`isRunning(chatId)`, used by S5 to return `409`), and `abort(chatId)`.
+- [x] S4.3 `newUserMessage` → persist `UserMessage` (bind its attachments), emit `user_message`. Without it (retry) → `chats.truncateAfterLastUser`.
+- [x] S4.4 Loop, at most `MAX_AGENT_STEPS` model calls: `assistant_start` → stream (`text_delta`, collect tool calls, meta, usage) → persist assistant message → `assistant_end` → if no tool calls, stop; else run each tool **sequentially**, persist a `ToolMessage` and emit `tool_call` then `tool_result` per call. Unknown tool or bad args → `ok:false` result fed back to the model. Hitting the cap → `error` `max_steps_reached`.
+- [x] S4.5 Abort: stop the stream and any running tool, persist the partial assistant message as `stopped`, emit `assistant_end` + `done`.
+- [x] S4.6 Provider error mid-turn: persist the partial assistant message with `status: 'error'` + `error`, emit `assistant_end`, then `error`, then `done`.
+- [x] S4.7 `history.ts`: `Chat.messages` → `ProviderMessage[]`. Text attachments become `<attached_file name="…">…</attached_file>` text parts before the user's text. Images become `image` parts **only if** the model supports images, else a text part `[Image "<name>" omitted: the current model does not accept images]`. Stopped/error assistant messages are included with whatever text they have; tool calls without a result get a synthetic `ok:false` "Interrupted" result so the history stays valid.
+- [x] S4.8 Tools are offered only when the chat has a project **and** the model `supportsTools`.
+- [x] S4.9 `system-prompt.ts`. Project chat: identity (`harness`, a coding assistant in a desktop app), date, project name + root, read-only capabilities and limits, "read before you claim", paths relative to root, answer in Markdown, plus `renderTree(depth 2, systemPromptTreeEntries)`. Loose chat: short assistant prompt, date, Markdown.
+- [x] S4.10 `title.ts`: after the first completed turn while the title is `NEW_CHAT_TITLE`, ask the same model (no tools, `maxTokens: 30`, 10 s timeout) for a 3–6 word title from the first user message (truncated to 1,000 chars); fallback = first 60 chars of the message. Save, emit `chat_updated`. Also emit `chat_updated` when `model`/`updatedAt` change.
+- [x] S4.11 Tests with `FakeProvider` scripts: text only; tool → text; two tool calls in one message; unknown tool; invalid args; abort mid-stream; abort mid-tool; provider error mid-stream; max steps; retry truncation; image omission for non-vision models; no tools for loose chats or non-tool models.
 
 **Acceptance:** all event sequences match §4.4 exactly; tests pass.
+
+**S4 notes (as built):** `createAgentService({ chats, attachments, projects, models, provider, getProjectTools, renderTree, now?, titleTimeoutMs? })`. Error turns end `… assistant_end → error → chat_updated → done` (still within §4.4's `chat_updated* → done`); stopped turns `… assistant_end → chat_updated → done`. Pre-stream provider errors persist an empty `status:'error'` assistant message (error card survives reload). Abort mid-tool persists `ok:false` "Interrupted" tool messages for the running and pending calls. `providerMeta` is replayed only to the same model. The run is deregistered before `done`. `done` waits for the title (≤ 10 s). S5 must still reject images + non-vision models with `400 model_no_image_input` before the stream.
 
 ### S5 — API server and composition · M–H
 
@@ -726,14 +728,14 @@ the orchestrator swaps the imports when both land. S6's "New chat" button / `Ctr
 
 **Owns:** `src/main/**`, `src/preload/**`, `electron-builder.yml`, `build/**`, `scripts/install-local.sh`. **Depends on:** S0; prod wiring needs S5.
 
-- [ ] S8.1 **Spike first:** confirm streaming through `protocol.handle` (§3.2 risk). Record the result in §10; if it fails, implement the fallback described there instead of S8.3.
-- [ ] S8.2 Main: single-instance lock (focus the existing window), `BrowserWindow` 1440×900, min 800×600, `backgroundColor: '#161316'`, title `harness`, `show: false` until `ready-to-show`. Dev: load `ELECTRON_RENDERER_URL`, keep the default menu (DevTools). Prod: `Menu.setApplicationMenu(null)`.
+- [x] S8.1 **Spike first:** confirm streaming through `protocol.handle` (§3.2 risk). Record the result in §10; if it fails, implement the fallback described there instead of S8.3.
+- [x] S8.2 Main: single-instance lock (focus the existing window), `BrowserWindow` 1440×900, min 800×600, `backgroundColor: '#161316'`, title `harness`, `show: false` until `ready-to-show`. Dev: load `ELECTRON_RENDERER_URL`, keep the default menu (DevTools). Prod: `Menu.setApplicationMenu(null)`.
 - [ ] S8.3 Prod: `protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }])`; `protocol.handle('app', …)` routes `/api/*` to `createApp(core).fetch` and everything else to the built renderer files (SPA fallback to `index.html`); window loads `app://harness/`. CSP header on HTML: `default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self'; script-src 'self'`.
 - [ ] S8.4 `SafeStorageSecretStore`: `safeStorage.encryptString` → base64 in `secrets.json` (`enc: 'safeStorage'`); if `isEncryptionAvailable()` is false, fall back to `FileSecretStore` and log it. Prod `createCore` uses it with `app.getPath('userData')` (or `HARNESS_DATA_DIR`).
-- [ ] S8.5 Preload (`contextBridge`): `window.harness = { isElectron: true, pickDirectory }`; IPC handler uses `dialog.showOpenDialog({ properties: ['openDirectory'] })` (goes through the KDE portal).
-- [ ] S8.6 Hardening: `contextIsolation`, `sandbox`, no `nodeIntegration`; `setWindowOpenHandler` → `shell.openExternal` for `http(s)` only, deny the rest; block `will-navigate` away from the app origin.
-- [ ] S8.7 Wayland: verify it runs natively on KDE Wayland; if the Electron version doesn't auto-detect, add `ozone-platform-hint=auto`.
-- [ ] S8.8 App icon `build/icon.png` 512×512 (accent rounded square with the design's spark glyph, `#161316` glyph) + sizes electron-builder needs.
+- [x] S8.5 Preload (`contextBridge`): `window.harness = { isElectron: true, pickDirectory }`; IPC handler uses `dialog.showOpenDialog({ properties: ['openDirectory'] })` (goes through the KDE portal).
+- [x] S8.6 Hardening: `contextIsolation`, `sandbox`, no `nodeIntegration`; `setWindowOpenHandler` → `shell.openExternal` for `http(s)` only, deny the rest; block `will-navigate` away from the app origin.
+- [x] S8.7 Wayland: verify it runs natively on KDE Wayland; if the Electron version doesn't auto-detect, add `ozone-platform-hint=auto`.
+- [x] S8.8 App icon `build/icon.png` 512×512 (accent rounded square with the design's spark glyph, `#161316` glyph) + sizes electron-builder needs.
 - [ ] S8.9 `electron-builder.yml`: `appId: dev.stefanos.harness`, `productName: harness`, `executableName: harness`, `asar: true`, output `release/`, Linux target `AppImage` x64, `category: Development`, `artifactName: harness-${version}-x86_64.${ext}`.
 - [ ] S8.10 `scripts/install-local.sh`: copies the newest AppImage to `~/.local/bin/harness.AppImage`, installs the icon to `~/.local/share/icons/hicolor/512x512/apps/harness.png`, writes `~/.local/share/applications/harness.desktop`, runs `update-desktop-database` if present. Idempotent; `--uninstall` removes all three.
 - [ ] S8.11 `npm run preview` runs the prod wiring against `.dev-data-preview`.
@@ -815,14 +817,14 @@ Run on: web dev (Chrome or Firefox), Electron dev, and the AppImage on CachyOS a
 | S0 Foundation, tooling, contracts | Claude Opus 5.5 | `v0/s0-foundation` | [x] |
 | S1 Storage, settings, secrets | Claude Sonnet 5.5 | `v0/s1-storage` | [x] |
 | S2 OpenRouter provider + model catalog | | | [ ] |
-| S3 Project tools (read-only) | | | [ ] |
-| S4 Agent loop | | | [ ] |
+| S3 Project tools (read-only) | Claude Sonnet 5.5 | `v0/s3-project-tools` | [x] |
+| S4 Agent loop | Claude Sonnet 5.5 | `v0/s4-agent-loop` | [x] |
 | S5 API server + composition | | | [ ] |
 | S6 UI: shell, sidebar, projects, settings, header | | | [ ] |
 | S6.1 UI primitives (early PR) | Claude Sonnet 5.5 | `v0/s6-1-ui-primitives` | [x] |
 | S7 UI: conversation, composer, models, attachments | | | [ ] |
-| S8 Electron shell + AppImage | | | [ ] |
-| S8.1 `protocol.handle` streaming spike | | | [ ] |
+| S8 Electron shell + AppImage | Claude Sonnet 5.5 | `v0/s8-electron-shell` (wave 2 part) | [ ] |
+| S8.1 `protocol.handle` streaming spike | Claude Sonnet 5.5 | `v0/s8-electron-shell` | [x] |
 | S9 Integration, QA, release | | | [ ] |
 | §8 acceptance on CachyOS | | | [ ] |
 | §8 acceptance on Arch | | | [ ] |
@@ -834,7 +836,7 @@ Run on: web dev (Chrome or Firefox), Electron dev, and the AppImage on CachyOS a
 
 | Item | Status |
 |---|---|
-| Streaming through `protocol.handle` (S8.1). Fallback: fixed-port localhost server + per-launch token | open |
+| Streaming through `protocol.handle` (S8.1). Fallback: fixed-port localhost server + per-launch token | **resolved: incremental** (Electron 45.2.1, KDE Wayland; 200 ms frames arrive 199–201 ms apart for GET and POST; evidence `scripts/spikes/protocol-stream/`). No fallback. **Caveat:** on client abort the request's `signal` does **not** fire in main — only the response stream's `cancel()` (Hono: `stream.onAbort`). S5 must detect disconnects via `stream.onAbort`, not `c.req.raw.signal`. Wayland is auto-detected (no ozone flag) |
 | OpenRouter capability metadata (`supported_parameters`, `input_modalities`) may be wrong for some models → errors are mapped (`model_no_tools`, `model_no_image_input`) and shown | accepted |
 | `reasoning_details` round-trip for reasoning models with tools (S2.7) | verify during S2 |
 | `Ctrl+N` can't be captured in browsers | accepted (Electron only) |
