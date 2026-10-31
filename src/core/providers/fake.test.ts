@@ -82,6 +82,13 @@ describe('FakeProvider test markers', () => {
     expect(Date.now() - t0).toBeGreaterThanOrEqual(330);
   });
 
+  it('[fake:read=<path>] makes the first tool call read that path', async () => {
+    const p = createFakeProvider({ delayMs: 0 });
+    const events = await run(p, userReq('look [fake:read=../outside.txt]', { tools: [readFile] }));
+    const call = events.find((e) => e.type === 'tool_call');
+    expect(call && call.type === 'tool_call' && JSON.parse(call.call.argsJson)).toEqual({ path: '../outside.txt' });
+  });
+
   it('ignores the markers in title requests (maxTokens set)', async () => {
     const p = createFakeProvider({ delayMs: 0 });
     expect(text(await run(p, userReq('[fake:error=invalid_api_key]', { maxTokens: 30 })))).toContain('```ts');

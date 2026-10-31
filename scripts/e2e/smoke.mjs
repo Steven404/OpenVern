@@ -80,6 +80,8 @@ if (PHASE === 'main') {
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'README.md'), '# Demo project\n\nA tiny fixture for the e2e run.\n');
   }
+  writeFileSync(join(PROJECT_A, '.env'), 'SECRET_TOKEN=do-not-leak\n');
+  writeFileSync(join(FIXTURES, 'outside.txt'), 'outside the project\n');
   writeFileSync(
     TS_FILE,
     'export const answer: number = 42;\nexport function greet(name: string) {\n  return "hi " + name;\n}\n',
@@ -404,6 +406,39 @@ async function mainPhase() {
     await shot('a8-loose');
   });
 
+  await section('A7', async () => {
+    // The fake provider's `[fake:read=<path>]` marker makes the model ask for that path: the sandbox must refuse.
+    const projects = (await api('/projects')).body;
+    const a = projects.find((p) => p.name === 'e2e-proj');
+    for (const [path, expected] of [
+      ['../outside.txt', /outside the project/i],
+      ['.env', /blocked/i],
+    ]) {
+      await ev(`location.hash = '#/new?project=${a.id}'`);
+      await waitFor(
+        `document.querySelector('button[aria-label^="Project:"]')?.getAttribute('aria-label') === 'Project: e2e-proj'`,
+        'chip',
+      );
+      await send(`please read it [fake:read=${path}]`);
+      await waitFor(`location.hash.startsWith('#/chat/')`, 'chat');
+      await waitFor(`${answered} && ${isIdle}`, 'answer', 20000);
+      const id = (await ev('location.hash')).split('/').pop();
+      const tool = (await api(`/chats/${id}`)).body.messages.find((m) => m.role === 'tool');
+      check(
+        `A7 read_file ${path} is refused`,
+        !!tool && tool.ok === false && expected.test(tool.output),
+        JSON.stringify(tool?.output),
+      );
+      check(
+        `A7 ${path}: the tool row shows a failure and no file content`,
+        await ev(
+          `!!document.querySelector('[data-testid=tool-row][data-state=failed]') && !document.body.innerText.includes('do-not-leak')`,
+        ),
+      );
+    }
+    await shot('a7-refused');
+  });
+
   await section('A9', async () => {
     await newChat();
     await chooseProject('No project');
@@ -637,6 +672,7 @@ async function mainPhase() {
     check('A14 "New chat here" preselects the project', true);
     await send('hello from B');
     await waitFor(`location.hash.startsWith('#/chat/')`, 'chat');
+    const bChatId = (await ev('location.hash')).split('/').pop();
     await waitFor(`${answered} && ${isIdle}`, 'answer', 20000);
     await sleep(800);
 
@@ -661,10 +697,10 @@ async function mainPhase() {
     await shot('a14-remove-confirm');
     await click(lastByText('[role=dialog] button, [role=alertdialog] button', 'Remove'), 'confirm Remove');
     await waitFor(`!document.querySelector('aside').innerText.includes('e2e-renamed')`, 'project removed');
-    const chats = (await api('/chats')).body;
-    const moved = chats.find((c) => c.title !== 'New chat' && c.projectId === null);
+    const moved = (await api('/chats')).body.find((c) => c.id === bChatId);
+    check('A14 remove: its chat still exists as a loose chat', moved?.projectId === null, JSON.stringify(moved));
     check(
-      'A14 remove: its chat is now a loose chat',
+      'A14 remove: the chat is listed under Chats',
       !!moved &&
         (await ev(`document.querySelector('aside section[aria-labelledby=sidebar-chats]')?.innerText ?? ''`)).includes(
           moved.title,

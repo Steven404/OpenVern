@@ -86,7 +86,9 @@ const SLOW_DELTA_MS = 120;
  * - `[fake:slow]`: ~120 ms extra between text deltas;
  * - `[fake:error=<code>]`: the call fails with that error code (retryable only for `provider_error` / `rate_limited`
  *   / `network_error`);
- * - `[fake:flaky]`: the first call for that message fails with a retryable `provider_error`, later ones succeed.
+ * - `[fake:flaky]`: the first call for that message fails with a retryable `provider_error`, later ones succeed;
+ * - `[fake:read=<path>]`: the first tool call reads `<path>` instead of `README.md` (e.g. `../x` or `.env`, to
+ *   exercise the sandbox through the whole stack).
  * Title requests (`maxTokens` set) ignore the markers.
  */
 export function createDefaultFakeScript(): FakeScript {
@@ -106,6 +108,14 @@ export function createDefaultFakeScript(): FakeScript {
     if (text.includes('[fake:flaky]') && !flaked.has(text)) {
       flaked.add(text);
       return [{ type: 'throw', error: new ProviderError('provider_error', 'Fake provider hiccup.', true) }];
+    }
+    const readPath = /\[fake:read=([^\]]+)\]/.exec(text)?.[1];
+    if (readPath) {
+      return steps.map((step) =>
+        step.type === 'tool_call' && step.call.name === 'read_file'
+          ? { ...step, call: { ...step.call, argsJson: JSON.stringify({ path: readPath }) } }
+          : step,
+      );
     }
     if (text.includes('[fake:slow]')) {
       return steps.flatMap((step): FakeStep[] =>
