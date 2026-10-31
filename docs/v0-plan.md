@@ -668,7 +668,7 @@ Complexity: **L** low · **M** medium · **H** high. Waves are in §7.
 
 **Owns:** `src/renderer/{app,components/ui,features/sidebar,features/projects,features/settings,features/chat-header,stores/ui.ts}`. **Depends on:** S0. Develop with `VITE_API=mock`.
 
-- [ ] S6.1 **First PR, merged early (S7 builds on it):** UI primitives styled from tokens — `Button` (primary/ghost/outline), `IconButton` (requires `aria-label`), `Dialog` (Radix; focus trap, Esc, backdrop click, `surface` + `border-control` + radius 18), `Menu` (Radix DropdownMenu, submenus), `Popover`, `TextField`, `Kbd`.
+- [x] S6.1 **First PR, merged early (S7 builds on it):** UI primitives styled from tokens — `Button` (primary/ghost/outline), `IconButton` (requires `aria-label`), `Dialog` (Radix; focus trap, Esc, backdrop click, `surface` + `border-control` + radius 18), `Menu` (Radix DropdownMenu, submenus), `Popover`, `TextField`, `Kbd`.
 - [ ] S6.2 App shell: providers (QueryClient, ApiClient context), hash router (`#/new` default, `#/chat/:id`, unknown → `#/new`), layout of the design (sidebar 272px + main), `ChatScreen` composition = `ChatHeader` (S6) + `Conversation` + `Composer` (S7; placeholders until S7 lands).
 - [ ] S6.3 Sidebar D1–D7 exactly as designed, plus the "CHATS" section (same label style, hidden when empty, links not indented) listing loose chats newest first. Project chats newest first.
 - [ ] S6.4 Project row "…" button (visible on hover/focus, replaces the count while shown): New chat here (opens `#/new` with that project preselected) · Rename · Remove (confirm: "Remove "<name>" from harness? Its N chats move to Chats. Files on disk are not touched.").
@@ -810,7 +810,7 @@ Run on: web dev (Chrome or Firefox), Electron dev, and the AppImage on CachyOS a
 | S4 Agent loop | | | [ ] |
 | S5 API server + composition | | | [ ] |
 | S6 UI: shell, sidebar, projects, settings, header | | | [ ] |
-| S6.1 UI primitives (early PR) | | | [ ] |
+| S6.1 UI primitives (early PR) | Claude Sonnet 5.5 | `v0/s6-1-ui-primitives` | [x] |
 | S7 UI: conversation, composer, models, attachments | | | [ ] |
 | S8 Electron shell + AppImage | | | [ ] |
 | S8.1 `protocol.handle` streaming spike | | | [ ] |
