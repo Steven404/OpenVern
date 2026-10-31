@@ -675,18 +675,20 @@ Complexity: **L** low · **M** medium · **H** high. Waves are in §7.
 **Owns:** `src/renderer/{app,components/ui,features/sidebar,features/projects,features/settings,features/chat-header,stores/ui.ts}`. **Depends on:** S0. Develop with `VITE_API=mock`.
 
 - [x] S6.1 **First PR, merged early (S7 builds on it):** UI primitives styled from tokens — `Button` (primary/ghost/outline), `IconButton` (requires `aria-label`), `Dialog` (Radix; focus trap, Esc, backdrop click, `surface` + `border-control` + radius 18), `Menu` (Radix DropdownMenu, submenus), `Popover`, `TextField`, `Kbd`.
-- [ ] S6.2 App shell: providers (QueryClient, ApiClient context), hash router (`#/new` default, `#/chat/:id`, unknown → `#/new`), layout of the design (sidebar 272px + main), `ChatScreen` composition = `ChatHeader` (S6) + `Conversation` + `Composer` (S7; placeholders until S7 lands).
-- [ ] S6.3 Sidebar D1–D7 exactly as designed, plus the "CHATS" section (same label style, hidden when empty, links not indented) listing loose chats newest first. Project chats newest first.
-- [ ] S6.4 Project row "…" button (visible on hover/focus, replaces the count while shown): New chat here (opens `#/new` with that project preselected) · Rename · Remove (confirm: "Remove "<name>" from harness? Its N chats move to Chats. Files on disk are not touched.").
-- [ ] S6.5 Empty states: no projects → muted "No projects yet" + "Add project" ghost button; no chats at all → nothing extra.
-- [ ] S6.6 **New project modal:** Folder field — in Electron a read-only path + "Browse…" (`window.harness.pickDirectory()`), in the browser a text field for an absolute path (`~` allowed); Name field prefilled from the folder's basename, editable; inline errors from `path_invalid` / `conflict`; on success the project expands and the app opens `#/new` with it preselected.
-- [ ] S6.7 **Settings modal** (title "Settings", section "OpenRouter"): when not configured — "API key" password field with show/hide toggle, placeholder `sk-or-v1-…`, help text with a link to `https://openrouter.ai/keys` (opens externally), Save (spinner while validating). Errors: rejected key → "OpenRouter rejected this key."; network → "Couldn't reach OpenRouter. Check your connection." When configured — "Connected · `<keyHint>`" + "Replace key" and "Remove key" (confirm). Saving invalidates the models query.
-- [ ] S6.8 Chat header D8 + chat options D9 (Rename dialog with the current title selected; Move to project submenu with a check on the current one; Delete confirm → navigates to `#/new`). `document.title` = `<chat title> — harness` (or `harness` on `#/new`).
-- [ ] S6.9 Sidebar collapse D2 and responsive D19; `Ctrl+N` → `#/new` (global handler, ignored while a dialog is open). Optional: `Ctrl+B` toggles the sidebar.
-- [ ] S6.10 Keyboard and a11y: everything reachable by Tab with visible focus, menus with arrow keys, dialogs return focus to their trigger.
-- [ ] S6.11 Component tests: project expand/collapse persistence, chat options actions call the right `ApiClient` methods, settings modal states.
+- [x] S6.2 App shell: providers (QueryClient, ApiClient context), hash router (`#/new` default, `#/chat/:id`, unknown → `#/new`), layout of the design (sidebar 272px + main), `ChatScreen` composition = `ChatHeader` (S6) + `Conversation` + `Composer` (S7; placeholders until S7 lands).
+- [x] S6.3 Sidebar D1–D7 exactly as designed, plus the "CHATS" section (same label style, hidden when empty, links not indented) listing loose chats newest first. Project chats newest first.
+- [x] S6.4 Project row "…" button (visible on hover/focus, replaces the count while shown): New chat here (opens `#/new` with that project preselected) · Rename · Remove (confirm: "Remove "<name>" from harness? Its N chats move to Chats. Files on disk are not touched.").
+- [x] S6.5 Empty states: no projects → muted "No projects yet" + "Add project" ghost button; no chats at all → nothing extra.
+- [x] S6.6 **New project modal:** Folder field — in Electron a read-only path + "Browse…" (`window.harness.pickDirectory()`), in the browser a text field for an absolute path (`~` allowed); Name field prefilled from the folder's basename, editable; inline errors from `path_invalid` / `conflict`; on success the project expands and the app opens `#/new` with it preselected.
+- [x] S6.7 **Settings modal** (title "Settings", section "OpenRouter"): when not configured — "API key" password field with show/hide toggle, placeholder `sk-or-v1-…`, help text with a link to `https://openrouter.ai/keys` (opens externally), Save (spinner while validating). Errors: rejected key → "OpenRouter rejected this key."; network → "Couldn't reach OpenRouter. Check your connection." When configured — "Connected · `<keyHint>`" + "Replace key" and "Remove key" (confirm). Saving invalidates the models query.
+- [x] S6.8 Chat header D8 + chat options D9 (Rename dialog with the current title selected; Move to project submenu with a check on the current one; Delete confirm → navigates to `#/new`). `document.title` = `<chat title> — harness` (or `harness` on `#/new`).
+- [x] S6.9 Sidebar collapse D2 and responsive D19; `Ctrl+N` → `#/new` (global handler, ignored while a dialog is open). Optional: `Ctrl+B` toggles the sidebar.
+- [x] S6.10 Keyboard and a11y: everything reachable by Tab with visible focus, menus with arrow keys, dialogs return focus to their trigger.
+- [x] S6.11 Component tests: project expand/collapse persistence, chat options actions call the right `ApiClient` methods, settings modal states.
 
 **Acceptance:** against `MockApiClient`, side by side with the design at 1440×900, the sidebar and header match (spacing, colours, type, hover/focus states), and every action in D1–D9 works.
+
+**S6 notes (as built):** shared query hooks in `app/queries.ts` (`useProjects`, `useChats`, `useSettings`, `useCurrentChatId`, `useNewChatPath`); test helpers in `app/test-utils.tsx` (`renderApp`, `openMenu`, `seededClient`, jsdom stubs). Visual check was by measured layout values (272px sidebar, 64px header, 44/36/34px rows), not a side-by-side render: `docs/design/*.dc.html` reference `./support.js`, which is not in the repo — use the canvas link for S9's visual pass. Move-to-project failures only refetch (no toast component in V0).
 
 **S6 ↔ S7 seams (orchestrator, wave 2b):** S6 and S7 run in parallel. Shared, already committed:
 `src/renderer/lib/api-context.tsx` (`ApiClientProvider`, `useApiClient`), `src/renderer/lib/query-keys.ts`,
@@ -824,7 +826,7 @@ Run on: web dev (Chrome or Firefox), Electron dev, and the AppImage on CachyOS a
 | S3 Project tools (read-only) | Claude Sonnet 5.5 | `v0/s3-project-tools` | [x] |
 | S4 Agent loop | Claude Sonnet 5.5 | `v0/s4-agent-loop` | [x] |
 | S5 API server + composition | Claude Sonnet 5.5 | `v0/s5-api-server` | [x] |
-| S6 UI: shell, sidebar, projects, settings, header | | | [ ] |
+| S6 UI: shell, sidebar, projects, settings, header | Claude Sonnet 5.5 | `v0/s6-ui-shell` | [x] |
 | S6.1 UI primitives (early PR) | Claude Sonnet 5.5 | `v0/s6-1-ui-primitives` | [x] |
 | S7 UI: conversation, composer, models, attachments | | | [ ] |
 | S8 Electron shell + AppImage | Claude Sonnet 5.5 | `v0/s8-electron-shell` (wave 2 part) | [ ] |
