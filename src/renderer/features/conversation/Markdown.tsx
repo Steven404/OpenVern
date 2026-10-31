@@ -28,7 +28,11 @@ export function useFrameThrottled<T>(value: T, enabled: boolean): T {
 
   useEffect(
     () => () => {
-      if (frame.current !== null) cancelAnimationFrame(frame.current);
+      if (frame.current === null) return;
+      cancelAnimationFrame(frame.current);
+      // Forget it too: React StrictMode runs this cleanup on the first mount and then re-runs the effects; a stale
+      // id would make the scheduler think a frame is still pending and the text would never update while streaming.
+      frame.current = null;
     },
     [],
   );

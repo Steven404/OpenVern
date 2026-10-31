@@ -47,6 +47,54 @@ describe('FakeProvider default script', () => {
   });
 });
 
+describe('FakeProvider test markers', () => {
+  const userReq = (text: string, extra: Partial<ProviderRequest> = {}): ProviderRequest => ({
+    model: 'm',
+    system: '',
+    messages: [{ role: 'user', content: [{ type: 'text', text }] }],
+    ...extra,
+  });
+  const run = (p: ReturnType<typeof createFakeProvider>, req: ProviderRequest) =>
+    collect(p.stream(req, new AbortController().signal));
+
+  it('[fake:error=<code>] fails with that code', async () => {
+    const p = createFakeProvider({ delayMs: 0 });
+    await expect(run(p, userReq('hi [fake:error=invalid_api_key]'))).rejects.toMatchObject({
+      code: 'invalid_api_key',
+      retryable: false,
+    });
+    await expect(run(p, userReq('[fake:error=provider_error]'))).rejects.toMatchObject({ retryable: true });
+  });
+
+  it('[fake:flaky] fails once per message, then succeeds', async () => {
+    const p = createFakeProvider({ delayMs: 0 });
+    await expect(run(p, userReq('x [fake:flaky]'))).rejects.toMatchObject({ code: 'provider_error', retryable: true });
+    expect(text(await run(p, userReq('x [fake:flaky]')))).toContain('```ts');
+  });
+
+  it('[fake:slow] adds a pause before every text delta', async () => {
+    const p = createFakeProvider({ delayMs: 0 });
+    const t0 = Date.now();
+    let seen = 0;
+    for await (const e of p.stream(userReq('[fake:slow]'), new AbortController().signal)) {
+      if (e.type === 'text_delta' && ++seen === 3) break;
+    }
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(330);
+  });
+
+  it('[fake:read=<path>] makes the first tool call read that path', async () => {
+    const p = createFakeProvider({ delayMs: 0 });
+    const events = await run(p, userReq('look [fake:read=../outside.txt]', { tools: [readFile] }));
+    const call = events.find((e) => e.type === 'tool_call');
+    expect(call && call.type === 'tool_call' && JSON.parse(call.call.argsJson)).toEqual({ path: '../outside.txt' });
+  });
+
+  it('ignores the markers in title requests (maxTokens set)', async () => {
+    const p = createFakeProvider({ delayMs: 0 });
+    expect(text(await run(p, userReq('[fake:error=invalid_api_key]', { maxTokens: 30 })))).toContain('```ts');
+  });
+});
+
 describe('FakeProvider scripts', () => {
   it('plays turns in order and can throw', async () => {
     const p = createFakeProvider({
