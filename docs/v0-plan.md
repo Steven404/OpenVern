@@ -738,15 +738,17 @@ the orchestrator swaps the imports when both land. S6's "New chat" button / `Ctr
 
 - [x] S8.1 **Spike first:** confirm streaming through `protocol.handle` (§3.2 risk). Record the result in §10; if it fails, implement the fallback described there instead of S8.3.
 - [x] S8.2 Main: single-instance lock (focus the existing window), `BrowserWindow` 1440×900, min 800×600, `backgroundColor: '#161316'`, title `harness`, `show: false` until `ready-to-show`. Dev: load `ELECTRON_RENDERER_URL`, keep the default menu (DevTools). Prod: `Menu.setApplicationMenu(null)`.
-- [ ] S8.3 Prod: `protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }])`; `protocol.handle('app', …)` routes `/api/*` to `createApp(core).fetch` and everything else to the built renderer files (SPA fallback to `index.html`); window loads `app://harness/`. CSP header on HTML: `default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self'; script-src 'self'`.
-- [ ] S8.4 `SafeStorageSecretStore`: `safeStorage.encryptString` → base64 in `secrets.json` (`enc: 'safeStorage'`); if `isEncryptionAvailable()` is false, fall back to `FileSecretStore` and log it. Prod `createCore` uses it with `app.getPath('userData')` (or `HARNESS_DATA_DIR`).
+- [x] S8.3 Prod: `protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }])`; `protocol.handle('app', …)` routes `/api/*` to `createApp(core).fetch` and everything else to the built renderer files (SPA fallback to `index.html`); window loads `app://harness/`. CSP header on HTML: `default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self'; script-src 'self'`.
+- [x] S8.4 `SafeStorageSecretStore`: `safeStorage.encryptString` → base64 in `secrets.json` (`enc: 'safeStorage'`); if `isEncryptionAvailable()` is false, fall back to `FileSecretStore` and log it. Prod `createCore` uses it with `app.getPath('userData')` (or `HARNESS_DATA_DIR`).
 - [x] S8.5 Preload (`contextBridge`): `window.harness = { isElectron: true, pickDirectory }`; IPC handler uses `dialog.showOpenDialog({ properties: ['openDirectory'] })` (goes through the KDE portal).
 - [x] S8.6 Hardening: `contextIsolation`, `sandbox`, no `nodeIntegration`; `setWindowOpenHandler` → `shell.openExternal` for `http(s)` only, deny the rest; block `will-navigate` away from the app origin.
 - [x] S8.7 Wayland: verify it runs natively on KDE Wayland; if the Electron version doesn't auto-detect, add `ozone-platform-hint=auto`.
 - [x] S8.8 App icon `build/icon.png` 512×512 (accent rounded square with the design's spark glyph, `#161316` glyph) + sizes electron-builder needs.
-- [ ] S8.9 `electron-builder.yml`: `appId: dev.stefanos.harness`, `productName: harness`, `executableName: harness`, `asar: true`, output `release/`, Linux target `AppImage` x64, `category: Development`, `artifactName: harness-${version}-x86_64.${ext}`.
-- [ ] S8.10 `scripts/install-local.sh`: copies the newest AppImage to `~/.local/bin/harness.AppImage`, installs the icon to `~/.local/share/icons/hicolor/512x512/apps/harness.png`, writes `~/.local/share/applications/harness.desktop`, runs `update-desktop-database` if present. Idempotent; `--uninstall` removes all three.
-- [ ] S8.11 `npm run preview` runs the prod wiring against `.dev-data-preview`.
+- [x] S8.9 `electron-builder.yml`: `appId: dev.stefanos.harness`, `productName: harness`, `executableName: harness`, `asar: true`, output `release/`, Linux target `AppImage` x64, `category: Development`, `artifactName: harness-${version}-x86_64.${ext}`.
+- [x] S8.10 `scripts/install-local.sh`: copies the newest AppImage to `~/.local/bin/harness.AppImage`, installs the icon to `~/.local/share/icons/hicolor/512x512/apps/harness.png`, writes `~/.local/share/applications/harness.desktop`, runs `update-desktop-database` if present. Idempotent; `--uninstall` removes all three.
+- [x] S8.11 `npm run preview` runs the prod wiring against `.dev-data-preview`.
+
+**S8 notes (as built):** prod backend in `src/main/backend.ts`; static files `src/main/static-files.ts`; deps are bundled into the main bundle (`externalizeDeps: false`), so no `node_modules` ships (asar 1.3 MB, AppImage ≈ 118 MiB). `safeStorage` picks `kwallet6` here (no `password-store` switch). KWin reports `resourceClass=harness`, matching `StartupWMClass=harness`. `HARNESS_FAKE_PROVIDER=1` also works in prod/AppImage for keyless testing. If `npm ci` leaves Electron's binary missing, run `node node_modules/electron/install.js`.
 
 **Acceptance:** `npm run dist` produces the AppImage; it launches on CachyOS (KDE Wayland) from the terminal and from the app launcher after `install-local.sh`, stores data in `~/.config/harness`, and the key in `secrets.json` is encrypted (`enc: 'safeStorage'`).
 
@@ -831,7 +833,7 @@ Run on: web dev (Chrome or Firefox), Electron dev, and the AppImage on CachyOS a
 | S6 UI: shell, sidebar, projects, settings, header | Claude Sonnet 5.5 | `v0/s6-ui-shell` | [x] |
 | S6.1 UI primitives (early PR) | Claude Sonnet 5.5 | `v0/s6-1-ui-primitives` | [x] |
 | S7 UI: conversation, composer, models, attachments | Claude Sonnet 5.5 | `v0/s7-ui-chat` | [x] |
-| S8 Electron shell + AppImage | Claude Sonnet 5.5 | `v0/s8-electron-shell` (wave 2 part) | [ ] |
+| S8 Electron shell + AppImage | Claude Sonnet 5.5 | `v0/s8-electron-shell`, `v0/s8-prod-packaging` | [x] |
 | S8.1 `protocol.handle` streaming spike | Claude Sonnet 5.5 | `v0/s8-electron-shell` | [x] |
 | S9 Integration, QA, release | | | [ ] |
 | §8 acceptance on CachyOS | | | [ ] |
