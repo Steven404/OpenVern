@@ -439,6 +439,10 @@ export declare function createCore(deps: CoreDeps): Promise<Core>;
 
 Service method signatures are defined by their owning sections (S1, S2, S4) in their first PR and copied here.
 
+> **Orchestrator note (wave 2):** the S1/S2/S4 service signatures were locked up front in `src/core/types.ts`
+> (that file is the source of truth for them), plus `CoreError` / `toErrorInfo` in `src/core/errors.ts`. `Core`
+> also exposes `provider` (S5 needs it for `validateKey`). `ChatsService.detachProject` was added for project removal.
+
 > **S0 note:** these interfaces live in `src/core/types.ts` (with empty placeholder service interfaces for S1/S2/S4 to
 > fill in) so that S5 owns `src/core/index.ts`, which implements `createCore` and re-exports the types.
 
