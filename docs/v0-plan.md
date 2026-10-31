@@ -756,10 +756,10 @@ the orchestrator swaps the imports when both land. S6's "New chat" button / `Ctr
 
 **Owns:** cross-cutting fixes, `README.md`. **Depends on:** everything.
 
-- [ ] S9.1 Switch the default `ApiClient` to `HttpApiClient` (mock stays behind `VITE_API=mock`); remove all placeholders.
+- [x] S9.1 Switch the default `ApiClient` to `HttpApiClient` (mock stays behind `VITE_API=mock`); remove all placeholders.
 - [ ] S9.2 Run §8 in web dev, Electron dev, preview, and the AppImage on **CachyOS** and **Arch**; file and fix bugs (or hand them back to the owning section).
-- [ ] S9.3 Visual pass against the design at 1440×900 and at 800×600.
-- [ ] S9.4 README: install, dev, build, data dir, where the key is stored, known limitations (§10).
+- [x] S9.3 Visual pass against the design at 1440×900 and at 800×600.
+- [x] S9.4 README: install, dev, build, data dir, where the key is stored, known limitations (§10).
 - [ ] S9.5 Tag `v0.1.0`.
 
 ---
@@ -835,10 +835,10 @@ Run on: web dev (Chrome or Firefox), Electron dev, and the AppImage on CachyOS a
 | S7 UI: conversation, composer, models, attachments | Claude Sonnet 5.5 | `v0/s7-ui-chat` | [x] |
 | S8 Electron shell + AppImage | Claude Sonnet 5.5 | `v0/s8-electron-shell`, `v0/s8-prod-packaging` | [x] |
 | S8.1 `protocol.handle` streaming spike | Claude Sonnet 5.5 | `v0/s8-electron-shell` | [x] |
-| S9 Integration, QA, release | | | [ ] |
+| S9 Integration, QA, release | Claude Sonnet 5.5 | `v0/s9-integration` | [ ] (S9.2 on CachyOS/Arch AppImage + S9.5 tag pending) |
 | §8 acceptance on CachyOS | | | [ ] |
 | §8 acceptance on Arch | | | [ ] |
-| §8 acceptance in browser (dev) | | | [ ] |
+| §8 acceptance in browser (dev) | `npm run e2e` (fake provider) | `V0` | [ ] (automated parts pass; real-key items manual) |
 
 ---
 
@@ -853,7 +853,7 @@ Run on: web dev (Chrome or Firefox), Electron dev, and the AppImage on CachyOS a
 | AppImage needs `fuse2` (installed here) and unprivileged user namespaces for Chromium's sandbox (enabled on Arch/CachyOS kernels) | check on the Arch install |
 | Shiki cost while streaming → highlight completed blocks only | by design |
 | Big projects: walkers are capped and abortable | by design |
-| `<img src={attachmentUrl(id)}>` cannot send the `X-Harness-Client` header that §3.3 requires on every `/api` request | **resolved (S5):** `GET /api/attachments/:id/content` is exempt from the header when `Sec-Fetch-Site` is `same-origin`/`none`, or the URL scheme is `app:` without `Sec-Fetch-Site`; Host/Origin still enforced; served with `CORP: same-origin`, `CSP: default-src 'none'; sandbox`, `nosniff`. Verify thumbnails in the AppImage during S9 |
+| (verified in the built Electron app by `npm run e2e`) `<img src={attachmentUrl(id)}>` cannot send the `X-Harness-Client` header that §3.3 requires on every `/api` request | **resolved (S5):** `GET /api/attachments/:id/content` is exempt from the header when `Sec-Fetch-Site` is `same-origin`/`none`, or the URL scheme is `app:` without `Sec-Fetch-Site`; Host/Origin still enforced; served with `CORP: same-origin`, `CSP: default-src 'none'; sandbox`, `nosniff`. Verify thumbnails in the AppImage during S9 |
 
 ## 11. After V0 (backlog, not in scope)
 
