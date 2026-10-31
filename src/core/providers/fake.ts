@@ -1,6 +1,7 @@
 // FakeProvider: scripted `ProviderEvent` sequences with small delays. No key, no network, no cost.
 // Used by `HARNESS_FAKE_PROVIDER=1` and by tests.
 
+import type { ErrorCode } from '@shared/errors';
 import { SAMPLE_MODELS } from '@shared/sample-data';
 import type { ModelInfo } from '@shared/types';
 import { type Provider, ProviderError, type ProviderEvent, type ProviderRequest } from './types';
@@ -76,6 +77,45 @@ export const defaultFakeScript: FakeScript = (req) => {
   return [...textDeltas(FINAL_ANSWER), usage, { type: 'finish', reason: 'stop' }];
 };
 
+/** Pause between text deltas for `[fake:slow]`, so a stream can be stopped or navigated away from. */
+const SLOW_DELTA_MS = 120;
+
+/**
+ * Test-only prompt markers understood by the fake provider (it never serves real users), so end-to-end tests can reach
+ * states a scripted happy path cannot, in any host (dev server, Electron) without extra configuration:
+ * - `[fake:slow]`: ~120 ms extra between text deltas;
+ * - `[fake:error=<code>]`: the call fails with that error code (retryable only for `provider_error` / `rate_limited`
+ *   / `network_error`);
+ * - `[fake:flaky]`: the first call for that message fails with a retryable `provider_error`, later ones succeed.
+ * Title requests (`maxTokens` set) ignore the markers.
+ */
+export function createDefaultFakeScript(): FakeScript {
+  const flaked = new Set<string>();
+  return (req, callIndex) => {
+    const last = req.messages.at(-1);
+    const text =
+      last?.role === 'user' && req.maxTokens === undefined
+        ? last.content.map((p) => (p.type === 'text' ? p.text : '')).join('')
+        : '';
+    const steps = defaultFakeScript(req, callIndex);
+    const error = /\[fake:error=([a-z_]+)\]/.exec(text)?.[1] as ErrorCode | undefined;
+    if (error) {
+      const retryable = error === 'provider_error' || error === 'rate_limited' || error === 'network_error';
+      return [{ type: 'throw', error: new ProviderError(error, `Fake ${error} error.`, retryable) }];
+    }
+    if (text.includes('[fake:flaky]') && !flaked.has(text)) {
+      flaked.add(text);
+      return [{ type: 'throw', error: new ProviderError('provider_error', 'Fake provider hiccup.', true) }];
+    }
+    if (text.includes('[fake:slow]')) {
+      return steps.flatMap((step): FakeStep[] =>
+        step.type === 'text_delta' ? [{ type: 'delay', ms: SLOW_DELTA_MS }, step] : [step],
+      );
+    }
+    return steps;
+  };
+}
+
 const sleep = (ms: number, signal: AbortSignal) =>
   new Promise<void>((resolve, reject) => {
     if (signal.aborted) return reject(signal.reason);
@@ -91,7 +131,7 @@ const sleep = (ms: number, signal: AbortSignal) =>
   });
 
 export function createFakeProvider(opts: FakeProviderOptions = {}): FakeProvider {
-  const script = opts.script ?? defaultFakeScript;
+  const script = opts.script ?? createDefaultFakeScript();
   const delayMs = opts.delayMs ?? 15;
   const isValidKey = opts.isValidKey ?? ((k: string) => k.startsWith('sk-or-'));
   const models = opts.models ?? SAMPLE_MODELS;
