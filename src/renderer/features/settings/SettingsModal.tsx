@@ -24,6 +24,7 @@ export function keyErrorMessage(error: unknown): string {
 export function SettingsModal() {
   const open = useUiStore((s) => s.settingsOpen);
   const close = useUiStore((s) => s.closeSettings);
+  useSettings(); // loaded in the background so the modal opens with its content ready
   return (
     <Dialog open={open} onOpenChange={(next) => !next && close()}>
       {open ? (
@@ -103,17 +104,21 @@ function ConnectedState({ keyHint, onReplace }: { keyHint: string | null; onRepl
 
   return (
     <>
-      <div className="flex flex-wrap items-center gap-3 rounded-[12px] border border-border-control bg-surface-raised px-3.5 py-3">
-        <span aria-hidden="true" className="size-2 shrink-0 rounded-full bg-success" />
-        <p className="min-w-0 flex-1 truncate text-sm text-text">
-          Connected · <span className="font-mono text-[13px] text-text-secondary">{keyHint}</span>
-        </p>
-        <Button size="sm" onClick={onReplace}>
-          Replace key
-        </Button>
-        <Button ref={removeRef} size="sm" onClick={() => setConfirmOpen(true)}>
-          Remove key
-        </Button>
+      <div className="flex flex-col gap-3 rounded-[12px] border border-border-control bg-surface-raised px-3.5 py-3">
+        <div className="flex items-center gap-2.5">
+          <span aria-hidden="true" className="size-2 shrink-0 rounded-full bg-success" />
+          <p className="min-w-0 flex-1 truncate text-sm text-text">
+            Connected · <span className="font-mono text-[13px] text-text-secondary">{keyHint}</span>
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" onClick={onReplace}>
+            Replace key
+          </Button>
+          <Button ref={removeRef} size="sm" onClick={() => setConfirmOpen(true)}>
+            Remove key
+          </Button>
+        </div>
       </div>
       {remove.isError ? (
         <p role="alert" className="text-[13px] text-danger">

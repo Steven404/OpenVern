@@ -44,7 +44,7 @@ export const DialogContent = forwardRef<ElementRef<typeof RadixDialog.Content>, 
             }
           }}
           className={cx(
-            'fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100vh-32px)] w-[calc(100vw-32px)] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-y-auto rounded-[18px] border border-border-control bg-surface p-6 text-text shadow-2xl',
+            'fixed top-1/2 left-1/2 z-50 flex outline-none max-h-[calc(100vh-32px)] w-[calc(100vw-32px)] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-y-auto rounded-[18px] border border-border-control bg-surface p-6 text-text shadow-2xl',
             className,
           )}
           {...props}
