@@ -1,0 +1,6 @@
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-3","provider":"Google","model":"google/gemini-2.5-pro","object":"chat.completion.chunk","created":1730000002,"choices":[{"index":0,"delta":{"role":"assistant","content":"Partial answer"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-3","provider":"Google","model":"google/gemini-2.5-pro","object":"chat.completion.chunk","created":1730000002,"error":{"code":"server_error","message":"Provider disconnected unexpectedly","metadata":{"error_type":"provider_unavailable"}},"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":"error","native_finish_reason":"error"}]}
+
