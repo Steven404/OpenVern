@@ -27,6 +27,8 @@ export default defineConfig({
   renderer: {
     ...rendererConfig(),
     build: {
+      // electron-vite defaults the renderer to `minify: false`; the web build (plain Vite) minifies.
+      minify: true,
       rolldownOptions: { input: { index: fromRoot('./src/renderer/index.html') } },
     },
   },
