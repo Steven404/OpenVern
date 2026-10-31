@@ -3,7 +3,7 @@
 # Chromium over CDP. Temp data dir, always cleaned up. Needs a Chromium: set E2E_CHROME, or install Playwright's
 # (`npx playwright install chromium`), or have chromium / google-chrome on PATH.
 #   scripts/e2e/run-web.sh            smoke test (A1–A18)
-#   E2E_SHOTS=1 scripts/e2e/run-web.sh  also take the S9.3 screenshots
+#   E2E_SHOTS=1 scripts/e2e/run-web.sh  also take the S9.3 screenshots (E2E_SKIP_SMOKE=1: only those)
 #   E2E_KEEP=1 …                      keep the scratch dir (screenshots, logs)
 set -uo pipefail
 # shellcheck source=lib.sh
@@ -45,13 +45,19 @@ wait_for "Chromium" 20 curl -sf "http://127.0.0.1:$CDP/json/version" || { cat "$
 
 export E2E_MODE=web E2E_BASE="$BASE" E2E_OUT="$OUT" CDP_PORT="$CDP" E2E_DATA_DIR="$DATA"
 
-E2E_PHASE=main node scripts/e2e/smoke.mjs || RC=1
-if [ "${E2E_SHOTS:-0}" = 1 ]; then node scripts/e2e/shots.mjs || RC=1; fi
+SMOKE=$([ "${E2E_SKIP_SMOKE:-0}" = 1 ] && echo 0 || echo 1)
 
+if [ "$SMOKE" = 1 ]; then E2E_PHASE=main node scripts/e2e/smoke.mjs || RC=1; fi
+
+if [ "$SMOKE" = 1 ]; then
 # A18: restart the backend with the same data dir (the browser profile, i.e. localStorage, stays).
 echo "--- restarting the API server"
 stop_bg "$API_PGID"
 start_api || { cat "$OUT/api.log"; RC=1; exit 1; }
 E2E_PHASE=persist node scripts/e2e/smoke.mjs || RC=1
+fi
+
+# S9.3 screenshots (after the persistence check: they add their own project and chat).
+if [ "${E2E_SHOTS:-0}" = 1 ]; then node scripts/e2e/shots.mjs || RC=1; fi
 
 exit "$RC"
