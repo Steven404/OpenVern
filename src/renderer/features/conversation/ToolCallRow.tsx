@@ -1,4 +1,4 @@
-import { Check, ChevronRight, X } from 'lucide-react';
+import { Check, ChevronRight, Clock, X } from 'lucide-react';
 import { memo, useId, useState } from 'react';
 import { Spinner } from '../../components/ui';
 import { formatDuration } from '../composer/format';
@@ -29,7 +29,7 @@ export interface ToolCallRowProps {
   block: Pick<ToolBlock, 'call' | 'result' | 'state'>;
 }
 
-/** One tool call (D13): spinner while running, then ✓ / ✕, with expandable arguments and output. */
+/** One tool call (D13): muted clock while queued, spinner while running, then ✓ / ✕, with expandable arguments and output. */
 export const ToolCallRow = memo(function ToolCallRow({ block }: ToolCallRowProps) {
   const { call, result, state } = block;
   const [open, setOpen] = useState(false);
@@ -54,6 +54,8 @@ export const ToolCallRow = memo(function ToolCallRow({ block }: ToolCallRowProps
         <span className="min-w-0 flex-1 truncate text-text-muted">{summary}</span>
         {result ? (
           <span className="font-mono text-[11.5px] text-text-faint">{formatDuration(result.durationMs)}</span>
+        ) : state === 'queued' ? (
+          <span className="font-mono text-[11.5px] text-text-faint">queued</span>
         ) : state === 'skipped' ? (
           <span className="font-mono text-[11.5px] text-text-faint">not run</span>
         ) : null}
@@ -68,7 +70,15 @@ export const ToolCallRow = memo(function ToolCallRow({ block }: ToolCallRowProps
           <ToolSection label="Arguments" text={formatArgs(call.argsJson)} />
           <ToolSection
             label="Output"
-            text={result ? result.output || '(empty)' : state === 'running' ? 'Running…' : 'No output.'}
+            text={
+              result
+                ? result.output || '(empty)'
+                : state === 'running'
+                  ? 'Running…'
+                  : state === 'queued'
+                    ? 'Waiting to run.'
+                    : 'No output.'
+            }
             danger={state === 'failed'}
           />
         </div>
@@ -79,6 +89,8 @@ export const ToolCallRow = memo(function ToolCallRow({ block }: ToolCallRowProps
 
 function ToolStateIcon({ state }: { state: ToolBlock['state'] }) {
   if (state === 'running') return <Spinner size={16} className="text-text-muted" />;
+  if (state === 'queued')
+    return <Clock aria-label="Queued" size={16} strokeWidth={2} className="shrink-0 text-text-faint" />;
   if (state === 'ok')
     return <Check aria-label="Succeeded" size={16} strokeWidth={2} className="shrink-0 text-success" />;
   if (state === 'failed') return <X aria-label="Failed" size={16} strokeWidth={2} className="shrink-0 text-danger" />;

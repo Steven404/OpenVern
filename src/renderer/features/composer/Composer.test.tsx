@@ -115,9 +115,36 @@ describe('stop', () => {
       fireEvent.click(stop);
     });
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull());
-    await waitForIdle(chat.id);
+    await waitFor(() => expect(useRunsStore.getState().runs[chat.id]).toMatchObject({ status: 'idle', stopped: true }));
     expect((await api.getChat(chat.id)).messages.at(-1)).toMatchObject({ role: 'assistant', status: 'stopped' });
     expect(await screen.findAllByTestId('stopped-label')).toHaveLength(1);
+  });
+});
+
+describe('stop during a tool run', () => {
+  it('stop during a tool run shows Stopped with Retry and keeps Send enabled', async () => {
+    const { api, chat } = await setup({ delayMs: 5 });
+    renderWithProviders(
+      <>
+        <Conversation chatId={chat.id} />
+        <ReplyComposer chat={chat} />
+      </>,
+      { api },
+    );
+    await screen.findByText(/That shape is right/);
+    type('use a tool');
+    fireEvent.keyDown(textarea(), { key: 'Enter' });
+    await waitFor(() => expect(screen.getAllByTestId('tool-row').at(-1)?.getAttribute('data-state')).toBe('running'), {
+      timeout: 5000,
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    });
+    await waitFor(() => expect(useRunsStore.getState().runs[chat.id]?.status).toBe('idle'));
+    expect(await screen.findAllByTestId('stopped-label')).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+    type('next');
+    expect(sendButton().disabled).toBe(false);
   });
 });
 

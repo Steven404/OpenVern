@@ -59,6 +59,9 @@ const SAMPLE_CODE = [
   '```',
 ].join('\n');
 
+/** Must match `INTERRUPTED_OUTPUT` in `src/core/agent/history.ts` (the renderer doesn't import `@core`). */
+const INTERRUPTED_OUTPUT = 'Interrupted: the run was stopped before this tool finished.';
+
 export class MockApiClient implements ApiClient {
   private readonly delayMs: number;
   private apiKey: string | null;
@@ -242,7 +245,13 @@ export class MockApiClient implements ApiClient {
           ]
         : [{ text: `Here is the core of an agent loop:\n\n${SAMPLE_CODE}\n\nAdd a step limit early.`, toolCalls: [] }];
 
+      const stopRun = (): never => {
+        chat.updatedAt = now();
+        throw signal.reason;
+      };
+
       for (const step of steps) {
+        if (signal.aborted) stopRun();
         const msg: AssistantMessage = {
           id: crypto.randomUUID(),
           role: 'assistant',
@@ -251,6 +260,12 @@ export class MockApiClient implements ApiClient {
           text: '',
           toolCalls: [],
           status: 'complete',
+        };
+        // Like the server's loop: a stop during (or right after) the text keeps the partial reply as `stopped`.
+        const stopText = (): never => {
+          msg.status = 'stopped';
+          chat.messages.push(msg);
+          return stopRun();
         };
         yield { type: 'assistant_start', messageId: msg.id, model };
         try {
@@ -261,20 +276,37 @@ export class MockApiClient implements ApiClient {
           }
         } catch (err) {
           if (!signal.aborted) throw err;
-          msg.status = 'stopped';
-          chat.messages.push(msg);
-          yield { type: 'assistant_end', message: clone(msg) };
-          yield { type: 'done' };
-          return;
+          stopText();
         }
+        if (signal.aborted) stopText();
         msg.toolCalls = step.toolCalls;
         msg.usage = { promptTokens: 120, completionTokens: 48 };
         chat.messages.push(msg);
         yield { type: 'assistant_end', message: clone(msg) };
 
-        for (const call of step.toolCalls) {
+        for (const [i, call] of step.toolCalls.entries()) {
           yield { type: 'tool_call', messageId: msg.id, toolCall: clone(call) };
-          await this.pause(this.delayMs * 8);
+          const started = Date.now();
+          try {
+            await this.pause(this.delayMs * 8, signal);
+          } catch (err) {
+            if (!signal.aborted) throw err;
+            // This call and every later call of the step are recorded as interrupted.
+            for (const c of step.toolCalls.slice(i)) {
+              chat.messages.push({
+                id: crypto.randomUUID(),
+                role: 'tool',
+                createdAt: now(),
+                toolCallId: c.id,
+                name: c.name,
+                ok: false,
+                output: INTERRUPTED_OUTPUT,
+                summary: 'Interrupted',
+                durationMs: Date.now() - started,
+              });
+            }
+            stopRun();
+          }
           const tool: ToolMessage = {
             id: crypto.randomUUID(),
             role: 'tool',
@@ -291,6 +323,7 @@ export class MockApiClient implements ApiClient {
         }
       }
 
+      if (signal.aborted) stopRun();
       chat.model = model;
       chat.updatedAt = now();
       if (chat.title === NEW_CHAT_TITLE) {

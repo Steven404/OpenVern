@@ -33,6 +33,7 @@ export interface RunState {
   runningToolIds: string[];
   /** Run-level error (`error` event or a failed request). Kept until the next send / retry / dismiss. */
   error: ApiErrorInfo | null;
+  /** The user pressed Stop. Kept after settle until the next send / retry, like `error`, so the last turn stays labelled. */
   stopped: boolean;
   sawDone: boolean;
   /** Set until `user_message` arrives. */
@@ -235,12 +236,22 @@ export const useRunsStore = create<RunsState>()((set, get) => {
       const run = s.runs[chatId];
       if (!run || run.token !== token) return s;
       const keepMessages = !refreshed || run.unsent !== null;
-      if (!keepMessages && !run.error) {
+      const keepStopped = run.stopped && !run.sawDone;
+      if (!keepMessages && !run.error && !keepStopped) {
         const { [chatId]: _gone, ...rest } = s.runs;
         return { runs: rest };
       }
       return {
-        runs: { ...s.runs, [chatId]: { ...run, status: 'idle', messages: keepMessages ? run.messages : [] } },
+        runs: {
+          ...s.runs,
+          [chatId]: {
+            ...run,
+            status: 'idle',
+            messages: keepMessages ? run.messages : [],
+            streamingId: null,
+            runningToolIds: [],
+          },
+        },
       };
     });
   };

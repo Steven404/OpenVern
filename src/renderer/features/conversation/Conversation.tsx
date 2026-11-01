@@ -30,8 +30,13 @@ export function Conversation({ chatId }: ConversationProps) {
 
   const messages = useMemo(() => mergeMessages(chat?.messages ?? [], run), [chat?.messages, run]);
   const turns = useMemo(
-    () => buildTurns(messages, { active: running, streamingId: run?.streamingId ?? null }),
-    [messages, running, run?.streamingId],
+    () =>
+      buildTurns(messages, {
+        active: running,
+        streamingId: run?.streamingId ?? null,
+        runningToolIds: run?.runningToolIds ?? [],
+      }),
+    [messages, running, run?.streamingId, run?.runningToolIds],
   );
   const waiting = isWaiting(turns, run);
 

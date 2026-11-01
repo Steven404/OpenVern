@@ -10,7 +10,7 @@ import { installDomStubs, renderWithProviders, resetStores } from '../composer/t
 import { Conversation } from './Conversation';
 import { findOpenFence, Markdown } from './Markdown';
 import { ToolCallRow } from './ToolCallRow';
-import { buildTurns, mergeMessages } from './turns';
+import { buildTurns, isWaiting, mergeMessages } from './turns';
 
 beforeAll(installDomStubs);
 beforeEach(resetStores);
@@ -69,12 +69,26 @@ describe('turn grouping', () => {
       user('u2', 'q2'),
       assistant('a3', 'answer 2'),
     ];
-    const turns = buildTurns(messages, { active: false, streamingId: null });
+    const turns = buildTurns(messages, { active: false, streamingId: null, runningToolIds: [] });
     expect(turns).toHaveLength(2);
     expect(turns[0]?.blocks.map((b) => b.kind)).toEqual(['text', 'tool', 'text']);
     expect(turns[1]?.blocks.map((b) => b.kind)).toEqual(['text']);
     const row = turns[0]?.blocks[1];
     expect(row?.kind === 'tool' && row.state).toBe('ok');
+  });
+
+  it('only the call with a tool_call event is running; the rest are queued', () => {
+    const calls = ['c1', 'c2', 'c3'].map((id) => ({ id, name: 'read_file', argsJson: '{}' }));
+    const base = [user('u1', 'q'), assistant('a1', '', { toolCalls: calls })];
+    const states = (messages: Message[], active: boolean, ids: string[]) =>
+      buildTurns(messages, { active, streamingId: null, runningToolIds: ids })[0]?.blocks.map((b) =>
+        b.kind === 'tool' ? b.state : b.kind,
+      );
+    expect(states(base, true, ['c1'])).toEqual(['running', 'queued', 'queued']);
+    expect(states([...base, tool('t1', 'c1')], true, ['c2'])).toEqual(['ok', 'running', 'queued']);
+    expect(states(base, false, [])).toEqual(['skipped', 'skipped', 'skipped']);
+    const turns = buildTurns(base, { active: true, streamingId: null, runningToolIds: [] });
+    expect(isWaiting(turns, { ...createRun(1) })).toBe(false);
   });
 
   it('merges the run overlay without duplicating persisted messages', () => {
@@ -128,6 +142,14 @@ describe('ToolCallRow', () => {
     expect(screen.getByText('read_file')).toBeTruthy();
     expect(screen.getByText('src/a.ts')).toBeTruthy();
     expect(screen.getByTestId('tool-row').getAttribute('data-state')).toBe('running');
+  });
+
+  it('shows a muted queued icon without a spinner', () => {
+    renderWithProviders(<ToolCallRow block={{ call, state: 'queued' }} />);
+    expect(screen.queryByTestId('spinner')).toBeNull();
+    expect(screen.getByLabelText('Queued')).toBeTruthy();
+    expect(screen.getByText('queued')).toBeTruthy();
+    expect(screen.getByTestId('tool-row').getAttribute('data-state')).toBe('queued');
   });
 
   it('shows ✓ with summary and duration when done', () => {
@@ -231,6 +253,25 @@ describe('Conversation run overlay', () => {
     expect(screen.queryByText('Thinking…')).toBeNull();
     const rows = screen.getAllByTestId('tool-row');
     expect(rows.at(-1)?.getAttribute('data-state')).toBe('running');
+  });
+
+  it('marks only the running call as running; later calls are queued', async () => {
+    const { api, chat } = await seededChat();
+    const cx = { id: 'cx', name: 'read_file', argsJson: '{"path":"x.ts"}' };
+    const cy = { id: 'cy', name: 'read_file', argsJson: '{"path":"y.ts"}' };
+    useRunsStore.setState({
+      runs: {
+        [chat.id]: {
+          ...createRun(1, user('ux', 'go')),
+          messages: [user('ux', 'go'), assistant('ax', 'reading now', { toolCalls: [cx, cy] })],
+          runningToolIds: ['cx'],
+        },
+      },
+    });
+    renderWithProviders(<Conversation chatId={chat.id} />, { api });
+    await screen.findByText('reading now');
+    const rows = screen.getAllByTestId('tool-row').slice(-2);
+    expect(rows.map((r) => r.getAttribute('data-state'))).toEqual(['running', 'queued']);
   });
 
   it('error card: "Open settings" for key errors', async () => {

@@ -192,7 +192,34 @@ describe('useRunsStore', () => {
     await done;
     const saved = await api.getChat(chat.id);
     expect(saved.messages.at(-1)).toMatchObject({ role: 'assistant', status: 'stopped' });
-    expect(useRunsStore.getState().runs[chat.id]).toBeUndefined();
+    expect(useRunsStore.getState().runs[chat.id]).toMatchObject({
+      status: 'idle',
+      stopped: true,
+      messages: [],
+      error: null,
+    });
+  });
+
+  it('stop during a tool run keeps a stopped entry after settle', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const queryClient = new QueryClient();
+    const [project] = await api.listProjects();
+    const chat = await api.createChat({ projectId: project?.id ?? null, model: 'anthropic/claude-sonnet-5.5' });
+    queryClient.setQueryData(queryKeys.chat(chat.id), chat);
+    const deps = { api, queryClient };
+    const unsubscribe = useRunsStore.subscribe((s) => {
+      if (s.runs[chat.id]?.runningToolIds.length) s.stop(chat.id);
+    });
+    await useRunsStore.getState().send(deps, chat.id, { text: 'go', attachments: [], model: chat.model });
+    unsubscribe();
+    expect(useRunsStore.getState().runs[chat.id]).toMatchObject({
+      status: 'idle',
+      stopped: true,
+      messages: [],
+      error: null,
+    });
+    const cached = queryClient.getQueryData<{ messages: { role: string; ok?: boolean }[] }>(queryKeys.chat(chat.id));
+    expect(cached?.messages.at(-1)).toMatchObject({ role: 'tool', ok: false });
   });
 
   it('retry drops trailing messages from the cache and reruns', async () => {
