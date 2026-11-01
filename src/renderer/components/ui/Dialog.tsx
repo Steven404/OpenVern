@@ -44,7 +44,16 @@ export const DialogContent = forwardRef<ElementRef<typeof RadixDialog.Content>, 
               remembered.focus();
               return;
             }
-            // The remembered element unmounted: land on a stable spot instead of `<body>`.
+            // The remembered element unmounted. If another dialog is still open (a nested confirm closing back
+            // into its parent), stay inside the top-most one; otherwise land on a stable spot instead of `<body>`.
+            const openDialogs = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"]')).filter(
+              (d) => d !== event.currentTarget,
+            );
+            const outer = openDialogs.at(-1);
+            if (outer) {
+              outer.focus();
+              return;
+            }
             const fallback =
               document.querySelector<HTMLElement>('textarea') ?? document.querySelector<HTMLElement>('main');
             if (fallback) {

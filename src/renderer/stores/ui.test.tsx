@@ -41,6 +41,30 @@ function Harness({ withMenu }: { withMenu: boolean }) {
   );
 }
 
+function Nested({ withTrigger, innerOpen }: { withTrigger: boolean; innerOpen: boolean }) {
+  return (
+    <>
+      <main>
+        <textarea aria-label="Message" />
+      </main>
+      <Dialog open>
+        <DialogContent title="Settings">
+          {withTrigger ? (
+            <button type="button" id="remove">
+              Remove key
+            </button>
+          ) : (
+            <p>Not connected</p>
+          )}
+        </DialogContent>
+      </Dialog>
+      <Dialog open={innerOpen}>
+        <DialogContent title="Remove key?" returnFocusRef={modalReturnFocus} />
+      </Dialog>
+    </>
+  );
+}
+
 async function closeDialog() {
   const dialog = await screen.findByRole('dialog', { name: 'New project' });
   await act(async () => {
@@ -69,5 +93,21 @@ describe('app-level modal focus return', () => {
     rerender(<Harness withMenu={false} />);
     await closeDialog();
     await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Message')));
+  });
+
+  it("keeps focus inside a still-open outer dialog when the nested dialog's trigger is gone", async () => {
+    const { rerender } = render(<Nested withTrigger innerOpen={false} />);
+    const remove = document.getElementById('remove') as HTMLElement;
+    remove.focus();
+    modalReturnFocus.current = remove;
+    rerender(<Nested withTrigger innerOpen />);
+    await screen.findByRole('dialog', { name: 'Remove key?' });
+    // Confirming removes the trigger, then the confirm closes.
+    rerender(<Nested withTrigger={false} innerOpen />);
+    await act(async () => rerender(<Nested withTrigger={false} innerOpen={false} />));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Remove key?' })).toBeNull());
+    const settings = screen.getByRole('dialog', { name: 'Settings' });
+    await waitFor(() => expect(settings.contains(document.activeElement)).toBe(true));
+    expect(document.activeElement).not.toBe(screen.getByLabelText('Message'));
   });
 });
