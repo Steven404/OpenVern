@@ -58,6 +58,53 @@ describe('HttpApiClient', () => {
     expect(out).toEqual(events);
   });
 
+  describe('stream failures after the response starts', () => {
+    const sse = (pull: (c: ReadableStreamDefaultController<Uint8Array>) => void | Promise<void>) =>
+      new Response(new ReadableStream<Uint8Array>({ pull }), { headers: { 'Content-Type': 'text/event-stream' } });
+    const enc = new TextEncoder();
+    const drain = async (api: HttpApiClient, signal = new AbortController().signal) => {
+      for await (const _ of api.retry('c1', { model: 'x' }, signal)) {
+        // drain
+      }
+    };
+
+    it('maps a body error partway through to network_error', async () => {
+      let n = 0;
+      const api = new HttpApiClient('/api', (async () =>
+        sse((c) => {
+          if (n++ === 0) c.enqueue(enc.encode('data: {"type":"done"}\n\n'));
+          else c.error(new TypeError('network error'));
+        })) as typeof fetch);
+      const err = await drain(api).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ApiError);
+      expect(err).toMatchObject({ info: { code: 'network_error', retryable: true } });
+    });
+
+    it('maps a garbled frame to network_error', async () => {
+      const api = new HttpApiClient('/api', (async () =>
+        sse((c) => {
+          c.enqueue(enc.encode('data: {"type":"te\n\n'));
+          c.close();
+        })) as typeof fetch);
+      const err = await drain(api).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ApiError);
+      expect(err).toMatchObject({ info: { code: 'network_error' } });
+    });
+
+    it('still rejects with AbortError when aborted mid-stream', async () => {
+      const ctrl = new AbortController();
+      const api = new HttpApiClient('/api', (async () =>
+        sse((c) => {
+          c.enqueue(enc.encode('data: {"type":"done"}\n\n'));
+          ctrl.abort();
+          c.error(new DOMException('aborted', 'AbortError'));
+        })) as typeof fetch);
+      const err = await drain(api, ctrl.signal).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(DOMException);
+      expect(err).toMatchObject({ name: 'AbortError' });
+    });
+  });
+
   it('builds attachment URLs', () => {
     expect(new HttpApiClient().attachmentUrl('a 1')).toBe('/api/attachments/a%201/content');
   });

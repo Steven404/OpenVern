@@ -24,7 +24,7 @@ Status: fixed in f4ec622
 
 ID: S0-N2
 
-Status: open
+Status: fixed in 4ec736c
 
 - Location: `src/renderer/lib/http-api-client.ts:136`
 - Problem: only the initial `fetch` is wrapped. If the connection drops mid-stream (dev server restart, proxy reset, `protocol.handle` body error), `reader.read()` throws a raw `TypeError`. A truncated or garbled frame makes `JSON.parse` throw a `SyntaxError`. Neither becomes an `ApiError`, which breaks the §4.9 promise that every method throws `ApiError` on network failure. No test covers a mid-stream error.
