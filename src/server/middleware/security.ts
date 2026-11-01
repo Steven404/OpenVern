@@ -1,6 +1,8 @@
 // Security middleware for `/api/*` (plan §3.3). The server emits NO CORS headers, so foreign preflights fail.
 //
-//  1. `Host` must be localhost / 127.0.0.1 (any port) or `harness` (the `app://` host) → blocks DNS rebinding.
+//  1. `Host` must be localhost / 127.0.0.1 (any port) for http(s), or exactly `harness` for `app:` URLs (the
+//     Electron protocol handler) → blocks DNS rebinding. `harness` is never accepted over http(s): a page at
+//     `http://harness:8787/` rebound to 127.0.0.1 would otherwise be same-origin with the API (S5-N1).
 //     Checked on the `Host` header when present *and* on the request URL's host (Electron's protocol handler
 //     may deliver `app://harness/…` requests without a `Host` header).
 //  2. `Origin`, when present, must be one of the app's origins.
@@ -14,12 +16,17 @@ import { CLIENT_HEADER, CLIENT_HEADER_VALUE } from '@shared/constants';
 import type { MiddlewareHandler } from 'hono';
 import { errorResponse } from '../http';
 
-const HOST_RE = /^(localhost|127\.0\.0\.1|harness)(:\d{1,5})?$/i;
+const LOOPBACK_HOST_RE = /^(localhost|127\.0\.0\.1)(:\d{1,5})?$/i;
+const APP_HOST_RE = /^harness$/i;
 const ALLOWED_ORIGINS = new Set(['http://localhost:5173', 'http://127.0.0.1:5173', 'app://harness']);
 const CONTENT_PATH_RE = /^\/api\/attachments\/[^/]+\/content$/;
 
-export function isAllowedHost(host: string | null | undefined): boolean {
-  return !!host && HOST_RE.test(host);
+/** `protocol` is the request URL's (`'http:'`, `'https:'`, `'app:'`); anything else is rejected. */
+export function isAllowedHost(host: string | null | undefined, protocol: string): boolean {
+  if (!host) return false;
+  if (protocol === 'app:') return APP_HOST_RE.test(host);
+  if (protocol === 'http:' || protocol === 'https:') return LOOPBACK_HOST_RE.test(host);
+  return false;
 }
 
 function parseUrl(raw: string): URL | null {
@@ -35,7 +42,11 @@ export const security: MiddlewareHandler = async (c, next) => {
 
   const url = parseUrl(c.req.url);
   const hostHeader = c.req.header('host');
-  if ((hostHeader !== undefined && !isAllowedHost(hostHeader)) || !url || !isAllowedHost(url.host))
+  if (
+    !url ||
+    !isAllowedHost(url.host, url.protocol) ||
+    (hostHeader !== undefined && !isAllowedHost(hostHeader, url.protocol))
+  )
     return forbidden('Forbidden: unexpected Host header.');
 
   const origin = c.req.header('origin');
