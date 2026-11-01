@@ -13,7 +13,7 @@ S0 meets its acceptance bar. All the §4 contracts are in the files almost word 
 
 ID: S0-N1
 
-Status: open
+Status: fixed in f4ec622
 
 - Location: `.gitignore:1`, `biome.json:3`
 - Problem: Biome uses `useIgnoreFile: true`, and `.gitignore` does not cover `.claude/`. Each `.claude/worktrees/agent-*/` directory contains a full checkout with its own root `biome.json`, so `biome check .` stops with "Found a nested root configuration" before linting anything. This is happening right now at HEAD.

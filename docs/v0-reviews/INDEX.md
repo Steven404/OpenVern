@@ -132,7 +132,7 @@ Planner: Opus 5.5 (medium). Implementer: Sonnet 5.5 (medium), or Opus 5.5 (mediu
 
 | # | Findings | Files | Sec |
 |---|---|---|---|
-| P1 | S0-N1 | `.gitignore`, `biome.json` | no |
+| P1 | S0-N1 | `.gitignore` — **done early (fixed in f4ec622)** so every batch can run lint | no |
 | P2 | S0-N4 | `vitest.config.ts`, new `src/renderer/test-setup.ts` | no |
 | P3 | S0-N2 | `renderer/lib/http-api-client.ts` + its test | no |
 | P4 | S7-N2 (+S0-N5) | `features/composer/attachments.ts`, `lib/mock-api-client.ts` (`uploadAttachment` only), composer test, `mock-api-client.test.ts` | no |
