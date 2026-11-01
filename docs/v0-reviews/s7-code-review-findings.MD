@@ -24,7 +24,7 @@ Status: fixed in 14c4f0c
 
 ID: S7-N2
 
-Status: open
+Status: fixed in c2659ad
 
 - Location: `src/renderer/features/composer/attachments.ts:356` (used at lines 405-416)
 - Problem: `isImageFile` checks `file.type.startsWith('image/')`, and Chromium reports `.svg` as `image/svg+xml`. `.svg` is in `TEXT_EXTENSIONS`, so it is in `TEXT_ACCEPT` and the picker offers it for every model.
