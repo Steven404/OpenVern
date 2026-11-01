@@ -13,7 +13,7 @@ S5 is mostly solid. I found no way around the security middleware's X-Harness-Cl
 
 ID: S5-M1
 
-Status: open
+Status: fixed in 40bd78a
 
 - Location: `src/server/sse.ts:31`
 - Problem: `streamTurn` listens for the request's abort event and then checks only `stream.aborted || controller.signal.aborted` (line 39). If the client disconnects while the route is still validating (before `streamSSE` runs), the request signal has already fired. A listener added to an already-aborted signal never runs. `@hono/node-server` also never cancels the response body, because its close listener is attached after the socket has already closed, so `stream.onAbort` never fires either.
