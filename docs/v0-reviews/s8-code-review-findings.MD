@@ -34,7 +34,7 @@ Status: open
 
 ID: S8-N2
 
-Status: open
+Status: fixed in b62de57
 
 - Location: `electron-builder.yml:23-32`
 - Problem:
@@ -48,7 +48,7 @@ Status: open
 
 ID: S8-N3
 
-Status: open
+Status: fixed in b62de57
 
 - Location: `src/main/index.ts:15`
 - Problem:
