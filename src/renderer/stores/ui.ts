@@ -49,7 +49,22 @@ export const modalReturnFocus: { current: HTMLElement | null } = { current: null
 
 function rememberFocus(): void {
   const el = document.activeElement;
-  modalReturnFocus.current = el instanceof HTMLElement && el !== document.body ? el : null;
+  if (!(el instanceof HTMLElement) || el === document.body) {
+    modalReturnFocus.current = null;
+    return;
+  }
+  // A menu item unmounts when its menu closes; remember the menu's trigger instead.
+  const menu = el.closest('[role="menu"]');
+  if (menu?.id) {
+    const trigger = Array.from(document.querySelectorAll<HTMLElement>('[aria-controls]')).find(
+      (candidate) => candidate.getAttribute('aria-controls') === menu.id,
+    );
+    if (trigger) {
+      modalReturnFocus.current = trigger;
+      return;
+    }
+  }
+  modalReturnFocus.current = el;
 }
 
 export interface UiState {

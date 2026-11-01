@@ -37,10 +37,19 @@ export const DialogContent = forwardRef<ElementRef<typeof RadixDialog.Content>, 
           style={{ maxWidth: width, ...style }}
           onCloseAutoFocus={(event) => {
             onCloseAutoFocus?.(event);
-            const target = returnFocusRef?.current;
-            if (target && !event.defaultPrevented) {
-              event.preventDefault();
-              target.focus();
+            if (!returnFocusRef || event.defaultPrevented) return;
+            const remembered = returnFocusRef.current;
+            event.preventDefault();
+            if (remembered?.isConnected) {
+              remembered.focus();
+              return;
+            }
+            // The remembered element unmounted: land on a stable spot instead of `<body>`.
+            const fallback =
+              document.querySelector<HTMLElement>('textarea') ?? document.querySelector<HTMLElement>('main');
+            if (fallback) {
+              if (!fallback.matches('textarea') && !fallback.hasAttribute('tabindex')) fallback.tabIndex = -1;
+              fallback.focus();
             }
           }}
           className={cx(
