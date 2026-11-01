@@ -197,4 +197,27 @@ describe('AttachmentsService', () => {
     // A custom threshold applies.
     expect(await storage.attachments.cleanupOrphans({ olderThanMs: -1000 })).toBe(1);
   });
+
+  it('cleanupOrphans keeps the bytes behind a quarantined sidecar but deletes true strays', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const paths = dataPaths(dataDir);
+    const bound = await storage.attachments.create({ name: 'b.txt', bytes: text('bound') });
+    await storage.attachments.bindToChat([bound.id], 'chat-1');
+    const raw = await fs.readFile(paths.attachmentMeta(bound.id), 'utf8');
+    await fs.writeFile(paths.attachmentMeta(bound.id), raw.slice(0, 10)); // truncated sidecar
+    const longAgo = new Date(Date.now() - 48 * 3600 * 1000);
+    await fs.utimes(paths.attachmentBin(bound.id), longAgo, longAgo);
+    const stray = paths.attachmentBin('stray');
+    await fs.writeFile(stray, 'x');
+    await fs.utimes(stray, longAgo, longAgo);
+
+    expect(await storage.attachments.cleanupOrphans()).toBe(1);
+    await expect(fs.stat(paths.attachmentBin(bound.id))).resolves.toBeTruthy();
+    await expect(fs.stat(stray)).rejects.toThrow();
+    const names = await fs.readdir(paths.attachmentsDir);
+    expect(names.some((n) => n.startsWith(`${bound.id}.json.corrupt-`))).toBe(true);
+    // Still kept on later runs.
+    expect(await storage.attachments.cleanupOrphans()).toBe(0);
+    await expect(fs.stat(paths.attachmentBin(bound.id))).resolves.toBeTruthy();
+  });
 });
