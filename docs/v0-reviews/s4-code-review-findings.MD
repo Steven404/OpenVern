@@ -13,7 +13,7 @@ S4 mostly meets its acceptance bar. The event sequences for text-only, tool, abo
 
 ID: S4-M1
 
-Status: open
+Status: fixed in 3f824a0
 
 - Location: `src/core/agent/history.ts:419-433`; `src/core/agent/loop.ts:171`, `:187-191`, `:206`
 - Problem: `buildHistory` always emits the assistant `toolCalls` and the matching `role:'tool'` messages. It never learns whether this request offers tools. `loop.ts` drops the `tools` field when `toolSpecs` is empty (S4.8) but still sends that history. Concrete triggers:
@@ -28,7 +28,7 @@ Status: open
 
 ID: S4-N1
 
-Status: open
+Status: fixed in 3f824a0
 
 - Location: `src/core/agent/loop.ts:335-347`
 - Problem: The epilogue checks `chat.title === NEW_CHAT_TITLE`, then waits up to 10 s on `generateTitle`, then calls `chats.update(chatId, { title })` without checking the title again. `PATCH /chats/:id` is not blocked while a run is active (`server/routes/chats.ts:47-50`). If the user renames the chat in that window, the generated title replaces their rename.
@@ -39,7 +39,7 @@ Status: open
 
 ID: S4-N2
 
-Status: open
+Status: fixed in 3f824a0
 
 - Location: `src/core/agent/loop.ts:173`; `src/core/agent/system-prompt.ts:558-567`
 - Problem: S4.9 asks for `renderTree(depth 2, systemPromptTreeEntries)` in every project-chat system prompt. The code only calls `renderTree` when tools are offered. The no-tools project prompt also omits the tree, and the S4 notes do not cover this deviation.
