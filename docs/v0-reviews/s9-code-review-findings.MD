@@ -13,7 +13,7 @@ The e2e harness is sound for the automated parts. It uses temporary data, Chromi
 
 ID: S9-N1
 
-Status: open
+Status: fixed in e0b4ed8
 
 - Location: `scripts/e2e/smoke.mjs:916-919`
 - Problem: The persist phase checks "sidebar visible after restart (was expanded)" by testing only that `aside` exists. Expanded is also the default (`sidebarCollapsed` is false unless `localStorage` says otherwise; `src/renderer/stores/ui.ts`). The check therefore passes even if the browser profile or Electron userData `localStorage` was lost or never written. One real trigger: Electron is stopped with SIGTERM (`stop_bg`) before Chromium writes `localStorage` to disk. Project expansion is not checked after the restart at all.
@@ -24,7 +24,7 @@ Status: open
 
 ID: S9-N2
 
-Status: open
+Status: fixed in e0b4ed8
 
 - Location: `README.md:103`, `README.md:131-133`
 - Problem: The Tests table says `npm run e2e` covers "checklist items A1–A18". The limitations section names the remaining manual items: real key, native picker, KDE launcher, AppImage on Arch. Some parts are missing from both:
@@ -39,7 +39,7 @@ Status: open
 
 ID: S9-N3
 
-Status: open
+Status: fixed in e0b4ed8
 
 - Location: `scripts/e2e/run-electron.sh:172-173`
 - Problem: The script starts `node_modules/electron/dist/electron .` with the caller's environment unchanged. When the parent process exports `ELECTRON_RUN_AS_NODE=1`, Electron runs `out/main` as plain Node. It never opens an `app://` page, and the script waits 40 s before failing with a confusing `electron.log`. I confirmed this: this agent session exports the variable, and a probe app run there executed as Node. With the variable unset, the same probe started normally and reported `userData` = the `--user-data-dir` path. Electron-based IDEs and agent hosts commonly set this variable.

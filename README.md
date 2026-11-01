@@ -13,7 +13,7 @@ The plan, contracts, work sections and the acceptance checklist are in [`docs/v0
 - `fuse2` to run the AppImage, and unprivileged user namespaces for Chromium's sandbox (enabled on Arch / CachyOS kernels)
 - An [OpenRouter API key](https://openrouter.ai/keys) to chat for real. Not needed with the fake provider or the mock API (see below)
 - For `npm run e2e` (web half): a Chromium, either Playwright's (`npx playwright install chromium`), one on `PATH`, or
-  `E2E_CHROME=/path/to/chrome`. The Electron half needs a display
+  `E2E_CHROME=/path/to/chrome`. The Electron half needs a display and a keyring (KWallet/libsecret)
 
 ## Install
 
@@ -104,7 +104,7 @@ that mode's Electron profile (see above).
 | `npm test` | Vitest: node tests for `shared` / `core` / `server`, jsdom tests for `renderer`. |
 | `npm run typecheck` | `tsc --noEmit` for the node and web halves. |
 | `npm run lint` | Biome lint and format check (`npm run format` applies fixes). |
-| `npm run e2e` | End-to-end tour of the real UI (checklist items A1–A18 of the plan) against the real backend with the fake provider: first in web dev (headless Chromium), then in the built Electron app (`npm run build` first). Not part of `npm test`. |
+| `npm run e2e` | End-to-end tour of the real UI (checklist items A1–A18 of the plan, except the manual parts listed under Limitations) against the real backend with the fake provider: first in web dev (headless Chromium), then in the built Electron app (`npm run build` first). Not part of `npm test`. |
 | `npm run e2e:web` / `npm run e2e:electron` | One half only. |
 
 Every change must pass `npm run typecheck && npm run lint && npm test`.
@@ -132,7 +132,7 @@ the main screens at 1440×900, 800×600 and 720×600 (with an overflow check) in
   completed turn). Failed "move to project" requests only refetch; there is no toast component.
 - The AppImage needs `fuse2` and user namespaces. It is x86_64 only. The minimum window size is 800×600; below 760 px
   wide the sidebar becomes an overlay.
-- Automated checks cover web dev and the built Electron app with the fake provider. Still manual: a real key against
+- Automated checks cover web dev and the built Electron app with the fake provider. Still manual: the A5 tool-row spinner and the `list_files` row (the fake provider only calls `read_file`), the A12 real offline case (the script only injects `[fake:error=network_error]`), a real key against
   OpenRouter, the native folder picker, launching from the KDE launcher after `install-local.sh`, and the AppImage on the
   Arch machine.
 
