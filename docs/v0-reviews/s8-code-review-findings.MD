@@ -48,7 +48,7 @@ Status: fixed in b62de57
 
 ID: S8-N3
 
-Status: fixed in b62de57
+Status: fixed in b62de57 (partial: packaged + HARNESS_DATA_DIR still shares the default profile — see INDEX open questions)
 
 - Location: `src/main/index.ts:15`
 - Problem:

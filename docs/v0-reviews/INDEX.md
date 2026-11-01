@@ -177,3 +177,22 @@ P4 and B6 both edit `mock-api-client.ts`, in different functions. B6 runs in Pha
    - *Recommendation:* Opus 5.5 (medium) for P7, P9 and P11; Sonnet for the rest.
 
 Defaults I'll use unless you say otherwise (none of these needs a decision): S4-N2 renders the tree, as the spec says. S7-N3 shows queued tools muted with no spinner. S6-N2 uses a fixed "Show key" label with `aria-pressed`. S6-N3 shows a failed Remove inside the confirm. S8-N3 uses `~/.config/harness-dev` and respects `--user-data-dir`. S9-N2 adds the network_error e2e case and documents the rest as manual. S0-N1 ignores `.claude/worktrees/`.
+
+---
+
+## Phase 4 verification (2026-11-02, HEAD after all merges)
+
+An independent verifier, who wrote none of the fixes, re-checked every ID against the combined diff `ad1cf46..HEAD`. It re-ran the reviewers' repros where practical and reverted fixes in a scratch worktree to confirm each regression test fails without its fix.
+
+- **34 resolved, 1 partial (S8-N3), 0 not resolved.**
+- **Regression found and fixed:** the S6-N1 focus fallback moved focus to the composer behind a still-open Settings modal (Settings → Remove key → confirm). Fixed in `2b2fedf` with a test.
+- **Final state:** `npx vitest run` 571 passed / 1 skipped (baseline 491); typecheck and lint clean; `npm run e2e` passed on the merged code before the last fix (web 78+11, Electron 79+11).
+
+### Open questions / follow-ups (not fixed)
+1. **S8-N3 partial:** a *packaged* app started with `HARNESS_DATA_DIR` still shares `~/.config/harness` and the single-instance lock with the installed app. This was the B7 planner's default. The `index.ts` `setPath` wiring is covered only through the pure helper.
+2. **S1-M1 follow-up:** each instance denies only its own data dir. A `preview` run with the harness repo as a project could still read dev's plaintext `./.dev-data/secrets.json`, and a dev run with `~` as a project could reach `~/.config/harness`. Option: also deny `.dev-data*` by name, and/or the default prod userData path.
+3. **Tool calls when no tools were offered:** if a model emits tool calls anyway, the next step in the same turn still sends tool content (`loop.ts` ~l.250).
+4. **`renderTree` has no abort or timeout.** A stalled network mount could hang a turn. It now also runs for non-tool project chats (S4-N2).
+5. **image/* outside IMAGE_MIME_TYPES** (bmp/tiff/heic) now go to the server as text, where sniffing rejects them. The mock accepts them, which is a small mock/server mismatch in the opposite direction from S0-N5.
+6. **Minor leftovers:** the `scripts/try-openrouter.ts` header comment shows the old usage. The S9-N1 `expandedProjects` comparison is weak, because the row is flipped back before the snapshot; the collapsed-sidebar assertion carries the check. S4-N1's re-read and write are not atomic (accepted default). A hardlink to `secrets.json` inside a project isn't caught by the path-based deny.
+7. **Out of scope:** S9.2 (manual runs on CachyOS/Arch and the AppImage) and S9.5 (tag `v0.1.0`).

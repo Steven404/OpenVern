@@ -26,7 +26,7 @@ Status: fixed in dc933ac
 
 ID: S6-N1
 
-Status: fixed in 62047d1
+Status: fixed in 62047d1 (nested-dialog regression fixed in 2b2fedf)
 
 - Location: `src/renderer/stores/ui.ts:50` (`rememberFocus`) together with `src/renderer/components/ui/Dialog.tsx:38-43`.
 - Problem: `openSettings` and `openNewProject` remember whatever has focus at that moment. On close, `DialogContent` calls `preventDefault()` and then `.focus()` on that element, even if it is no longer in the DOM. Two triggers:
