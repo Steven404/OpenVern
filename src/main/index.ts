@@ -7,10 +7,25 @@ import { createBackend } from './backend';
 import { registerIpc } from './ipc';
 import { isDev } from './origin';
 import { handleAppProtocol, registerAppScheme } from './protocol';
+import { noSandboxWarning, resolveUserDataDir } from './startup';
 import { createMainWindow, focusMainWindow } from './window';
 
 // Must happen before `ready`. (Harmless in dev: nothing is served on the scheme there.)
 registerAppScheme();
+
+// Per-mode Electron profile (S8-N3). Must precede the single-instance lock, which lives in `userData`.
+const profile = resolveUserDataDir({
+  isPackaged: app.isPackaged,
+  isDev: isDev(),
+  hasUserDataDirSwitch: app.commandLine.hasSwitch('user-data-dir'),
+  appDataDir: app.getPath('appData'),
+});
+if (profile) app.setPath('userData', profile);
+console.log(`[harness] profile: ${app.getPath('userData')}`);
+
+// The AppImage's AppRun may add --no-sandbox when user namespaces are unavailable (S8-N2); make that visible.
+const sandboxWarning = noSandboxWarning(app.commandLine.hasSwitch('no-sandbox'));
+if (sandboxWarning) console.warn(sandboxWarning);
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();

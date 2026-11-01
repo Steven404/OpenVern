@@ -72,6 +72,10 @@ to see the logs.
 | `npm run preview` | `./.dev-data-preview` |
 | any, with `HARNESS_DATA_DIR` | that directory |
 
+Electron's profile (Chromium state, `localStorage`, single-instance lock): `~/.config/harness` for the AppImage,
+`~/.config/harness-dev` for `npm run dev`, `~/.config/harness-preview` for `npm run preview`. `--user-data-dir=<dir>`
+overrides it.
+
 ```
 <dataDir>/
   settings.json         last chosen model
@@ -91,7 +95,7 @@ configured and a masked hint (`sk-or-v1-…a1b2`). Projects are never copied or 
 forgets the folder.
 
 The browser build keeps UI state (sidebar collapsed, expanded projects) in `localStorage`; in the app it lives in
-Electron's `userData`.
+that mode's Electron profile (see above).
 
 ## Tests
 

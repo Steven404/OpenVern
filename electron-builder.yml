@@ -27,6 +27,8 @@ linux:
   category: Development
   icon: build/icon.png
   synopsis: Chat with LLMs about your local code projects
+  # empty: keeps the sandbox-off flag out of the AppImage's built-in .desktop Exec (S8-N2)
+  executableArgs: []
   desktop:
     entry:
       StartupWMClass: harness

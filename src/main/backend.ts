@@ -14,7 +14,8 @@ export interface Backend {
 }
 
 /**
- * Data dir: `HARNESS_DATA_DIR`, else Electron's `userData` (`~/.config/harness`).
+ * Data dir: `HARNESS_DATA_DIR`, else Electron's `userData`, which depends on the mode (startup.ts): `~/.config/harness`
+ * packaged, `~/.config/harness-preview` for an unpackaged non-dev run, or the `--user-data-dir` switch.
  * Dev aid: `HARNESS_FAKE_PROVIDER=1` swaps OpenRouter for the scripted fake provider (no key, no network), also in
  * the packaged app.
  */
