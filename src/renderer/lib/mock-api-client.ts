@@ -342,7 +342,6 @@ export class MockApiClient implements ApiClient {
   async uploadAttachment(file: File) {
     await this.pause(this.delayMs * 5);
     const isImage = (IMAGE_MIME_TYPES as readonly string[]).includes(file.type);
-    if (!isImage && file.type.startsWith('image/')) fail('unsupported_file', 415);
     const max = isImage ? LIMITS.imageAttachmentBytes : LIMITS.textAttachmentBytes;
     if (file.size > max) fail('file_too_large', 413);
     const ref: AttachmentRef = {

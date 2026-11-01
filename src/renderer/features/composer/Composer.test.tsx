@@ -252,6 +252,24 @@ describe('model switch rule (S7.12)', () => {
     expect(screen.queryByTestId('image-notice')).toBeNull();
   });
 
+  it.each([
+    ['a vision model', VISION],
+    ['a non-vision model', NO_VISION],
+  ])('attaches an image/svg+xml file as text with %s', async (_label, model) => {
+    const { api, chat } = await setup();
+    renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    await screen.findByRole('button', { name: `Model: ${VISION}` });
+    if (model === NO_VISION) {
+      await pickModel(NO_VISION);
+      await waitFor(() => expect(fileInput().accept).toBe(TEXT_ACCEPT));
+    }
+    upload(new File(['<svg/>'], 'logo.svg', { type: 'image/svg+xml' }));
+    const chip = await screen.findByTestId('attachment-chip');
+    await waitFor(() => expect(chip.getAttribute('data-status')).toBe('ready'));
+    expect(screen.queryByTestId('image-notice')).toBeNull();
+    expect(within(chip).queryByRole('img')).toBeNull();
+  });
+
   it('clears the message on the next model change', async () => {
     await withImage();
     await pickModel(NO_VISION);

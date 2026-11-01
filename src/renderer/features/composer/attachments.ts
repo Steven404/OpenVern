@@ -9,7 +9,7 @@ import type { DraftAttachment } from './AttachmentChips';
 
 export const IMAGE_UNSUPPORTED_MESSAGE = 'This model does not support image input';
 
-const isImageFile = (file: File) => file.type.startsWith('image/');
+const isImageFile = (file: File) => (IMAGE_MIME_TYPES as readonly string[]).includes(file.type);
 
 export interface AddResult {
   /** Images were refused because the selected model has no image input. */
@@ -68,8 +68,6 @@ export function useDraftAttachments(api: ApiClient, supportsImages: boolean) {
         let error: string | undefined;
         if (live >= LIMITS.attachmentsPerMessage) {
           error = `Up to ${LIMITS.attachmentsPerMessage} files per message.`;
-        } else if (isImage && !(IMAGE_MIME_TYPES as readonly string[]).includes(file.type)) {
-          error = ERROR_DEFAULTS.unsupported_file.message;
         } else if (isImage && file.size > LIMITS.imageAttachmentBytes) {
           error = ERROR_DEFAULTS.file_too_large.message;
         }

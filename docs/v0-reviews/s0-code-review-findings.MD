@@ -57,7 +57,7 @@ Status: fixed in 48a3fc2
 
 ID: S0-N5
 
-Status: open
+Status: fixed in c2659ad (via S7-N2)
 
 Duplicate of S7-N2 (same root cause; tracked there)
 

@@ -138,4 +138,10 @@ describe('MockApiClient', () => {
     });
     expect(saved.title).toBe(NEW_CHAT_TITLE);
   });
+
+  it('accepts an image/svg+xml file as a text attachment', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const ref = await api.uploadAttachment(new File(['<svg/>'], 'logo.svg', { type: 'image/svg+xml' }));
+    expect(ref).toMatchObject({ kind: 'text', mime: 'text/plain' });
+  });
 });
