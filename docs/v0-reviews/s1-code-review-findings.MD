@@ -35,7 +35,7 @@ Status: fixed in 6871816
 
 ID: S1-N2
 
-Status: open
+Status: fixed in b1ec4bc
 
 - Location: `src/core/storage/chats.ts:23` (`SAFE_ID`), `src/core/storage/chats.ts:40` (`chatFile`)
 - Problem: `index` passes `SAFE_ID`, so `chatFile('index')` is the index file.

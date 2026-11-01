@@ -21,6 +21,8 @@ export interface ChatsServiceOptions {
 }
 
 const SAFE_ID = /^[A-Za-z0-9_-]+$/;
+// `index` would map onto chats/index.json, the index file itself.
+const isChatId = (id: string) => SAFE_ID.test(id) && id !== 'index';
 
 const notFound = () => new CoreError('not_found', 'Chat not found.');
 const byRecency = (a: ChatSummary, b: ChatSummary) =>
@@ -38,7 +40,7 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
   const lock = createMutex();
 
   const chatFile = (id: Id) => {
-    if (!SAFE_ID.test(id)) throw notFound();
+    if (!isChatId(id)) throw notFound();
     return new JsonFile<Chat, ChatFile>(paths.chatFile(id), chatFileSchema, fileOpts);
   };
 
@@ -56,7 +58,7 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
     for (const name of names) {
       if (!name.endsWith('.json') || name === 'index.json') continue;
       const id = name.slice(0, -'.json'.length);
-      if (!SAFE_ID.test(id)) continue;
+      if (!isChatId(id)) continue;
       const chat = await chatFile(id).read();
       if (chat && chat.id === id) summaries.push(summarize(chat));
     }
@@ -134,7 +136,7 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
     },
 
     async remove(id) {
-      if (!SAFE_ID.test(id)) throw notFound();
+      if (!isChatId(id)) throw notFound();
       await lock.run(async () => {
         const removed = await chatFile(id).delete();
         const chats = await loadIndex();
