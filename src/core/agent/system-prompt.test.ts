@@ -32,11 +32,11 @@ describe('buildSystemPrompt', () => {
     expect(p).toContain('src/\n  main.ts');
   });
 
-  it('project chat without tool support: says it cannot read files and omits the tree', () => {
+  it('project chat without tool support: says it cannot read files but shows the tree', () => {
     const p = buildSystemPrompt({ now, project, hasTools: false, tree: 'src/' });
     expect(p).toContain('Project: demo');
     expect(p).toContain("can't use tools");
-    expect(p).not.toContain('src/');
+    expect(p).toContain('src/');
     expect(p).not.toContain('list_files');
   });
 });

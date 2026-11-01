@@ -8,7 +8,7 @@ export interface SystemPromptInput {
   project?: { name: string; rootPath: string };
   /** True when project tools are actually offered for this request (project chat + model supports tools). */
   hasTools: boolean;
-  /** Output of `renderTree`; only used when `hasTools`. */
+  /** Output of `renderTree`; used in every project prompt. */
   tree?: string;
 }
 
@@ -38,14 +38,26 @@ export function buildSystemPrompt({ now, project, hasTools, tree }: SystemPrompt
     `Project root: ${project.rootPath}`,
   ];
 
+  const treeLines = (): string[] =>
+    tree?.trim()
+      ? [
+          '',
+          `Top of the project tree (depth 2, at most ${LIMITS.systemPromptTreeEntries} entries):`,
+          '```',
+          tree.trimEnd(),
+          '```',
+        ]
+      : [];
+
   if (!hasTools) {
     return [
       ...header,
       '',
-      "This chat is attached to the project above, but the selected model can't use tools, so you cannot read its files.",
-      "Don't guess about the project's contents. If you need to see code, ask the user to paste it or to pick a model that supports tools.",
+      "This chat is attached to the project above, but the selected model can't use tools, so you cannot open or search its files. You can only see the top of its folder structure (below).",
+      "Don't guess about file contents. If you need to see code, ask the user to paste it or to pick a model that supports tools.",
       '',
       'Answer in Markdown. Use fenced code blocks (with a language) for code.',
+      ...treeLines(),
     ].join('\n');
   }
 
@@ -66,14 +78,6 @@ export function buildSystemPrompt({ now, project, hasTools, tree }: SystemPrompt
     '',
     'Answer in Markdown. Use fenced code blocks (with a language) for code, and mention file paths in backticks.',
   ];
-  if (tree?.trim()) {
-    out.push(
-      '',
-      `Top of the project tree (depth 2, at most ${LIMITS.systemPromptTreeEntries} entries):`,
-      '```',
-      tree.trimEnd(),
-      '```',
-    );
-  }
+  out.push(...treeLines());
   return out.join('\n');
 }

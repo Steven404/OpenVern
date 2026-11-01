@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { type FakeStep, scriptFromTurns, textDeltas } from '../providers/fake';
 import { ProviderError } from '../providers/types';
 import { INTERRUPTED_OUTPUT } from './history';
-import { createFakeTool, createHarness, MODEL, model, PROJECT, shape } from './test-helpers';
+import { createFakeTool, createHarness, type Harness, MODEL, model, PROJECT, shape } from './test-helpers';
 
 const usage = { type: 'usage', usage: { promptTokens: 10, completionTokens: 5 } } as const;
 
@@ -97,6 +97,19 @@ describe('text only turn', () => {
     });
     await h.run({ newUserMessage: { text: 'Short question', attachmentIds: [] } });
     expect((await h.chats.get(h.chatId)).title).toBe('Short question');
+  });
+
+  it('a rename made while the title is generated wins', async () => {
+    let h!: Harness;
+    h = await createHarness({
+      script: (_req, i) => {
+        if (i === 1) void h.chats.update(h.chatId, { title: 'User rename' });
+        return i === 0 ? reply('Hi') : TITLE_TURN;
+      },
+    });
+    const events = await h.run();
+    expect((await h.chats.get(h.chatId)).title).toBe('User rename');
+    expect(find(events, 'chat_updated')).toHaveLength(1);
   });
 
   it('switches the chat model when the turn uses another one and announces it', async () => {
@@ -267,7 +280,8 @@ describe('tools availability', () => {
     expect(h.provider.calls[0]?.tools).toBeUndefined();
     expect(h.provider.calls[0]?.system).toContain(PROJECT.name);
     expect(h.provider.calls[0]?.system).toContain("can't use tools");
-    expect(h.renderTreeCalls).toHaveLength(0);
+    expect(h.renderTreeCalls).toEqual([{ root: PROJECT.rootPath, opts: { depth: 2, maxEntries: 100 } }]);
+    expect(h.provider.calls[0]?.system).toContain('README.md');
   });
 
   it('a hallucinated tool call in a toolless chat gets an ok:false result', async () => {
@@ -277,6 +291,51 @@ describe('tools availability', () => {
     });
     const events = await h.run();
     expect(find(events, 'tool_result')[0]?.message.output).toContain('No tools are available');
+  });
+});
+
+describe('history when tools are no longer offered', () => {
+  const script = () =>
+    scriptFromTurns([
+      callTools([['c1', 'read_file', '{"path":"README.md"}']], 'Reading. '),
+      reply('It is a readme.'),
+      TITLE_TURN,
+      reply('Still here.'),
+    ]);
+
+  const check = (h: Harness) => {
+    const req = h.provider.calls[3];
+    expect(req?.tools).toBeUndefined();
+    expect(req?.messages.some((m) => m.role === 'tool')).toBe(false);
+    for (const m of req?.messages ?? []) if (m.role === 'assistant') expect(m.toolCalls).toEqual([]);
+    expect(req?.messages).toEqual([
+      { role: 'user', content: [{ type: 'text', text: 'Hello there' }] },
+      {
+        role: 'assistant',
+        text: 'Reading. \n\n[tool read_file {"path":"README.md"} → ok]\ncontents of README.md\n\nIt is a readme.',
+        toolCalls: [],
+      },
+      { role: 'user', content: [{ type: 'text', text: 'And now?' }] },
+    ]);
+  };
+  const second = { newUserMessage: { text: 'And now?', attachmentIds: [] } };
+
+  it('a tool turn followed by a turn on a non-tool model sends flattened text', async () => {
+    const h = await createHarness({
+      models: [model(MODEL), model('plain/model', { tools: false })],
+      script: script(),
+    });
+    await h.run();
+    await h.run({ ...second, model: 'plain/model' });
+    check(h);
+  });
+
+  it('a tool turn followed by a turn after the project is detached sends flattened text', async () => {
+    const h = await createHarness({ script: script() });
+    await h.run();
+    await h.chats.detachProject(PROJECT.id);
+    await h.run(second);
+    check(h);
   });
 });
 

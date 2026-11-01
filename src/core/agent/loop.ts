@@ -170,7 +170,7 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
     }
     const tools: Tool[] = project && modelInfo.supportsTools ? deps.getProjectTools() : []; // S4.8
     let tree: string | undefined;
-    if (project && tools.length > 0) {
+    if (project) {
       try {
         tree = await deps.renderTree(project.rootPath, { depth: 2, maxEntries: LIMITS.systemPromptTreeEntries });
       } catch {
@@ -187,6 +187,7 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
     const history: ProviderMessage[] = await buildHistory(chat.messages, {
       model,
       supportsImages: modelInfo.supportsImages,
+      toolsOffered: toolSpecs.length > 0,
       readAttachment: (id) => attachments.readBytes(id),
     });
 
@@ -344,6 +345,8 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
         ...(deps.titleTimeoutMs !== undefined ? { timeoutMs: deps.titleTimeoutMs } : {}),
       });
       if (!title || title === NEW_CHAT_TITLE) return;
+      const latest = await chats.get(input.chatId);
+      if (latest.title !== NEW_CHAT_TITLE) return; // the user renamed it meanwhile
       const summary = await chats.update(input.chatId, { title });
       await emit({ type: 'chat_updated', chat: toChatSummary(summary) });
     } catch {

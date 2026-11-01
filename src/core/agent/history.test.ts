@@ -34,6 +34,7 @@ const tool = (toolCallId: string, output: string): ToolMessage => ({
 const opts = (over: Partial<Parameters<typeof buildHistory>[1]> = {}) => ({
   model: 'm',
   supportsImages: true,
+  toolsOffered: true,
   readAttachment: async () => new TextEncoder().encode('data'),
   ...over,
 });
@@ -148,5 +149,51 @@ describe('buildHistory', () => {
     const history = await buildHistory(messages, opts());
     expect(history[1]).toMatchObject({ providerMeta: { r: 1 } });
     expect(history[2]).not.toHaveProperty('providerMeta');
+  });
+});
+
+describe('buildHistory without tools offered', () => {
+  const c1 = { id: 'c1', name: 'read_file', argsJson: '{"path":"a"}' };
+  const c2 = { id: 'c2', name: 'read_file', argsJson: '' };
+
+  it('flattens tool calls and results into assistant text when no tools are offered', async () => {
+    const messages: Message[] = [
+      user('q'),
+      assistant({ text: 'x', toolCalls: [c1, c2] }),
+      tool('c1', 'out'),
+      assistant({ text: 'done' }),
+      user('q2'),
+    ];
+    expect(await buildHistory(messages, opts({ toolsOffered: false }))).toEqual([
+      { role: 'user', content: [{ type: 'text', text: 'q' }] },
+      {
+        role: 'assistant',
+        text: `x\n\n[tool read_file {"path":"a"} → ok]\nout\n\n[tool read_file {} → error]\n${INTERRUPTED_OUTPUT}\n\ndone`,
+        toolCalls: [],
+      },
+      { role: 'user', content: [{ type: 'text', text: 'q2' }] },
+    ]);
+  });
+
+  it('truncates long tool output and marks failed results when flattening', async () => {
+    const failed: ToolMessage = { ...tool('c1', 'a'.repeat(2050)), ok: false };
+    const history = await buildHistory(
+      [user('q'), assistant({ text: '', toolCalls: [c1] }), failed],
+      opts({ toolsOffered: false }),
+    );
+    const m = history[1];
+    const text = m?.role === 'assistant' ? m.text : '';
+    expect(text).toContain('→ error]');
+    expect(text.endsWith(`${'a'.repeat(2000)}\n[… 50 more characters truncated]`)).toBe(true);
+  });
+
+  it('drops providerMeta from flattened messages; empty text gives just the tool block', async () => {
+    const history = await buildHistory(
+      [user('q'), assistant({ text: '', model: 'm', providerMeta: { r: 1 }, toolCalls: [c1] }), tool('c1', 'out')],
+      opts({ toolsOffered: false }),
+    );
+    const m = history[1];
+    expect(m).not.toHaveProperty('providerMeta');
+    expect(m?.role === 'assistant' && m.text.startsWith('[tool')).toBe(true);
   });
 });
