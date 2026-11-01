@@ -53,13 +53,29 @@ describe('ChatsService', () => {
 
   it('get/update/remove/append on unknown or unsafe ids give not_found', async () => {
     const { storage } = await makeStorage();
-    for (const id of ['missing', '../secrets', 'a/b']) {
+    for (const id of ['missing', '../secrets', 'a/b', 'index']) {
       await expect(storage.chats.get(id)).rejects.toMatchObject({ code: 'not_found' });
       await expect(storage.chats.update(id, { title: 'x' })).rejects.toMatchObject({ code: 'not_found' });
       await expect(storage.chats.remove(id)).rejects.toMatchObject({ code: 'not_found' });
       await expect(storage.chats.appendMessage(id, user('u'))).rejects.toMatchObject({ code: 'not_found' });
       await expect(storage.chats.truncateAfterLastUser(id)).rejects.toMatchObject({ code: 'not_found' });
     }
+  });
+
+  it('the reserved id "index" never touches chats/index.json', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const chat = await storage.chats.create({ projectId: null, model: 'm' });
+    const indexPath = dataPaths(dataDir).chatsIndex;
+    const before = await fs.readFile(indexPath, 'utf8');
+    await expect(storage.chats.get('index')).rejects.toMatchObject({ code: 'not_found' });
+    await expect(storage.chats.update('index', { title: 'x' })).rejects.toMatchObject({ code: 'not_found' });
+    await expect(storage.chats.appendMessage('index', user('u'))).rejects.toMatchObject({ code: 'not_found' });
+    await expect(storage.chats.truncateAfterLastUser('index')).rejects.toMatchObject({ code: 'not_found' });
+    await expect(storage.chats.remove('index')).rejects.toMatchObject({ code: 'not_found' });
+    expect(await fs.readFile(indexPath, 'utf8')).toBe(before);
+    const names = await fs.readdir(path.dirname(indexPath));
+    expect(names.some((n) => n.includes('.corrupt-'))).toBe(false);
+    expect((await readIndex(dataDir)).chats.map((c) => c.id)).toEqual([chat.id]);
   });
 
   it('lists by updatedAt desc; appending bumps, renaming and moving do not', async () => {
