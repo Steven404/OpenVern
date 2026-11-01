@@ -39,12 +39,9 @@ describe('X-Harness-Client', () => {
 });
 
 describe('Host', () => {
-  it.each(['localhost', 'localhost:5173', '127.0.0.1:8787', 'harness', 'LOCALHOST:1'])(
-    'allows Host %s',
-    async (host) => {
-      expect((await raw('/api/health', { ...CLIENT, Host: host })).status).toBe(200);
-    },
-  );
+  it.each(['localhost', 'localhost:5173', '127.0.0.1:8787', 'LOCALHOST:1'])('allows Host %s', async (host) => {
+    expect((await raw('/api/health', { ...CLIENT, Host: host })).status).toBe(200);
+  });
 
   it.each(['evil.com', 'localhost.evil.com', 'evil.com:8787', '127.0.0.1.nip.io', 'localhost@evil.com', ''])(
     'rejects Host %j (DNS rebinding)',
@@ -59,6 +56,30 @@ describe('Host', () => {
 
   it('allows the app:// URL host', async () => {
     expect((await viaProtocol('/api/health', CLIENT)).status).toBe(200);
+  });
+
+  it('allows app://harness with a Host: harness header', async () => {
+    expect((await viaProtocol('/api/health', { ...CLIENT, Host: 'harness' })).status).toBe(200);
+  });
+
+  it.each(['localhost', 'evil.com'])('rejects app://harness with Host %s', async (host) => {
+    expect((await viaProtocol('/api/health', { ...CLIENT, Host: host })).status).toBe(403);
+  });
+
+  it('rejects a foreign app:// host', async () => {
+    expect((await h.app.fetch(new Request('app://evil/api/health', { headers: CLIENT }))).status).toBe(403);
+  });
+
+  // S5-N1: `harness` is only the app:// host; over http(s) it would let a rebound `http://harness:8787` page in.
+  it.each([
+    ['http://harness:8787/api/health', 'harness:8787'],
+    ['http://harness/api/health', 'harness'],
+    ['https://harness/api/health', 'harness'],
+    ['http://localhost/api/health', 'harness'],
+    ['http://localhost/api/health', 'harness:8787'],
+    ['http://harness:8787/api/health', 'localhost:8787'],
+  ])('rejects %s with Host %s (harness over http)', async (url, host) => {
+    expect((await raw(url, { ...CLIENT, Host: host })).status).toBe(403);
   });
 });
 

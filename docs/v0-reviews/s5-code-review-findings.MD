@@ -31,7 +31,7 @@ Status: fixed in 40bd78a
 
 ID: S5-N1
 
-Status: open
+Status: fixed in a4da70e
 
 - Location: `src/server/middleware/security.ts:17`
 - Problem: §3.3 allows `harness` as "the app:// host", but `HOST_RE` accepts it on any scheme. `security.test.ts:42` asserts this for HTTP.
