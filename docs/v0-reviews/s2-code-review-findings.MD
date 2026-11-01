@@ -59,7 +59,7 @@ Status: open
 
 ID: S2-G1
 
-Status: open
+Status: fixed in 26e7514
 
 ## Checked and sound
 
