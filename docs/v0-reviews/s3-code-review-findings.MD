@@ -30,7 +30,7 @@ Status: fixed in 60b877d
 
 ID: S3-N1
 
-Status: open
+Status: fixed in b80607f
 
 - Location: `src/core/tools/read-file.ts:103`
 - Problem: When the first line alone is over the byte budget, it is cut with `line.slice(0, LIMITS.readFileMaxBytes)`. That counts UTF-16 code units, not bytes. A minified line of CJK text (3 bytes per character) therefore returns about 300 KB. Emoji or other astral characters (4 bytes per character, 2 code units) return about 200 KB. The cut can also split a surrogate pair. The test at `tools.test.ts:230` only uses ASCII, so it passes.
