@@ -612,9 +612,9 @@ Complexity: **L** low · **M** medium · **H** high. Waves are in §7.
 - [x] S2.10 `createModelCatalog({ provider, cacheFile })`: `list({ refresh })` with 1 h TTL in memory + `cache/models.json`; on fetch failure serve the stale cache if any; `get(id)` for capability lookups (unknown id → `supportsTools: true, supportsImages: false`).
 - [x] S2.11 Tests with recorded fixtures (no network): text-only stream; stream split at awkward chunk boundaries; parallel tool calls; keepalive comments; mid-stream error; usage chunk; error mapping table; models mapping.
 
-**Acceptance:** fixtures cover every bullet above; a manual script `npx tsx scripts/try-openrouter.ts "hello"` (key from env) streams to stdout.
+**Acceptance:** fixtures cover every bullet above; a manual script `npm run try:openrouter -- "hello"` (key from env) streams to stdout.
 
-**S2 notes (as built):** run the script as `OPENROUTER_API_KEY=… npx tsx --tsconfig tsconfig.node.json scripts/try-openrouter.ts "hello" [model]` (tsx needs the node tsconfig for `@shared/*` aliases; `dev:server` passes it too). Fixtures are hand-built from the documented wire format. `reasoning_details` fragments are merged by `index` and emitted as one `meta` — **still unverified against a live reasoning model with tools (needs a key; S9)**. After a failed model fetch the catalog backs off for 60 s (`refresh: true` bypasses).
+**S2 notes (as built):** run the script as `OPENROUTER_API_KEY=… npm run try:openrouter -- "hello" [model]` (the npm script passes `--tsconfig tsconfig.node.json` because tsx needs the node tsconfig for `@shared/*` aliases; `dev:server` passes it too). Fixtures are hand-built from the documented wire format. `reasoning_details` fragments are merged by `index` and emitted as one `meta` — **still unverified against a live reasoning model with tools (needs a key; S9)**. After a failed model fetch the catalog backs off for 60 s (`refresh: true` bypasses).
 
 ### S3 — Project tools (read-only) · M
 
