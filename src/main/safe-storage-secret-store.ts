@@ -37,14 +37,45 @@ export class SafeStorageSecretStore implements SecretStore {
     if (!current || !Object.hasOwn(current, name)) return null;
     const entry = secretEntrySchema.safeParse(current[name]);
     if (!entry.success) return null;
-    // A key saved while safeStorage was unavailable (plain fallback) stays readable; the next `set` re-encrypts it.
-    if (entry.data.enc === 'plain') return entry.data.value;
+    // A key saved while safeStorage was unavailable (plain fallback, S8-N1): encrypt it in place now, keep it readable.
+    if (entry.data.enc === 'plain') {
+      await this.migratePlain(name, entry.data.value);
+      return entry.data.value;
+    }
     try {
       return this.safeStorage.decryptString(Buffer.from(entry.data.value, 'base64'));
     } catch (err) {
       this.logger.warn(`Could not decrypt secret "${name}" (${err instanceof Error ? err.message : String(err)}).`);
       return null;
     }
+  }
+
+  /**
+   * Re-encrypts a plain entry under the file lock (atomic tmp + fsync + rename, mode 0600). Only replaces the entry if
+   * it is still the same plain value. On failure the plain entry is left intact. Logs the secret name, never the value.
+   */
+  private async migratePlain(name: string, plain: string): Promise<void> {
+    let migrated = false;
+    try {
+      await this.file.update((current) => {
+        const latest = secretEntrySchema.safeParse(current?.[name]);
+        if (!current || !latest.success || latest.data.enc !== 'plain' || latest.data.value !== plain) {
+          return current ?? { version: 1 };
+        }
+        const entry: SecretEntry = {
+          enc: 'safeStorage',
+          value: this.safeStorage.encryptString(plain).toString('base64'),
+        };
+        migrated = true;
+        return { ...current, version: 1, [name]: entry };
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Could not encrypt plaintext secret "${name}"; leaving it as is (${err instanceof Error ? err.message : String(err)}).`,
+      );
+      return;
+    }
+    if (migrated) this.logger.warn(`Migrated plaintext secret "${name}" to safeStorage encryption.`);
   }
 
   async set(name: string, value: string): Promise<void> {

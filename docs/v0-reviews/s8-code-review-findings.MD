@@ -20,7 +20,7 @@ What I ran: the `src/main` unit tests (13 pass), `install-local.sh` against temp
 
 ID: S8-N1
 
-Status: open
+Status: fixed in 8f7771f
 
 - Location: `src/main/safe-storage-secret-store.ts:41` (read path); fallback chosen in `createSecretStore` at `:88-95`
 - Problem: the trigger is any launch where `isEncryptionAvailable()` is false. Examples: KWallet is disabled, its unlock prompt is cancelled, there is no session D-Bus, or the desktop gets `basic_text`.
