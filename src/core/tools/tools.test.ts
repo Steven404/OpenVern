@@ -235,6 +235,19 @@ describe('read_file', () => {
     expect(res.output.length).toBeLessThan(LIMITS.readFileMaxBytes + 1000);
   });
 
+  it.each([
+    ['CJK (3-byte)', '漢'],
+    ['emoji (4-byte)', '😀'],
+  ])('cuts a single enormous %s line by bytes without splitting a code point', async (_name, ch) => {
+    await write(fx.root, 'multibyte.txt', `${ch.repeat(200 * 1024)}\n`);
+    const res = await readFile({ path: 'multibyte.txt' });
+    expect(res.ok).toBe(true);
+    expect(res.output).toContain('[line cut]');
+    expect(Buffer.byteLength(res.output)).toBeLessThanOrEqual(LIMITS.readFileMaxBytes);
+    expect(res.output).not.toContain('\uFFFD');
+    expect(res.output).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+  });
+
   it('handles empty files, CRLF and missing trailing newline', async () => {
     expect((await readFile({ path: 'empty.txt' })).output).toBe('empty.txt (empty file, 0 lines)');
     await write(fx.root, 'crlf.txt', 'a\r\nb\r\nc');

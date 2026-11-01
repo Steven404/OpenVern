@@ -27,6 +27,20 @@ const argsSchema = z.object({
     ),
 });
 
+/** Longest prefix of `text` that fits in `maxBytes` of UTF-8, never splitting a code point. */
+function truncateUtf8(text: string, maxBytes: number): string {
+  if (maxBytes <= 0) return '';
+  let bytes = 0;
+  let end = 0;
+  for (const ch of text) {
+    const size = Buffer.byteLength(ch);
+    if (bytes + size > maxBytes) break;
+    bytes += size;
+    end += ch.length;
+  }
+  return text.slice(0, end);
+}
+
 export function createReadFileTool(opts: SandboxOptions = {}): Tool {
   return {
     spec: {
@@ -92,6 +106,9 @@ export function createReadFileTool(opts: SandboxOptions = {}): Tool {
       let bytes = 0;
       let last = start - 1;
       let cutByBytes = false;
+      const headerFor = (lastLine: number) => `${displayPath(res.rel)} (lines ${start}-${lastLine} of ${total})`;
+      const byteCutNote = (lastLine: number) =>
+        `... output cut at ${Math.round(LIMITS.readFileMaxBytes / 1024)} KB. Continue with start_line=${lastLine + 1}.`;
       for (let n = start; n <= lastByLines; n++) {
         const text = (lines[n - 1] ?? '').replace(/\r$/, '');
         const line = `${String(n).padStart(width)} | ${text}`;
@@ -100,7 +117,11 @@ export function createReadFileTool(opts: SandboxOptions = {}): Tool {
           cutByBytes = true;
           if (body.length === 0) {
             // A single enormous line (e.g. minified code): return its beginning rather than nothing.
-            body.push(`${line.slice(0, LIMITS.readFileMaxBytes)} [line cut]`);
+            // Cut by UTF-8 bytes, leaving room for the header, marker and trailer so the whole output fits.
+            const marker = ' [line cut]';
+            const overhead =
+              Buffer.byteLength(headerFor(n)) + Buffer.byteLength(marker) + Buffer.byteLength(byteCutNote(n)) + 3;
+            body.push(`${truncateUtf8(line, LIMITS.readFileMaxBytes - overhead)}${marker}`);
             last = n;
           }
           break;
@@ -110,12 +131,10 @@ export function createReadFileTool(opts: SandboxOptions = {}): Tool {
         last = n;
       }
 
-      const header = `${displayPath(res.rel)} (lines ${start}-${last} of ${total})`;
+      const header = headerFor(last);
       const out = [header, ...body];
       if (cutByBytes) {
-        out.push(
-          `... output cut at ${Math.round(LIMITS.readFileMaxBytes / 1024)} KB. Continue with start_line=${last + 1}.`,
-        );
+        out.push(byteCutNote(last));
       } else if (last < lastRequested) {
         out.push(`... output cut at ${LIMITS.readFileMaxLines} lines. Continue with start_line=${last + 1}.`);
       } else if (last < total) {
