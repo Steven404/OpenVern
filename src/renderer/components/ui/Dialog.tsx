@@ -82,6 +82,8 @@ export interface ConfirmDialogProps {
   onConfirm: () => void;
   /** See `DialogContent.returnFocusRef`. */
   returnFocusRef?: RefObject<HTMLElement | null>;
+  /** Optional body content between the description and the buttons (e.g. an inline error). */
+  children?: ReactNode;
 }
 
 /** Controlled yes/no dialog. */
@@ -96,6 +98,7 @@ export function ConfirmDialog({
   loading = false,
   onConfirm,
   returnFocusRef,
+  children,
 }: ConfirmDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -113,7 +116,9 @@ export function ConfirmDialog({
             </Button>
           </>
         }
-      />
+      >
+        {children}
+      </DialogContent>
     </Dialog>
   );
 }

@@ -10,14 +10,12 @@ import { type FormEvent, useRef, useState } from 'react';
 
 export const OPENROUTER_KEYS_URL = 'https://openrouter.ai/keys';
 
-/** Inline error copy for a failed "save key" call. */
+/**
+ * Inline error copy for a failed "save key" or "remove key" call. Shows the error's own message (the server and
+ * client already use the plan's copy), so a local "harness server" failure is not blamed on OpenRouter.
+ */
 export function keyErrorMessage(error: unknown): string {
-  if (error instanceof ApiError) {
-    if (error.info.code === 'invalid_api_key') return 'OpenRouter rejected this key.';
-    if (error.info.code === 'network_error') return "Couldn't reach OpenRouter. Check your connection.";
-    return error.info.message;
-  }
-  return 'Something went wrong. Try again.';
+  return error instanceof ApiError ? error.info.message : 'Something went wrong. Try again.';
 }
 
 /** S6.7. Rendered once at the app level; driven by `useUiStore().settingsOpen`. */
@@ -115,19 +113,24 @@ function ConnectedState({ keyHint, onReplace }: { keyHint: string | null; onRepl
           <Button size="sm" onClick={onReplace}>
             Replace key
           </Button>
-          <Button ref={removeRef} size="sm" onClick={() => setConfirmOpen(true)}>
+          <Button
+            ref={removeRef}
+            size="sm"
+            onClick={() => {
+              remove.reset();
+              setConfirmOpen(true);
+            }}
+          >
             Remove key
           </Button>
         </div>
       </div>
-      {remove.isError ? (
-        <p role="alert" className="text-[13px] text-danger">
-          {keyErrorMessage(remove.error)}
-        </p>
-      ) : null}
       <ConfirmDialog
         open={confirmOpen}
-        onOpenChange={setConfirmOpen}
+        onOpenChange={(next) => {
+          if (!next) remove.reset();
+          setConfirmOpen(next);
+        }}
         title="Remove API key?"
         description="harness can't chat until you add a key again."
         confirmLabel="Remove key"
@@ -135,7 +138,13 @@ function ConnectedState({ keyHint, onReplace }: { keyHint: string | null; onRepl
         loading={remove.isPending}
         returnFocusRef={removeRef}
         onConfirm={() => remove.mutate()}
-      />
+      >
+        {remove.isError ? (
+          <p role="alert" className="text-[13px] text-danger">
+            {keyErrorMessage(remove.error)}
+          </p>
+        ) : null}
+      </ConfirmDialog>
     </>
   );
 }
@@ -145,9 +154,18 @@ function KeyForm({ onDone, onCancel }: { onDone: () => void; onCancel?: () => vo
   const queryClient = useQueryClient();
   const [apiKey, setApiKey] = useState('');
   const [visible, setVisible] = useState(false);
+  // S6-M1: the key is handed to `mutationFn` through a ref (cleared on read) rather than as mutation `variables`,
+  // so it never sits in the mutation cache; `gcTime: 0` also drops finished mutations once unobserved.
+  // Mutations don't retry (default 0), so clearing on read can't resend an empty key.
+  const keyRef = useRef('');
 
   const save = useMutation({
-    mutationFn: (key: string) => api.setOpenRouterKey(key),
+    gcTime: 0,
+    mutationFn: () => {
+      const key = keyRef.current;
+      keyRef.current = '';
+      return api.setOpenRouterKey(key);
+    },
     onSuccess: async (settings) => {
       queryClient.setQueryData(queryKeys.settings, settings);
       onDone();
@@ -161,7 +179,10 @@ function KeyForm({ onDone, onCancel }: { onDone: () => void; onCancel?: () => vo
   const submit = (event: FormEvent) => {
     event.preventDefault();
     const key = apiKey.trim();
-    if (key && !save.isPending) save.mutate(key);
+    if (key && !save.isPending) {
+      keyRef.current = key;
+      save.mutate();
+    }
   };
 
   return (
@@ -194,12 +215,7 @@ function KeyForm({ onDone, onCancel }: { onDone: () => void; onCancel?: () => vo
           </>
         }
         trailing={
-          <IconButton
-            size="sm"
-            aria-label={visible ? 'Hide key' : 'Show key'}
-            aria-pressed={visible}
-            onClick={() => setVisible((v) => !v)}
-          >
+          <IconButton size="sm" aria-label="Show key" aria-pressed={visible} onClick={() => setVisible((v) => !v)}>
             {visible ? <EyeOff size={16} /> : <Eye size={16} />}
           </IconButton>
         }
