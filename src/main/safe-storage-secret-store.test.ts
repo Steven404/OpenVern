@@ -51,13 +51,44 @@ describe('SafeStorageSecretStore', () => {
     expect(await store.get('openrouter')).toBeNull();
   });
 
-  it('reads a plain entry (saved by the fallback) and re-encrypts it on the next set', async () => {
+  it('reads a plain entry (saved by the fallback) and re-encrypts it in place (S8-N1)', async () => {
     const file = path.join(await tmp(), 'secrets.json');
-    await fs.writeFile(file, JSON.stringify({ version: 1, openrouter: { enc: 'plain', value: 'old-key' } }));
-    const store = new SafeStorageSecretStore(file, fakeSafeStorage());
-    expect(await store.get('openrouter')).toBe('old-key');
+    await fs.writeFile(file, JSON.stringify({ version: 1, openrouter: { enc: 'plain', value: 'old-plain-key' } }));
+    const warn = vi.fn();
+    const store = new SafeStorageSecretStore(file, fakeSafeStorage(), { logger: { warn } });
+    expect(await store.get('openrouter')).toBe('old-plain-key');
+
+    const raw = await fs.readFile(file, 'utf8');
+    expect(raw).not.toContain('old-plain-key');
+    const parsed = JSON.parse(raw);
+    expect(parsed.version).toBe(1);
+    expect(parsed.openrouter.enc).toBe('safeStorage');
+    expect((await fs.stat(file)).mode & 0o777).toBe(0o600);
+    // Logged by name only, never the value.
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('"openrouter"'));
+    for (const [m] of warn.mock.calls) expect(String(m)).not.toContain('old-plain-key');
+
+    // Round-trips through a fresh store reading the now-encrypted entry.
+    expect(await new SafeStorageSecretStore(file, fakeSafeStorage()).get('openrouter')).toBe('old-plain-key');
     await store.set('openrouter', 'new-key');
-    expect(JSON.parse(await fs.readFile(file, 'utf8')).openrouter.enc).toBe('safeStorage');
+    expect(await store.get('openrouter')).toBe('new-key');
+  });
+
+  it('keeps a plain entry (and still returns it) when re-encryption fails', async () => {
+    const file = path.join(await tmp(), 'secrets.json');
+    await fs.writeFile(file, JSON.stringify({ version: 1, openrouter: { enc: 'plain', value: 'old-plain-key' } }));
+    const warn = vi.fn();
+    const safe = fakeSafeStorage({
+      encryptString: () => {
+        throw new Error('keyring locked');
+      },
+    });
+    const store = new SafeStorageSecretStore(file, safe, { logger: { warn } });
+    expect(await store.get('openrouter')).toBe('old-plain-key');
+    expect(JSON.parse(await fs.readFile(file, 'utf8')).openrouter).toEqual({ enc: 'plain', value: 'old-plain-key' });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('"openrouter"'));
+    for (const [m] of warn.mock.calls) expect(String(m)).not.toContain('old-plain-key');
+    expect(await store.get('openrouter')).toBe('old-plain-key');
   });
 
   it('returns null (and warns) when decryption fails', async () => {
