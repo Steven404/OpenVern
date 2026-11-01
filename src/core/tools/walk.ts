@@ -1,8 +1,9 @@
 // Shared project walker (plan S3.3/S3.8): breadth-first, sorted, honours ignore rules, the deny list and abort.
 
-import type { Dirent } from 'node:fs';
-import { readdir, readFile } from 'node:fs/promises';
+import { constants, type Dirent, type Stats } from 'node:fs';
+import { lstat, open, readdir } from 'node:fs/promises';
 import path from 'node:path';
+import { LIMITS } from '@shared/constants';
 import { ALWAYS_SKIPPED_DIRS, IgnoreScope } from './ignore';
 import { isDeniedEntryName } from './sandbox';
 
@@ -25,9 +26,34 @@ export interface WalkOptions {
   signal: AbortSignal;
 }
 
+const isSmallRegularFile = (st: Stats): boolean => st.isFile() && st.size <= LIMITS.gitignoreMaxBytes;
+
+/**
+ * Reads `<dirAbs>/.gitignore` only if it is a regular file of at most `gitignoreMaxBytes` (S3-M1).
+ * Never follows a symlink and never blocks on a FIFO or device; oversize files are skipped whole, not truncated.
+ */
 async function readGitignore(dirAbs: string, signal: AbortSignal): Promise<string | null> {
+  if (signal.aborted) return null;
+  const p = path.join(dirAbs, '.gitignore');
   try {
-    return await readFile(path.join(dirAbs, '.gitignore'), { encoding: 'utf8', signal });
+    if (!isSmallRegularFile(await lstat(p))) return null;
+    // Re-check on the open handle: O_NOFOLLOW fails a swapped-in symlink (ELOOP), O_NONBLOCK keeps a
+    // swapped-in FIFO from blocking open(). Both are undefined on Windows, where the lstat check remains.
+    const fh = await open(p, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+    try {
+      if (!isSmallRegularFile(await fh.stat())) return null;
+      const buf = Buffer.alloc(LIMITS.gitignoreMaxBytes + 1);
+      let n = 0;
+      while (n < buf.length) {
+        const { bytesRead } = await fh.read(buf, n, buf.length - n, n);
+        if (bytesRead === 0) break;
+        n += bytesRead;
+      }
+      if (n > LIMITS.gitignoreMaxBytes) return null; // grew past the cap since the stat
+      return buf.toString('utf8', 0, n);
+    } finally {
+      await fh.close();
+    }
   } catch {
     return null;
   }
@@ -42,7 +68,8 @@ function compareEntries(a: WalkEntry, b: WalkEntry): number {
 
 /**
  * Yields entries level by level (each directory's children sorted: directories first, then by name).
- * Symlinks are yielded as `symlink` and never followed. Stops quietly when `signal` aborts; callers that
+ * Symlinks are yielded as `symlink` and never followed. A `.gitignore` is read only if it is a regular file of at
+ * most `LIMITS.gitignoreMaxBytes`; symlinked or special `.gitignore` files are ignored. Stops quietly when `signal` aborts; callers that
  * need to tell the difference check `signal.aborted` afterwards.
  */
 export async function* walk(opts: WalkOptions): AsyncGenerator<WalkEntry> {
@@ -53,6 +80,7 @@ export async function* walk(opts: WalkOptions): AsyncGenerator<WalkEntry> {
   const segments = startRel === '' ? [] : startRel.split('/');
   for (let i = 0; i < segments.length; i++) {
     const base = segments.slice(0, i).join('/');
+    // `readGitignore` does the regular-file check (lstat), so a symlinked or special ancestor file is skipped.
     const content = await readGitignore(path.join(root, base), signal);
     if (content !== null) scope = scope.with(base, content);
   }
@@ -72,7 +100,7 @@ export async function* walk(opts: WalkOptions): AsyncGenerator<WalkEntry> {
     }
 
     let local = item.scope;
-    if (dirents.some((d) => d.name === '.gitignore' && !d.isDirectory())) {
+    if (dirents.some((d) => d.name === '.gitignore' && d.isFile())) {
       const content = await readGitignore(dirAbs, signal);
       if (content !== null) local = local.with(item.rel, content);
     }

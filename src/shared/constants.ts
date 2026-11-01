@@ -17,6 +17,8 @@ export const LIMITS = {
   searchMaxMatches: 200,
   searchMaxFileBytes: 1024 * 1024,
   systemPromptTreeEntries: 100,
+  /** `.gitignore` files above this size are skipped by the walker (S3-M1). */
+  gitignoreMaxBytes: 256 * 1024,
 } as const;
 
 export const IMAGE_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'] as const;
