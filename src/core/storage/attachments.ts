@@ -209,12 +209,19 @@ export function createAttachmentsService(opts: AttachmentsServiceOptions): Attac
             removed++;
           }
         }
-        // Bytes whose sidecar never made it (crash between the two writes) or was quarantined as corrupt.
+        // Bytes whose sidecar never made it (crash between the two writes). A quarantined sidecar
+        // (`<id>.json.corrupt-*`) means the bytes may belong to a bound attachment, so keep them.
         const names = await fs.readdir(paths.attachmentsDir).catch(() => [] as string[]);
+        const quarantined = new Set<string>();
+        for (const name of names) {
+          const at = name.indexOf('.json.corrupt-');
+          if (at > 0) quarantined.add(name.slice(0, at));
+        }
         for (const name of names) {
           if (!name.endsWith('.bin')) continue;
           const id = name.slice(0, -'.bin'.length);
-          if (!SAFE_ID.test(id) || (await fs.stat(paths.attachmentMeta(id)).catch(() => null))) continue;
+          if (!SAFE_ID.test(id) || quarantined.has(id) || (await fs.stat(paths.attachmentMeta(id)).catch(() => null)))
+            continue;
           const stat = await fs.stat(paths.attachmentBin(id)).catch(() => null);
           if (stat && stat.mtimeMs < cutoff) {
             await fs.rm(paths.attachmentBin(id), { force: true });
