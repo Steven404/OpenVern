@@ -48,15 +48,34 @@ function isInside(root: string, target: string): boolean {
   return rel === '' || (!rel.startsWith(`..${path.sep}`) && rel !== '..' && !path.isAbsolute(rel));
 }
 
+/** True when `target` is one of `roots` or lies below one. Compares absolute paths, never names. */
+export function isWithinAny(roots: readonly string[] | undefined, target: string): boolean {
+  return roots?.some((r) => isInside(r, target)) ?? false;
+}
+
+export interface SandboxOptions {
+  /**
+   * Real absolute paths no tool may reach, even when they lie inside the project (the app's data dir, S1-M1).
+   * Matched by real path only: a folder that merely shares the name is not affected.
+   */
+  deniedRoots?: readonly string[];
+}
+
 function toPosix(rel: string): string {
   return path.sep === '/' ? rel : rel.split(path.sep).join('/');
 }
 
 /**
  * Resolves `relPath` against the project root. Rejects `..` escapes, absolute paths outside the root and
- * symlinks whose real path leaves the root, then applies the deny list to both the lexical and the real path.
+ * symlinks whose real path leaves the root, then applies the deny list and `deniedRoots` to both the lexical and
+ * the real path. A root that itself lies inside a denied root blocks everything.
  */
-export async function resolveInProject(root: string, relPath: string): Promise<ResolveResult> {
+export async function resolveInProject(
+  root: string,
+  relPath: string,
+  opts: SandboxOptions = {},
+): Promise<ResolveResult> {
+  const { deniedRoots } = opts;
   if (relPath.includes('\0')) return { ok: false, kind: 'invalid', message: 'Invalid path (contains a NUL byte)' };
 
   let realRoot: string;
@@ -65,6 +84,7 @@ export async function resolveInProject(root: string, relPath: string): Promise<R
   } catch {
     return { ok: false, kind: 'invalid', message: 'The project folder is not accessible' };
   }
+  if (isWithinAny(deniedRoots, realRoot)) return { ok: false, kind: 'blocked', message: BLOCKED_MESSAGE };
 
   const lexicalRoot = path.resolve(root);
   let abs = path.resolve(lexicalRoot, relPath === '' ? '.' : relPath);
@@ -73,7 +93,9 @@ export async function resolveInProject(root: string, relPath: string): Promise<R
     abs = path.join(realRoot, path.relative(lexicalRoot, abs));
   }
   if (!isInside(realRoot, abs)) return { ok: false, kind: 'outside', message: OUTSIDE_MESSAGE };
-  if (isDeniedPath(path.relative(realRoot, abs))) return { ok: false, kind: 'blocked', message: BLOCKED_MESSAGE };
+  if (isDeniedPath(path.relative(realRoot, abs)) || isWithinAny(deniedRoots, abs)) {
+    return { ok: false, kind: 'blocked', message: BLOCKED_MESSAGE };
+  }
 
   let real = abs;
   let exists = true;
@@ -86,6 +108,8 @@ export async function resolveInProject(root: string, relPath: string): Promise<R
   }
   if (!isInside(realRoot, real)) return { ok: false, kind: 'outside', message: OUTSIDE_MESSAGE };
   const rel = toPosix(path.relative(realRoot, real));
-  if (isDeniedPath(rel)) return { ok: false, kind: 'blocked', message: BLOCKED_MESSAGE };
+  if (isDeniedPath(rel) || isWithinAny(deniedRoots, real)) {
+    return { ok: false, kind: 'blocked', message: BLOCKED_MESSAGE };
+  }
   return { ok: true, abs: real, rel, root: realRoot, exists };
 }

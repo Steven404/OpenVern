@@ -16,15 +16,29 @@ export interface ProjectsServiceOptions {
   /** Used for `chatCount` and to re-home chats when a project is removed. */
   chats: Pick<ChatsService, 'list' | 'detachProject'>;
   logger?: StorageLogger;
+  /** Real path of the data dir. Roots equal to it or inside it are rejected (S1-M1); roots containing it are fine. */
+  dataDir?: string;
 }
 
-/** Expands `~`, resolves to a realpath and checks it is a readable directory. Throws `path_invalid`. */
-async function resolveProjectRoot(input: string): Promise<string> {
+function isInside(root: string, target: string): boolean {
+  const rel = path.relative(root, target);
+  return rel === '' || (!rel.startsWith(`..${path.sep}`) && rel !== '..' && !path.isAbsolute(rel));
+}
+
+/**
+ * Expands `~`, requires an absolute path (S1-N1: never resolved against the cwd), resolves to a realpath and
+ * checks it is a readable directory outside the data dir. Throws `path_invalid`.
+ */
+async function resolveProjectRoot(input: string, dataDir?: string): Promise<string> {
   const invalid = () => new CoreError('path_invalid');
   const expanded = expandHome(input.trim());
   if (!expanded) throw invalid();
+  if (!path.isAbsolute(expanded)) throw new CoreError('path_invalid', 'Enter an absolute path to a folder.');
   try {
-    const real = await fs.realpath(path.resolve(expanded));
+    const real = await fs.realpath(expanded);
+    if (dataDir && isInside(dataDir, real)) {
+      throw new CoreError('path_invalid', 'This folder is inside the app data folder and cannot be a project.');
+    }
     if (!(await fs.stat(real)).isDirectory()) throw invalid();
     await fs.access(real, constants.R_OK | constants.X_OK);
     return real;
@@ -62,7 +76,7 @@ export function createProjectsService(opts: ProjectsServiceOptions): ProjectsSer
     get: find,
 
     async create(input) {
-      const rootPath = await resolveProjectRoot(input.rootPath);
+      const rootPath = await resolveProjectRoot(input.rootPath, opts.dataDir);
       const name = input.name?.trim() || path.basename(rootPath) || rootPath;
       const project: Project = { id: randomUUID(), name, rootPath, createdAt: new Date().toISOString() };
       // The duplicate check runs inside the file lock, so two concurrent adds cannot both succeed.

@@ -1,5 +1,6 @@
 // Composition root (plan §4.8, S5.6): wires storage, provider, model catalog and the agent into a `Core`.
 
+import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { createAgentService } from './agent';
 import { createModelCatalog } from './providers/models';
@@ -13,8 +14,11 @@ export async function createCore(deps: CoreDeps): Promise<Core> {
   const { settings, projects, chats, attachments } = storage;
 
   const provider = deps.provider ?? createOpenRouterProvider({ getApiKey: () => settings.getApiKey() });
-  // `createStorage` made the data dir absolute (and expanded `~`); mirror that for the cache path.
-  const cacheFile = dataPaths(path.resolve(expandHome(deps.dataDir))).modelsCache;
+  // `createStorage` made the data dir absolute (and expanded `~`) and created it; mirror that here. The realpath is
+  // what the tool sandbox compares against, so a project folder containing the data dir cannot reach it (S1-M1).
+  const dataReal = await realpath(path.resolve(expandHome(deps.dataDir)));
+  const deniedRoots = [dataReal];
+  const cacheFile = dataPaths(dataReal).modelsCache;
   const models = createModelCatalog({ provider, cacheFile });
   const agent = createAgentService({
     chats,
@@ -22,8 +26,8 @@ export async function createCore(deps: CoreDeps): Promise<Core> {
     projects,
     models,
     provider,
-    getProjectTools,
-    renderTree,
+    getProjectTools: () => getProjectTools({ deniedRoots }),
+    renderTree: (root, opts) => renderTree(root, { ...opts, deniedRoots }),
   });
 
   await attachments.cleanupOrphans();

@@ -3,7 +3,7 @@
 import { readFile, stat } from 'node:fs/promises';
 import { LIMITS } from '@shared/constants';
 import { z } from 'zod';
-import { resolveInProject } from './sandbox';
+import { resolveInProject, type SandboxOptions } from './sandbox';
 import type { Tool } from './types';
 import { abortedResult, displayPath, fail, parseArgs, succeed, toParameters } from './util';
 
@@ -27,7 +27,7 @@ const argsSchema = z.object({
     ),
 });
 
-export function createReadFileTool(): Tool {
+export function createReadFileTool(opts: SandboxOptions = {}): Tool {
   return {
     spec: {
       name: 'read_file',
@@ -46,7 +46,7 @@ export function createReadFileTool(): Tool {
       const { path: relPath, start_line: startArg, end_line: endArg } = parsed.data;
       const summary = relPath;
 
-      const res = await resolveInProject(ctx.projectRoot, relPath);
+      const res = await resolveInProject(ctx.projectRoot, relPath, opts);
       if (!res.ok) return fail(res.message, summary);
       if (!res.exists)
         return fail(`File not found: ${relPath}. Use list_files or search to find the right path.`, summary);

@@ -3,7 +3,7 @@
 import { stat } from 'node:fs/promises';
 import { LIMITS } from '@shared/constants';
 import { z } from 'zod';
-import { resolveInProject } from './sandbox';
+import { resolveInProject, type SandboxOptions } from './sandbox';
 import { buildTree, truncationNote } from './tree';
 import type { Tool } from './types';
 import { abortedResult, displayPath, fail, parseArgs, succeed, toParameters } from './util';
@@ -26,7 +26,7 @@ const argsSchema = z.object({
     .describe(`How many directory levels to show (1-${MAX_DEPTH}). Defaults to 2.`),
 });
 
-export function createListFilesTool(): Tool {
+export function createListFilesTool(opts: SandboxOptions = {}): Tool {
   return {
     spec: {
       name: 'list_files',
@@ -45,7 +45,7 @@ export function createListFilesTool(): Tool {
       const { path: relPath, depth } = parsed.data;
       const summary = displayPath(relPath);
 
-      const res = await resolveInProject(ctx.projectRoot, relPath);
+      const res = await resolveInProject(ctx.projectRoot, relPath, opts);
       if (!res.ok) return fail(res.message, summary);
       if (!res.exists)
         return fail(`Path not found: ${relPath}. Use list_files on a parent directory to see what exists.`, summary);
@@ -61,6 +61,7 @@ export function createListFilesTool(): Tool {
         depth,
         maxEntries: LIMITS.listFilesMaxEntries,
         signal: ctx.signal,
+        deniedRoots: opts.deniedRoots,
       });
       if (tree.aborted) return abortedResult(summary);
 

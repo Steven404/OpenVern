@@ -46,7 +46,10 @@ export interface ProjectsService {
   list(): Promise<ProjectListItem[]>;
   /** Throws `CoreError('not_found')`. */
   get(id: Id): Promise<Project>;
-  /** Expands `~`, realpaths, checks readable dir. Throws `path_invalid` or `conflict` (same realpath). */
+  /**
+   * Expands `~`, requires an absolute path, realpaths, checks readable dir outside the data dir (a folder that
+   * contains the data dir is fine). Throws `path_invalid` or `conflict` (same realpath).
+   */
   create(input: { rootPath: string; name?: string }): Promise<Project>;
   rename(id: Id, name: string): Promise<Project>;
   /** Moves its chats to `projectId: null`. Never touches files on disk. */

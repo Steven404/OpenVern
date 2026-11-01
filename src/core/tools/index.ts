@@ -2,11 +2,13 @@
 
 import { createListFilesTool } from './list-files';
 import { createReadFileTool } from './read-file';
+import type { SandboxOptions } from './sandbox';
 import { createSearchTool } from './search';
 import type { Tool } from './types';
 
-export function getProjectTools(): Tool[] {
-  return [createListFilesTool(), createReadFileTool(), createSearchTool()];
+/** `deniedRoots`: real absolute paths no tool can reach, even inside a project (the app's data dir, S1-M1). */
+export function getProjectTools(opts: SandboxOptions = {}): Tool[] {
+  return [createListFilesTool(opts), createReadFileTool(opts), createSearchTool(opts)];
 }
 
 export { renderTree } from './tree';

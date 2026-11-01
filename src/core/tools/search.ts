@@ -4,7 +4,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { LIMITS } from '@shared/constants';
 import { z } from 'zod';
 import { compileGlob, type GlobMatcher } from './glob';
-import { resolveInProject } from './sandbox';
+import { resolveInProject, type SandboxOptions } from './sandbox';
 import type { Tool } from './types';
 import { abortedResult, displayPath, fail, parseArgs, succeed, toParameters } from './util';
 import { walk } from './walk';
@@ -74,7 +74,7 @@ async function searchFile(
   return found;
 }
 
-export function createSearchTool(): Tool {
+export function createSearchTool(opts: SandboxOptions = {}): Tool {
   return {
     spec: {
       name: 'search',
@@ -123,7 +123,7 @@ export function createSearchTool(): Tool {
         globMatcher = compiled.matches;
       }
 
-      const res = await resolveInProject(ctx.projectRoot, relPath);
+      const res = await resolveInProject(ctx.projectRoot, relPath, opts);
       if (!res.ok) return fail(res.message, summary);
       if (!res.exists) return fail(`Path not found: ${relPath}. Use list_files to see what exists.`, summary);
 
@@ -167,7 +167,13 @@ export function createSearchTool(): Tool {
         if (passesGlob(res.rel)) await processBatch([{ rel: res.rel, abs: res.abs }]);
       } else {
         let batch: { rel: string; abs: string }[] = [];
-        for await (const entry of walk({ root: res.root, startRel: res.rel, maxDepth: Infinity, signal: ctx.signal })) {
+        for await (const entry of walk({
+          root: res.root,
+          startRel: res.rel,
+          maxDepth: Infinity,
+          signal: ctx.signal,
+          deniedRoots: opts.deniedRoots,
+        })) {
           if (entry.kind !== 'file' || !passesGlob(entry.rel)) continue;
           batch.push({ rel: entry.rel, abs: `${res.root}/${entry.rel}` });
           if (batch.length >= BATCH) {

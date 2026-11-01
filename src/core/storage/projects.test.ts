@@ -62,6 +62,38 @@ describe('ProjectsService', () => {
     await expect(storage.projects.create({ rootPath: '   ' })).rejects.toMatchObject({ code: 'path_invalid' });
   });
 
+  it('rejects the data dir and folders inside it, also via symlink, but allows a folder containing it (S1-M1)', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const realData = await fs.realpath(dataDir);
+    const link = path.join(path.dirname(realData), 'chats-link');
+    await fs.symlink(path.join(realData, 'chats'), link);
+    for (const rootPath of [dataDir, path.join(dataDir, 'chats'), link]) {
+      await expect(storage.projects.create({ rootPath }), rootPath).rejects.toMatchObject({ code: 'path_invalid' });
+    }
+    await expect(storage.projects.create({ rootPath: path.dirname(dataDir) })).resolves.toMatchObject({
+      rootPath: path.dirname(realData),
+    });
+  });
+
+  it('rejects relative paths instead of resolving them against the cwd (S1-N1)', async () => {
+    const { storage } = await makeStorage();
+    const cwd = await makeDir('cwd');
+    await fs.mkdir(path.join(cwd, 'src'));
+    const prev = process.cwd();
+    process.chdir(cwd);
+    try {
+      for (const rootPath of ['.', 'src', './src', '..']) {
+        await expect(storage.projects.create({ rootPath }), rootPath).rejects.toMatchObject({
+          code: 'path_invalid',
+          message: 'Enter an absolute path to a folder.',
+        });
+      }
+    } finally {
+      process.chdir(prev);
+    }
+    expect(await storage.projects.list()).toEqual([]);
+  });
+
   it('rejects an unreadable directory with path_invalid', async () => {
     if (process.getuid?.() === 0) return; // root ignores permissions
     const { storage } = await makeStorage();

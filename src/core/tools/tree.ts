@@ -1,6 +1,7 @@
 // Indented directory tree shared by `list_files` and the system-prompt project tree (plan S3.4, S3.8).
 
 import { realpath } from 'node:fs/promises';
+import { isWithinAny } from './sandbox';
 import { type WalkEntry, walk } from './walk';
 
 export interface TreeListing {
@@ -16,6 +17,8 @@ export interface TreeOptions {
   depth: number;
   maxEntries: number;
   signal: AbortSignal;
+  /** Forwarded to `walk`: real absolute directories that are never listed. */
+  deniedRoots?: readonly string[];
 }
 
 function parentOf(rel: string): string {
@@ -30,7 +33,13 @@ function parentOf(rel: string): string {
 export async function buildTree(root: string, startRel: string, opts: TreeOptions): Promise<TreeListing> {
   const entries: WalkEntry[] = [];
   let truncated = false;
-  for await (const entry of walk({ root, startRel, maxDepth: opts.depth, signal: opts.signal })) {
+  for await (const entry of walk({
+    root,
+    startRel,
+    maxDepth: opts.depth,
+    signal: opts.signal,
+    deniedRoots: opts.deniedRoots,
+  })) {
     if (entries.length >= opts.maxEntries) {
       truncated = true;
       break;
@@ -64,9 +73,13 @@ export function truncationNote(shown: number): string {
 }
 
 /** Tree of the project for the system prompt (plan S3.8). Never throws. */
-export async function renderTree(root: string, opts: { depth: number; maxEntries: number }): Promise<string> {
+export async function renderTree(
+  root: string,
+  opts: { depth: number; maxEntries: number; deniedRoots?: readonly string[] },
+): Promise<string> {
   try {
     const realRoot = await realpath(root);
+    if (isWithinAny(opts.deniedRoots, realRoot)) return '(empty)';
     const tree = await buildTree(realRoot, '', { ...opts, signal: new AbortController().signal });
     if (tree.lines.length === 0) return '(empty)';
     return tree.truncated ? [...tree.lines, truncationNote(tree.shown)].join('\n') : tree.lines.join('\n');

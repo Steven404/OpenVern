@@ -5,7 +5,7 @@ import { lstat, open, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { LIMITS } from '@shared/constants';
 import { ALWAYS_SKIPPED_DIRS, IgnoreScope } from './ignore';
-import { isDeniedEntryName } from './sandbox';
+import { isDeniedEntryName, isWithinAny } from './sandbox';
 
 export interface WalkEntry {
   /** Project-relative POSIX path. */
@@ -24,6 +24,8 @@ export interface WalkOptions {
   /** Entries deeper than this are not visited. */
   maxDepth: number;
   signal: AbortSignal;
+  /** Real absolute directories that are never entered or yielded (the app's data dir, S1-M1). */
+  deniedRoots?: readonly string[];
 }
 
 const isSmallRegularFile = (st: Stats): boolean => st.isFile() && st.size <= LIMITS.gitignoreMaxBytes;
@@ -73,7 +75,9 @@ function compareEntries(a: WalkEntry, b: WalkEntry): number {
  * need to tell the difference check `signal.aborted` afterwards.
  */
 export async function* walk(opts: WalkOptions): AsyncGenerator<WalkEntry> {
-  const { root, startRel, maxDepth, signal } = opts;
+  const { root, startRel, maxDepth, signal, deniedRoots } = opts;
+  // `root` is real and the walker never follows symlinks, so `path.join(root, rel)` is a real path.
+  if (isWithinAny(deniedRoots, path.join(root, startRel))) return;
 
   // `.gitignore` files of the start directory's ancestors apply to everything below it.
   let scope = IgnoreScope.empty;
@@ -112,6 +116,7 @@ export async function* walk(opts: WalkOptions): AsyncGenerator<WalkEntry> {
       if (kind === 'dir' && ALWAYS_SKIPPED_DIRS.has(d.name)) continue;
       if (isDeniedEntryName(d.name)) continue;
       const rel = item.rel === '' ? d.name : `${item.rel}/${d.name}`;
+      if (kind === 'dir' && isWithinAny(deniedRoots, path.join(root, rel))) continue;
       if (local.ignores(rel, kind === 'dir')) continue;
       children.push({ rel, name: d.name, kind, depth: item.depth });
     }

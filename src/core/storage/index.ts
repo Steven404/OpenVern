@@ -6,6 +6,7 @@
 // `dataDir` is used as given (made absolute, `~` expanded). Use `resolveDataDir()` first if `HARNESS_DATA_DIR`
 // should override it. Callers should run `storage.attachments.cleanupOrphans()` once at startup.
 
+import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import type { Id } from '@shared/types';
 import { CoreError } from '../errors';
@@ -52,7 +53,7 @@ export async function createStorage(opts: StorageOptions): Promise<Storage> {
       }
     },
   });
-  projects = createProjectsService({ filePath: paths.projects, chats, logger });
+  projects = createProjectsService({ filePath: paths.projects, chats, logger, dataDir: await realpath(paths.root) });
 
   return {
     settings: createSettingsService({ filePath: paths.settings, secretStore: opts.secretStore, logger }),
