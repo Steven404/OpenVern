@@ -6,6 +6,7 @@
 //  - Pre-stream failures are JSON `{ error: { code: <http status>, message, metadata? } }` with that HTTP status.
 //  - Reasoning arrives in `delta.reasoning_details` and must be passed back unmodified as `reasoning_details`.
 
+import { APP_NAME } from '@shared/constants';
 import { ERROR_DEFAULTS, type ErrorCode } from '@shared/errors';
 import { readSSE } from '@shared/sse';
 import type { ModelInfo, ToolCall, Usage } from '@shared/types';
@@ -96,7 +97,9 @@ async function errorFromResponse(res: Response): Promise<ProviderError> {
     (typeof body === 'object' && body !== null && 'error' in body ? (body as { error: unknown }).error : undefined) ??
     {};
   const hints = hintsFromErrorObject(errObj, res.status);
-  if (!hints.message && text && body === undefined) hints.message = text.slice(0, 300);
+  // A non-JSON body (e.g. a Cloudflare HTML page) only helps classify the error. It must never become user-facing
+  // copy, so it goes into `raw` (classification only) and the message stays the default.
+  if (text && body === undefined) hints.raw = text.slice(0, 300);
   return mapOpenRouterError(hints);
 }
 
@@ -341,14 +344,18 @@ export function mapModels(data: unknown): ModelInfo[] {
 
 // ── provider ───────────────────────────────────────────────────────────────────────────────────
 
+/** A key must be one printable-ASCII token. Anything else (an inner line break, a space, a zero-width character)
+ * would make `fetch` reject the header locally, and that error message contains the key. */
+const KEY_RE = /^[\x21-\x7e]+$/;
+
 export function createOpenRouterProvider(opts: OpenRouterOptions): Provider {
   const doFetch = opts.fetch ?? ((input, init) => fetch(input, init));
 
   const headers = (key: string, json = false): Record<string, string> => ({
     Authorization: `Bearer ${key}`,
     // `HTTP-Referer` is deliberately omitted until the project has a public URL (plan S2.1).
-    'X-OpenRouter-Title': 'harness',
-    'X-Title': 'harness', // legacy name, still supported
+    'X-OpenRouter-Title': APP_NAME,
+    'X-Title': APP_NAME, // legacy name, still supported
     ...(json ? { 'Content-Type': 'application/json' } : {}),
   });
 
@@ -357,6 +364,7 @@ export function createOpenRouterProvider(opts: OpenRouterOptions): Provider {
       return await doFetch(url, { ...init, signal });
     } catch (err) {
       if (signal?.aborted) throw err;
+      // The raw error is discarded on purpose: it can contain the Authorization header value (the key).
       throw new ProviderError('network_error', ERROR_DEFAULTS.network_error.message, true);
     }
   }
@@ -385,6 +393,10 @@ export function createOpenRouterProvider(opts: OpenRouterOptions): Provider {
     },
 
     async validateKey(apiKey, signal) {
+      // Never include the key, or anything derived from it, in the error.
+      if (!KEY_RE.test(apiKey)) {
+        throw new ProviderError('invalid_api_key', 'This key contains spaces or invalid characters.', false);
+      }
       const res = await request(`${OPENROUTER_BASE_URL}/key`, { method: 'GET', headers: headers(apiKey) }, signal);
       if (res.ok) {
         await res.body?.cancel().catch(() => {});

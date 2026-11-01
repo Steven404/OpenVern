@@ -13,7 +13,7 @@ S2 meets its acceptance bar. The two test files (63 tests, all passing at `ad1cf
 
 ID: S2-N1
 
-Status: open
+Status: fixed in 9778864
 
 - Location: `src/core/providers/openrouter.ts:360` (reached from `validateKey`, `:388`)
 - Problem: `request()` turns every `fetch` rejection that isn't an abort into `network_error`. That includes the `TypeError` that `fetch` throws locally, before connecting, when the `Authorization` value is invalid. `setOpenRouterKeyBody` (`z.string().trim()`, `src/shared/api.ts:36`) only trims the ends of the key. So a key pasted with a line break in the middle (copied across a wrap) or with a zero-width space reaches `validateKey`, which returns "Couldn't reach OpenRouter. Check your connection." I reproduced both cases offline with the real `fetch`, pointed at a blocked loopback port.
@@ -24,7 +24,7 @@ Status: open
 
 ID: S2-N2
 
-Status: open
+Status: fixed in 9778864
 
 - Location: `src/core/providers/openrouter.ts:99` (the message is built at `:54`)
 - Problem: When an error body isn't JSON, its first 300 characters become the error detail. `provider_error` appends it to "The model provider returned an error: …", and `invalid_request` uses it as the whole message. A Cloudflare-style 524 page, fed in through an injected fetch, produced `The model provider returned an error: <!DOCTYPE html> <!--[if lt IE 7]> <html class="no-js ie6 oldie" lang="en-US"> …`.
@@ -35,7 +35,7 @@ Status: open
 
 ID: S2-N3
 
-Status: open
+Status: fixed in 9778864
 
 - Location: `src/core/providers/openrouter.test.ts:177`
 - Problem: Every fixture and inline stream ends exactly at `data: [DONE]`. The tests show `[DONE]` isn't parsed as JSON, but not that reading stops there. Replacing the `break` at `openrouter.ts:232` with `continue` would still pass all 63 tests, even though the test is named "[DONE] ends it".
@@ -46,7 +46,7 @@ Status: open
 
 ID: S2-N4
 
-Status: open
+Status: fixed in 9778864
 
 - Location: `src/core/providers/openrouter.ts:350`
 - Problem: `X-OpenRouter-Title` and `X-Title` are string literals (`:350–351`). §2 keeps the app name in the single `APP_NAME` constant, which the system prompt, window title, document title and sidebar already use.
