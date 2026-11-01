@@ -13,7 +13,7 @@ S6 meets its behavioral acceptance bar: every D1–D9 and D19 action works again
 
 ID: S6-M1
 
-Status: open
+Status: fixed in dc933ac
 
 - Location: `src/renderer/features/settings/SettingsModal.tsx:149`. Also `:164` (`save.mutate(key)`) and `src/renderer/app/App.tsx:17`, which sets no mutation `gcTime`.
 - Problem: The full key is passed as the mutation's `variables`, so TanStack stores it in `mutation.state.variables` inside `queryClient.getMutationCache()`. After `KeyForm` unmounts, the mutation is only garbage-collected after the default `gcTime` of 300 000 ms in a browser or Electron renderer. The form unmounts on a successful save, when the modal closes, or when the user edits after a failure (`save.reset()`). Every new attempt also leaves the previous mutation behind for the same 5 minutes.
@@ -41,7 +41,7 @@ Status: open
 
 ID: S6-N2
 
-Status: open
+Status: fixed in dc933ac
 
 - Location: `src/renderer/features/settings/SettingsModal.tsx:199-200`
 - Problem: The button uses both a changing label and `aria-pressed`. While the key is visible, a screen reader announces "Hide key, toggle button, pressed", which reads as "hiding is on" when the key is actually shown in plain text.
@@ -52,7 +52,7 @@ Status: open
 
 ID: S6-N3
 
-Status: open
+Status: fixed in dc933ac
 
 - Location: `src/renderer/features/settings/SettingsModal.tsx:17`. The same function handles Remove errors at `:125`.
 - Problem: `keyErrorMessage` turns every `network_error` into "Couldn't reach OpenRouter. Check your connection." But `HttpApiClient` also throws `network_error` when the local server is unreachable, with the accurate message "Couldn't reach the harness server." (`http-api-client.ts:45`), and this code overwrites it.
