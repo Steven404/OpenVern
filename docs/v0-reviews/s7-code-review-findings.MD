@@ -13,7 +13,7 @@ S7 meets its acceptance bar for behaviour on the main paths. The runs store appl
 
 ID: S7-N1
 
-Status: open
+Status: fixed in 14c4f0c
 
 - Location: `src/renderer/stores/runs.ts:237-241` (with `src/renderer/features/conversation/Conversation.tsx:112`)
 - Problem: The trigger is a model reply that asks for a tool. The user presses Stop while `read_file` is running. The server saves the assistant message as `complete` (its tool calls are listed) and the tool result as "Interrupted". It saves no message with `status: 'stopped'`. In the client, `aborted` sets `run.stopped = true`, but `streamingId` is null, so no message is marked stopped. `settle` then finds the overlay covered on the first poll and, with no error, deletes the run entry. `run.stopped` goes with it. The last turn ends on a ✕ tool row. The "Stopped" label only shows during the settle window, and no Retry is offered: `onRetry` attaches only to the last text block or to a run error.
@@ -39,7 +39,7 @@ Status: open
 
 ID: S7-N3
 
-Status: open
+Status: fixed in 14c4f0c
 
 - Location: `src/renderer/features/conversation/turns.ts:234`
 - Problem: A tool row's state is `result ? … : active ? 'running' : 'skipped'`. `run.runningToolIds`, which the store fills from `tool_call` events, is never used. The trigger is a step that requests three `read_file` calls. After `assistant_end`, all three rows spin at once, although the server runs them one at a time and §4.4 says it is the `tool_call` event that marks a call as running.

@@ -35,7 +35,7 @@ Status: open
 
 ID: S0-N3
 
-Status: open
+Status: fixed in 14c4f0c
 
 - Location: `src/renderer/lib/mock-api-client.ts:262-269`, `:277`
 - Problem: on abort, the mock catches the rejection and yields `assistant_end` (status `stopped`) and then `done`, so the iterator finishes normally. `HttpApiClient` instead rejects with `AbortError`. The mock also waits out the tool pause without listening to the signal. A Stop pressed while a tool row is running only takes effect after the tool finishes. The next step then starts and is immediately stopped, leaving an empty `stopped` assistant message after the tool result.
