@@ -67,7 +67,7 @@ Status: fixed in b62de57
 
 ID: S8-N4
 
-Status: open
+Status: fixed in 42544c8
 
 - Location: `scripts/install-local.sh:39`
 - Problem:

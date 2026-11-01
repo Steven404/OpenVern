@@ -36,7 +36,10 @@ uninstall_app() {
 install_app() {
   # Newest by version sort (release/harness-<version>-x86_64.AppImage).
   local newest
-  newest="$(find "$repo/release" -maxdepth 1 -type f -name 'harness-*-x86_64.AppImage' 2>/dev/null | sort -V | tail -n 1)"
+  newest=""
+  if [ -d "$repo/release" ]; then
+    newest="$(find "$repo/release" -maxdepth 1 -type f -name 'harness-*-x86_64.AppImage' 2>/dev/null | sort -V | tail -n 1)"
+  fi
   if [ -z "$newest" ]; then
     echo "No release/harness-*-x86_64.AppImage found. Run 'npm run dist' first." >&2
     exit 1
