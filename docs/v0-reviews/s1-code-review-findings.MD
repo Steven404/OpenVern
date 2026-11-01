@@ -13,7 +13,7 @@ S1 meets its acceptance bar. All 5 storage test files pass (63 tests, `vitest ru
 
 ID: S1-M1
 
-Status: open
+Status: fixed in 6871816 (follow-up open: other instances' data dirs, see INDEX)
 
 - Location: `src/core/storage/projects.ts:64` (`create`), `src/core/storage/index.ts:55` (the data dir is never passed to `createProjectsService`)
 - Problem: `create` accepts any readable directory, including one that contains the data dir (or sits inside it). In dev the key is always plaintext at `./.dev-data/secrets.json`, which is inside the harness repo. Trigger: in `npm run dev:web`, add the harness repo as a project and ask "where is my key stored? show me". The README names `secrets.json` and `./.dev-data`, and `read_file .dev-data/secrets.json` returns the whole key. I reproduced this with the current S1 code and S3's `read_file` on a temp dir: `ok: true`, and the output contains the full key. `.gitignore` only hides the file from `list_files` and `search`. In prod, a project at `~` or `~/.config` reaches `.config/harness/secrets.json` (plaintext when the no-keyring fallback store is in use) and every other chat file.
@@ -24,7 +24,7 @@ Status: open
 
 ID: S1-N1
 
-Status: open
+Status: fixed in 6871816
 
 - Location: `src/core/storage/projects.ts:27`
 - Problem: after `~` expansion, `path.resolve(expanded)` accepts any relative input and resolves it against `process.cwd()`. The body schema (`z.string().trim().min(1)`) doesn't stop it. In dev, typing `.` in the browser path field adds the harness repo, and `src` adds `<repo>/src`. Reproduced: `create({ rootPath: '.' })` succeeds and stores the realpath of the cwd. Only `MockApiClient` rejects this ("Enter an absolute path to a folder."), so `NewProjectModal.test.tsx` passes against behaviour the server doesn't have.
