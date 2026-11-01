@@ -60,7 +60,12 @@ export class HttpApiClient implements ApiClient {
   private async *stream(path: string, body: unknown, signal: AbortSignal): AsyncIterable<AgentEvent> {
     const res = await this.send('POST', path, body, { signal, headers: { Accept: 'text/event-stream' } });
     if (!res.body) throw new ApiError(errorInfo('internal', 'The server sent an empty stream.'), res.status);
-    for await (const data of readSSE(res.body)) yield JSON.parse(data) as AgentEvent;
+    try {
+      for await (const data of readSSE(res.body)) yield JSON.parse(data) as AgentEvent;
+    } catch (err) {
+      if (isAbort(err) || signal.aborted) throw err;
+      throw new ApiError(errorInfo('network_error', SERVER_UNREACHABLE));
+    }
   }
 
   health() {
