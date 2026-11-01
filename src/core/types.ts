@@ -97,6 +97,8 @@ export interface AttachmentsService {
 export interface ModelCatalog {
   /** 1 h TTL (memory + `cache/models.json`); stale cache on failure; throws `ProviderError` if nothing cached. */
   list(opts?: { refresh?: boolean; signal?: AbortSignal }): Promise<ModelInfo[]>;
+  /** Forget the failure backoff (the API key changed, so a past `no_api_key` / auth error no longer applies). */
+  resetFailure(): void;
   /** Never throws. Unknown id (or no catalog) → `{ id, name: id, supportsTools: true, supportsImages: false, … }`. */
   get(id: string): Promise<ModelInfo>;
 }

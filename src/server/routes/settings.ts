@@ -21,10 +21,16 @@ export function settingsRoutes(core: Core, info: { mode: 'dev' | 'prod'; version
     const { apiKey } = await readJson(c, setOpenRouterKeyBody);
     // Validate with the provider first (throws ProviderError: invalid_api_key → 400, network_error → 502, …).
     await core.provider.validateKey(apiKey, c.req.raw.signal);
-    return c.json(await core.settings.setApiKey(apiKey));
+    const saved = await core.settings.setApiKey(apiKey);
+    core.models.resetFailure(); // a cached `no_api_key` failure must not outlive the key
+    return c.json(saved);
   });
 
-  r.delete(ROUTES.openRouterKey, async (c) => c.json(await core.settings.clearApiKey()));
+  r.delete(ROUTES.openRouterKey, async (c) => {
+    const cleared = await core.settings.clearApiKey();
+    core.models.resetFailure();
+    return c.json(cleared);
+  });
 
   r.get(ROUTES.models, async (c) => {
     const refresh = c.req.query('refresh') === '1';

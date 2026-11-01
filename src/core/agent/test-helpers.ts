@@ -215,6 +215,7 @@ export function createFakeModels(list: ModelInfo[]): ModelCatalog {
     async list() {
       return clone(list);
     },
+    resetFailure() {},
     async get(id) {
       return clone(list.find((m) => m.id === id) ?? model(id));
     },

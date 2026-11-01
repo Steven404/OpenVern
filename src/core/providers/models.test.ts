@@ -116,6 +116,14 @@ describe('createModelCatalog', () => {
     await expect(cat.list()).rejects.toMatchObject({ code: 'no_api_key' });
   });
 
+  it('resetFailure lets the next call fetch again (e.g. after the API key was saved)', async () => {
+    const p = fakeProvider([new ProviderError('no_api_key', 'no key'), [A]]);
+    const cat = createModelCatalog({ provider: p.provider, cacheFile, now });
+    await expect(cat.list()).rejects.toMatchObject({ code: 'no_api_key' });
+    cat.resetFailure();
+    expect(await cat.list()).toEqual([A]);
+  });
+
   it('backs off after a failure instead of hitting the network on every call', async () => {
     const p = fakeProvider([new ProviderError('network_error', 'offline', true), [A]]);
     const cat = createModelCatalog({ provider: p.provider, cacheFile, now });

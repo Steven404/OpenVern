@@ -127,6 +127,9 @@ export function createModelCatalog(opts: ModelCatalogOptions): ModelCatalog {
 
   return {
     list,
+    resetFailure() {
+      lastFailure = null;
+    },
     async get(id) {
       try {
         const models = await list();
