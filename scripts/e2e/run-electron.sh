@@ -6,6 +6,8 @@
 #   E2E_SHOTS=1 …    also take the S9.3 screenshots (E2E_SKIP_SMOKE=1: only those)
 #   E2E_KEEP=1 …     keep the scratch dir (screenshots, logs)
 set -uo pipefail
+# Agent hosts / Electron IDEs export ELECTRON_RUN_AS_NODE=1, which would run the app as plain Node.
+unset ELECTRON_RUN_AS_NODE
 # shellcheck source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 cd "$E2E_ROOT"

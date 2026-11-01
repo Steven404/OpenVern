@@ -591,6 +591,13 @@ async function mainPhase() {
     await click(byText('[data-testid=error-card] button', 'Retry', true), 'Retry');
     await waitFor(`${answered} && ${isIdle}`, 'retry succeeds', 20000);
     check('A12 Retry recovers', !(await ev(`!!document.querySelector('[data-testid=error-card]')`)));
+
+    // Offline path: network_error is retryable too (shows Retry).
+    await newChat();
+    await chooseProject('No project');
+    await send('[fake:error=network_error] hi');
+    await waitFor(`!!${byText('[data-testid=error-card] button', 'Retry', true)}`, 'network error card');
+    check('A12 network error shows an error card with Retry', true);
   });
 
   await section('A13', async () => {
@@ -854,6 +861,20 @@ async function mainPhase() {
     }
   });
 
+  // Leave non-default UI state behind (sidebar collapsed, project rows as they are) so the persist phase can tell a
+  // restored localStorage from the defaults (expanded sidebar, no expanded rows).
+  await gotoHash('#/new');
+  await waitFor(`!!document.querySelector('button[aria-label="Collapse sidebar"]')`, 'sidebar present');
+  await click(`document.querySelector('button[aria-label="Collapse sidebar"]')`, 'Collapse sidebar');
+  await waitFor(
+    `!document.querySelector('aside') && !!document.querySelector('button[aria-label="Open sidebar"]')`,
+    'collapsed',
+  );
+  await sleep(500);
+  state.sidebarCollapsed = await ev(`localStorage.getItem('harness.sidebarCollapsed')`);
+  state.expandedProjects = await ev(`localStorage.getItem('harness.expandedProjects')`);
+  if (state.sidebarCollapsed !== '1') throw new Error(`sidebar state not saved: ${state.sidebarCollapsed}`);
+
   // Snapshot for the persistence phase.
   const settings = (await api('/settings')).body;
   const models = (await api('/models')).body;
@@ -871,6 +892,20 @@ async function mainPhase() {
 async function persistPhase() {
   const saved = JSON.parse(readFileSync(STATE_FILE, 'utf8'));
   await openApp();
+  await section('A15-restart', async () => {
+    // localStorage lives in the browser profile / Electron userData, so UI state survives a restart too. The main
+    // phase left the sidebar collapsed (the default is expanded), so this fails if localStorage was lost.
+    await waitFor(`!!document.querySelector('button[aria-label="Open sidebar"]')`, 'Open sidebar button');
+    check('A15 sidebar still collapsed after restart', await ev(`!document.querySelector('aside')`));
+    check(
+      'A15 sidebar/project UI state in localStorage after restart',
+      (await ev(`localStorage.getItem('harness.sidebarCollapsed')`)) === saved.sidebarCollapsed &&
+        (await ev(`localStorage.getItem('harness.expandedProjects')`)) === saved.expandedProjects,
+      `${saved.sidebarCollapsed} ${saved.expandedProjects}`,
+    );
+    await click(`document.querySelector('button[aria-label="Open sidebar"]')`, 'Open sidebar');
+    await waitFor(`!!document.querySelector('aside')`, 'sidebar reopened');
+  });
   await section('A18', async () => {
     await waitFor(`!!document.querySelector('button[aria-label^="Model:"]')`, 'model picker');
     check('A18 key still configured', (await ev(`document.body.innerText`)).includes('Add API key') === false);
@@ -912,10 +947,6 @@ async function persistPhase() {
       (!!titleLink && (await ev(`!!${sidebarLink(titleLink.title)}`))) ||
         (await ev(`document.querySelectorAll('aside a[href*="#/chat/"]').length`)) > 0,
     );
-  });
-  await section('A15-restart', async () => {
-    // localStorage lives in the browser profile / Electron userData, so UI state survives a restart too.
-    check('A15 sidebar visible after restart (was expanded)', await ev(`!!document.querySelector('aside')`));
   });
 }
 
