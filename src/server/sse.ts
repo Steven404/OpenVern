@@ -5,7 +5,8 @@
 //
 // Disconnect = stop. In Node (dev) `c.req.raw.signal` fires on disconnect; in Electron's `protocol.handle` it does
 // NOT (plan §10) — only the response stream's `cancel()` does, which Hono surfaces as `stream.onAbort`. We hook
-// both; the abort is idempotent.
+// both; the abort is idempotent. A request signal that is ALREADY aborted (the client left during the route's
+// pre-stream validation) never fires its listener, so it counts as a disconnect too and the run never starts.
 
 import type { AgentEvent } from '@shared/events';
 import type { Context } from 'hono';
@@ -29,12 +30,14 @@ export function streamTurn(c: Context, core: Core, input: StreamTurnInput): Resp
     const requestSignal = c.req.raw.signal;
     stream.onAbort(abort);
     requestSignal.addEventListener('abort', abort, { once: true });
+    if (requestSignal.aborted) abort(); // fired during pre-stream validation; the listener above never will
     const keepalive = setInterval(() => {
       void stream.write(': keepalive\n\n');
     }, KEEPALIVE_MS);
     keepalive.unref?.();
 
     try {
+      if (controller.signal.aborted) return; // client already gone: write nothing, start nothing
       await stream.write(': ok\n\n');
       if (stream.aborted || controller.signal.aborted) return; // client left before anything happened
       const run = core.agent.runTurn({

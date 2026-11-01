@@ -289,3 +289,100 @@ async function replaceHarness(script: FakeScript): Promise<Harness> {
   await h.cleanup();
   return createHarness({ script });
 }
+
+/** Harness whose `listModels` waits on a gate, so `models.get` (image send) stalls before `streamSSE`. */
+async function gatedHarness(script: FakeScript) {
+  await h.cleanup();
+  let entered!: () => void;
+  let open!: () => void;
+  const reached = new Promise<void>((r) => {
+    entered = r;
+  });
+  const gate = new Promise<void>((r) => {
+    open = r;
+  });
+  h = await createHarness({
+    script,
+    wrapProvider: (fake) => ({
+      ...fake,
+      id: 'fake',
+      listModels: async () => {
+        entered();
+        await gate;
+        return fake.listModels();
+      },
+      validateKey: fake.validateKey,
+      stream: fake.stream,
+    }),
+  });
+  return { reached, open };
+}
+
+/** Sends once more and checks the chat is not stuck on 409; the reply is not collected, just cancelled. */
+async function expectNextSendOk(chatId: string) {
+  const next = await send(chatId, { text: 'again', attachmentIds: [], model: VISION });
+  expect(next.status).toBe(200);
+  const { reader } = await readUntil(next, /"reply"/);
+  await reader.cancel();
+  await waitFor(() => !h.core.agent.isRunning(chatId));
+}
+
+describe('disconnect before the stream opens (S5-M1)', () => {
+  it('abort during pre-stream validation: run never starts, nothing saved, next send 200', async () => {
+    h = await createHarness();
+    const { reached, open } = await gatedHarness(slowScript);
+    const chat = await newChat();
+    const img = (await (
+      await h.call('/api/attachments', { method: 'POST', body: uploadForm(PNG_BYTES, 'p.png') })
+    ).json()) as AttachmentRef;
+    const ac = new AbortController();
+    const p = send(chat.id, { text: 'go', attachmentIds: [img.id], model: VISION }, { signal: ac.signal });
+    await reached;
+    ac.abort();
+    open();
+    await p; // deliberately neither read nor cancelled: cancelling would fire stream.onAbort and hide the bug
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(h.core.agent.isRunning(chat.id)).toBe(false);
+    expect((await h.core.chats.get(chat.id)).messages).toEqual([]);
+    expect((await h.core.attachments.get(img.id)).chatId).toBeNull();
+    await expectNextSendOk(chat.id);
+  }, 10_000);
+
+  it('already-aborted signal on send: no run, no message', async () => {
+    h = await replaceHarness(slowScript);
+    const chat = await newChat();
+    const ac = new AbortController();
+    ac.abort();
+    const res = await send(chat.id, { text: 'go', attachmentIds: [], model: VISION }, { signal: ac.signal }).catch(
+      () => null,
+    );
+    if (res) expect([200, 400, 499]).toContain(res.status);
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(h.core.agent.isRunning(chat.id)).toBe(false);
+    expect((await h.core.chats.get(chat.id)).messages).toEqual([]);
+    await expectNextSendOk(chat.id);
+  }, 10_000);
+
+  it('retry with an already-aborted signal: no run, no truncation', async () => {
+    h = await createHarness();
+    const chat = await newChat();
+    await collectEvents(await send(chat.id, { text: 'hi', attachmentIds: [], model: VISION }));
+    const before = (await h.core.chats.get(chat.id)).messages.map((m) => m.id);
+    expect(before).toHaveLength(2);
+
+    const ac = new AbortController();
+    ac.abort();
+    await h
+      .call(`/api/chats/${chat.id}/retry`, { method: 'POST', json: { model: VISION }, signal: ac.signal })
+      .catch(() => null);
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(h.core.agent.isRunning(chat.id)).toBe(false);
+    expect((await h.core.chats.get(chat.id)).messages.map((m) => m.id)).toEqual(before);
+    const again = await h.call(`/api/chats/${chat.id}/retry`, { method: 'POST', json: { model: VISION } });
+    expect(again.status).toBe(200);
+    await collectEvents(again);
+  }, 10_000);
+});
