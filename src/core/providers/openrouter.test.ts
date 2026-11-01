@@ -1,8 +1,16 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { APP_NAME } from '@shared/constants';
+import { ERROR_DEFAULTS } from '@shared/errors';
+import { describe, expect, it, vi } from 'vitest';
 import { createOpenRouterProvider, mapModels } from './openrouter';
 import { type Provider, ProviderError, type ProviderEvent, type ProviderRequest } from './types';
+
+// A value that differs from the real constant, so the attribution test fails if the name is hard-coded.
+vi.mock('@shared/constants', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@shared/constants')>()),
+  APP_NAME: 'renamed-app',
+}));
 
 const fixture = (name: string) =>
   readFileSync(fileURLToPath(new URL(`./__fixtures__/${name}`, import.meta.url)), 'utf8');
@@ -88,8 +96,9 @@ describe('request mapping', () => {
     expect(c?.url).toBe('https://openrouter.ai/api/v1/chat/completions');
     expect(c?.init.method).toBe('POST');
     expect(c?.headers.Authorization).toBe('Bearer sk-or-v1-test');
-    expect(c?.headers['X-OpenRouter-Title']).toBe('harness');
-    expect(c?.headers['X-Title']).toBe('harness');
+    expect(APP_NAME).toBe('renamed-app'); // the mock above is in effect
+    expect(c?.headers['X-OpenRouter-Title']).toBe(APP_NAME);
+    expect(c?.headers['X-Title']).toBe(APP_NAME);
     expect(c?.headers['HTTP-Referer']).toBeUndefined();
     expect(c?.body.stream).toBe(true);
     expect(c?.body.model).toBe('anthropic/claude-sonnet-4.5');
@@ -176,6 +185,13 @@ describe('stream parsing', () => {
 
   it('text-only stream: keepalives ignored, one usage, one finish, [DONE] ends it', async () => {
     const { provider } = make(() => sseResponse(fixture('text-stream.sse')));
+    expect(await collect(provider)).toEqual(textEvents);
+  });
+
+  it('stops reading at [DONE]: later frames are ignored', async () => {
+    const sse = `${fixture('text-stream.sse').trimEnd()}\n\ndata: {"choices":[{"index":0,"delta":{"content":"late"},"finish_reason":null}]}\n\ndata: {not json\n\n`;
+    expect(sse).toContain('data: [DONE]');
+    const { provider } = make(() => sseResponse(sse));
     expect(await collect(provider)).toEqual(textEvents);
   });
 
@@ -430,6 +446,30 @@ describe('error mapping (pre-stream HTTP errors)', () => {
     expect(err.retryable).toBe(true);
   });
 
+  it('a non-JSON (HTML) error body is used only to classify; the message stays the default copy', async () => {
+    const html =
+      '<!DOCTYPE html>\n<!--[if lt IE 7]> <html class="no-js ie6 oldie" lang="en-US"> <![endif]-->\n<head><title>openrouter.ai | 524: A timeout occurred</title></head>';
+    const { provider } = make(() => new Response(html, { status: 524, headers: { 'Content-Type': 'text/html' } }));
+    const err = await caught(collect(provider));
+    expect(err.code).toBe('provider_error');
+    expect(err.status).toBe(524);
+    expect(err.message).toBe(ERROR_DEFAULTS.provider_error.message);
+    expect(err.message).not.toContain('<');
+
+    const bad = make(() => new Response('<html><body>Bad Request</body></html>', { status: 400 }));
+    const err400 = await caught(collect(bad.provider));
+    expect(err400.code).toBe('invalid_request');
+    expect(err400.message).toBe(ERROR_DEFAULTS.invalid_request.message);
+
+    // Non-JSON text still drives classification.
+    const ctx = make(() => new Response('maximum context length exceeded', { status: 400 }));
+    expect((await caught(collect(ctx.provider))).code).toBe('context_length_exceeded');
+
+    const key = make(() => new Response(html, { status: 524 }));
+    const keyErr = await caught(key.provider.validateKey('sk-or-v1-abc'));
+    expect(keyErr.message).toBe(ERROR_DEFAULTS.provider_error.message);
+  });
+
   it('provider_error messages carry the upstream detail, without stack traces', async () => {
     const { provider } = make(() => jsonResponse(502, { error: { code: 502, message: 'Provider returned error' } }));
     const err = await caught(collect(provider));
@@ -567,6 +607,34 @@ describe('validateKey', () => {
       throw new TypeError('fetch failed');
     });
     expect((await caught(down.provider.validateKey('k'))).code).toBe('network_error');
+  });
+
+  it.each([
+    ['a line break', 'sk-or-v1-abc\ndef'],
+    ['a space', 'sk-or-v1-abc def'],
+    ['a zero-width space', 'sk-or-v1-abc\u200bdef'],
+    ['a non-ASCII letter', 'sk-or-v1-abcédef'],
+    ['a tab', 'sk-or-v1-abc\tdef'],
+    ['nothing', ''],
+  ])('rejects a key containing %s as invalid_api_key without calling fetch', async (_, bad) => {
+    const { provider, calls } = make(() => jsonResponse(200, {}));
+    const err = await caught(provider.validateKey(bad));
+    expect(err.code).toBe('invalid_api_key');
+    expect(err.retryable).toBe(false);
+    expect(err.message).toBe('This key contains spaces or invalid characters.');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('never echoes the key or the raw fetch error', async () => {
+    const secret = 'sk-or-v1-secretsecret';
+    const { provider } = make(() => {
+      throw new TypeError(`Headers.append: "Bearer ${secret}" is an invalid header value.`);
+    });
+    const err = await caught(provider.validateKey(secret));
+    expect(err.code).toBe('network_error');
+    expect(err.message).toBe(ERROR_DEFAULTS.network_error.message);
+    expect(JSON.stringify(err)).not.toContain(secret);
+    expect(String(err.stack)).not.toContain(secret);
   });
 });
 
