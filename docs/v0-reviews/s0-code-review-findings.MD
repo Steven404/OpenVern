@@ -46,7 +46,7 @@ Status: fixed in 14c4f0c
 
 ID: S0-N4
 
-Status: open
+Status: fixed in 48a3fc2
 
 - Location: `vitest.config.ts:17-22`
 - Problem: the jsdom project has no `setupFiles` and no `globals: true`. Testing Library only cleans up between tests automatically when a global `afterEach` exists, so it doesn't here. Every renderer test file currently calls `cleanup` itself (I checked all 10). Any new file that forgets will leak DOM into the next test.
