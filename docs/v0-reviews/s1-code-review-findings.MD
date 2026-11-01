@@ -51,7 +51,7 @@ Status: open
 
 ID: S1-N3
 
-Status: open
+Status: fixed in a84cbf7
 
 - Location: `src/core/storage/attachments.ts:217` (with `listAll` at `src/core/storage/attachments.ts:120`)
 - Problem: `cleanupOrphans` first calls `listAll()`, which quarantines a damaged sidecar (`<id>.json` → `<id>.json.corrupt-<ts>`). The stray-`.bin` pass then finds no `<id>.json` and deletes `<id>.bin` once its mtime is more than 24 h old. It cannot check `chatId`, because that is only in the backup. Reproduced: a bound PNG (`chatId: 'chat-1'`) sent two days ago, with a truncated sidecar, loses its bytes in one call, and only the sidecar backup is left. The cleanup test only covers bound attachments with valid sidecars.
