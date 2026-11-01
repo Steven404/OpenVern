@@ -13,7 +13,7 @@ The path sandbox and the deny list are correct. I found no way for `list_files`,
 
 ID: S3-M1
 
-Status: open
+Status: fixed in 60b877d
 
 - Location: `src/core/tools/walk.ts:28` (`readGitignore`), `src/core/tools/walk.ts:56` (ancestor loop), `src/core/tools/walk.ts:75`
 - Problem: Line 75 accepts any `.gitignore` entry that is not a directory, which includes symlinks, FIFOs and sockets. The ancestor loop at line 56 does no type check at all. `readFile` then follows the link with no size limit. Git stores symlinks, so a cloned repo can ship `sub/.gitignore -> /dev/zero`, `-> /dev/stdin`, or a link to any file on the machine.
