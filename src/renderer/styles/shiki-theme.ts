@@ -7,13 +7,13 @@ import type { ThemeRegistration } from 'shiki/core';
 export const SHIKI_THEME_NAME = 'harness';
 
 const FALLBACKS = {
-  code: '#100d10',
-  'text-code': '#e8dddd',
-  'text-muted': '#aa9a9f',
-  'text-faint': '#96878d',
-  accent: '#f2cc8f',
-  'accent-2': '#e07a5f',
-  success: '#b8d4a0',
+  code: '#0a0d1c',
+  'text-code': '#e2e7f5',
+  'text-muted': '#9ba5c6',
+  'text-faint': '#8792b6',
+  accent: '#f6bd60',
+  'accent-2': '#e5865f',
+  success: '#9fd4b3',
   danger: '#ff8f87',
 } as const;
 

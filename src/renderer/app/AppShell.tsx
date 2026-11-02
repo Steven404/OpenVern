@@ -61,7 +61,7 @@ export function AppShell() {
   });
 
   return (
-    <div className="flex h-full w-full overflow-hidden bg-bg text-text">
+    <div className="flex h-full w-full overflow-hidden bg-(image:--backdrop) bg-bg text-text">
       {narrow && visible ? (
         <button
           type="button"

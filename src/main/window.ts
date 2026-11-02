@@ -57,7 +57,7 @@ export function createMainWindow(): BrowserWindow {
     minWidth: 800,
     minHeight: 600,
     title: APP_NAME,
-    backgroundColor: '#161316',
+    backgroundColor: '#0f1428',
     show: false,
     ...(!app.isPackaged && existsSync(devIcon) ? { icon: devIcon } : {}),
     webPreferences: {

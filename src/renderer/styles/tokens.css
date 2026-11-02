@@ -5,6 +5,61 @@
 @import "@fontsource-variable/jetbrains-mono";
 
 @theme {
+  /* Blue hour (default theme): lamplight on canal water. */
+  --color-bg: #0f1428;
+  --color-sidebar: #0b0f20;
+  --color-surface: #1a2142;
+  --color-surface-raised: #222a52;
+  --color-surface-raised-hover: #2c3666;
+  --color-surface-raised-active: #263058;
+  --color-bubble: #232c55;
+  --color-tool: #151b35;
+  --color-code: #0a0d1c;
+
+  --color-border: #20284a;
+  --color-border-header: #1c2343;
+  --color-border-tool: #29325c;
+  --color-border-bubble: #2f3a68;
+  --color-border-control: #343f72;
+  --color-border-hover: #46528c;
+  --color-border-focus: #5a68a8;
+
+  --color-text: #ecf0fa;
+  --color-text-body: #d8deef;
+  --color-text-code: #e2e7f5;
+  --color-text-secondary: #c3cbe3;
+  --color-text-chat: #a9b2cf;
+  --color-text-muted: #9ba5c6;
+  --color-text-faint: #8792b6;
+
+  --color-accent: #f6bd60;
+  --color-accent-2: #e5865f;
+  --color-success: #9fd4b3;
+  --color-danger: #ff8f87;
+
+  --color-overlay-row: rgb(200 215 255 / 0.05);
+  --color-overlay-ghost: rgb(200 215 255 / 0.07);
+  --color-overlay-current: rgb(200 215 255 / 0.08);
+
+  --font-display: "Bricolage Grotesque Variable", "Bricolage Grotesque", sans-serif;
+  --font-sans: "Figtree Variable", "Figtree", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
+
+  --width-sidebar: 272px;
+  --width-conversation: 760px;
+  --width-new-chat: 720px;
+  --height-header: 64px;
+}
+
+/* The app background: a faint dusk glow at the top of the window over the ground colour. */
+:root {
+  --backdrop:
+    radial-gradient(90% 55% at 62% -12%, rgb(98 126 214 / 0.22), transparent 62%),
+    linear-gradient(180deg, #121a38 0%, var(--color-bg) 38%, #0d1224 100%);
+}
+
+/* Late Workshop: the original warm theme. Not selectable yet; a future theme setting sets `data-theme` on <html>. */
+[data-theme="late-workshop"] {
   --color-bg: #161316;
   --color-sidebar: #120f12;
   --color-surface: #221c21;
@@ -39,13 +94,5 @@
   --color-overlay-row: rgb(240 230 230 / 0.05);
   --color-overlay-ghost: rgb(240 230 230 / 0.07);
   --color-overlay-current: rgb(240 230 230 / 0.08);
-
-  --font-display: "Bricolage Grotesque Variable", "Bricolage Grotesque", sans-serif;
-  --font-sans: "Figtree Variable", "Figtree", system-ui, sans-serif;
-  --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
-
-  --width-sidebar: 272px;
-  --width-conversation: 760px;
-  --width-new-chat: 720px;
-  --height-header: 64px;
+  --backdrop: var(--color-bg);
 }
