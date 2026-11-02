@@ -1,28 +1,29 @@
-// Layout of the design: sidebar (272px) + main. Also owns sidebar collapse (D2), the narrow-window overlay (D19),
+// Layout of the design: sidebar (272px) + chat column (+ right panel, v0.2). Also owns sidebar collapse (D2),
 // global shortcuts, and the two app-level modals (Settings, New project).
+//
+// The row never wraps: the chat column keeps `LAYOUT.conversationMin`, the panel `LAYOUT.panelMin`, and the root has
+// the window's minimum size, so a smaller browser window scrolls instead of reflowing (the narrow overlay is gone).
 
 import { IconButton } from '@renderer/components/ui';
 import { NewProjectModal } from '@renderer/features/projects';
+import { RightPanel } from '@renderer/features/right-panel';
 import { SettingsModal } from '@renderer/features/settings';
 import { SIDEBAR_COLLAPSE_BUTTON_ID, Sidebar } from '@renderer/features/sidebar';
 import { PanelIcon } from '@renderer/features/sidebar/icons';
 import { useUiStore } from '@renderer/stores/ui';
-import { APP_NAME } from '@shared/constants';
+import { APP_NAME, LAYOUT } from '@shared/constants';
 import { useCallback, useEffect, useRef } from 'react';
-import { Outlet, useLocation } from 'react-router';
+import { Outlet } from 'react-router';
 import { useCurrentChatId } from './queries';
 import { useGlobalShortcuts } from './shortcuts';
-import { NARROW_QUERY, useMediaQuery } from './useMediaQuery';
 
 const OPEN_SIDEBAR_BUTTON_ID = 'sidebar-open';
 
 export function AppShell() {
-  const narrow = useMediaQuery(NARROW_QUERY);
   const collapsed = useUiStore((s) => s.sidebarCollapsed);
-  const overlayOpen = useUiStore((s) => s.sidebarOverlayOpen);
   const setCollapsed = useUiStore((s) => s.setSidebarCollapsed);
-  const setOverlayOpen = useUiStore((s) => s.setSidebarOverlayOpen);
-  const location = useLocation();
+  const toggleRightPanel = useUiStore((s) => s.toggleRightPanel);
+  const panelOpen = useUiStore((s) => s.rightPanelOpen);
   const currentChatId = useCurrentChatId();
 
   // `ChatHeader` titles the window after its chat; everywhere else it is just the app name.
@@ -30,8 +31,7 @@ export function AppShell() {
     if (!currentChatId) document.title = APP_NAME;
   }, [currentChatId]);
 
-  // Wide windows remember a collapsed sidebar; narrow windows always start with it closed (D19).
-  const visible = narrow ? overlayOpen : !collapsed;
+  const visible = !collapsed;
 
   // Focus follows the button the user pressed (the pressed button unmounts with its sidebar / main-area slot).
   const pendingFocus = useRef<string | null>(null);
@@ -42,38 +42,18 @@ export function AppShell() {
     if (id) document.getElementById(id)?.focus();
   }, [visible]);
 
-  const setVisible = useCallback(
-    (next: boolean) => (narrow ? setOverlayOpen(next) : setCollapsed(!next)),
-    [narrow, setOverlayOpen, setCollapsed],
-  );
+  const setVisible = useCallback((next: boolean) => setCollapsed(!next), [setCollapsed]);
   const toggleSidebar = useCallback(() => setVisible(!visible), [setVisible, visible]);
-  const closeOverlay = useCallback(() => setOverlayOpen(false), [setOverlayOpen]);
 
-  // Picking a chat (or leaving narrow mode) closes the overlay.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: location is the trigger
-  useEffect(() => {
-    setOverlayOpen(false);
-  }, [location.pathname, location.search, narrow, setOverlayOpen]);
-
-  useGlobalShortcuts({
-    toggleSidebar,
-    closeSidebarOverlay: narrow && overlayOpen ? closeOverlay : undefined,
-  });
+  useGlobalShortcuts({ toggleSidebar, toggleRightPanel: currentChatId ? toggleRightPanel : undefined });
 
   return (
-    <div className="flex h-full w-full overflow-hidden bg-(image:--backdrop) bg-bg text-text">
-      {narrow && visible ? (
-        <button
-          type="button"
-          tabIndex={-1}
-          aria-label="Close sidebar"
-          onClick={closeOverlay}
-          className="fixed inset-0 z-30 cursor-default bg-black/60"
-        />
-      ) : null}
+    <div
+      className="flex h-full w-full flex-nowrap overflow-hidden bg-(image:--backdrop) bg-bg text-text"
+      style={{ minWidth: LAYOUT.windowMinWidth, minHeight: LAYOUT.windowMinHeight }}
+    >
       {visible ? (
         <Sidebar
-          className={narrow ? 'fixed inset-y-0 left-0 z-40 shadow-2xl' : undefined}
           onCollapse={() => {
             pendingFocus.current = OPEN_SIDEBAR_BUTTON_ID;
             setVisible(false);
@@ -84,6 +64,7 @@ export function AppShell() {
       <main
         data-sidebar-hidden={visible ? undefined : ''}
         className="group relative flex min-h-0 min-w-0 flex-1 flex-col"
+        style={{ minWidth: LAYOUT.conversationMin }}
       >
         {visible ? null : (
           <IconButton
@@ -100,6 +81,8 @@ export function AppShell() {
         )}
         <Outlet />
       </main>
+
+      {currentChatId && panelOpen ? <RightPanel chatId={currentChatId} /> : null}
 
       <SettingsModal />
       <NewProjectModal />

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { location, renderApp, resetUi, seededClient } from './test-utils';
 
@@ -85,38 +85,5 @@ describe('sidebar collapse (D2) and responsive (D19)', () => {
     expect(screen.queryByRole('complementary')).toBeNull();
     ctrl('b');
     expect(screen.getByRole('complementary')).toBeTruthy();
-  });
-
-  it('starts collapsed at ≤ 760px and opens as an overlay that closes on navigation', async () => {
-    vi.stubGlobal('matchMedia', (query: string) => ({
-      matches: query.includes('max-width: 760px'),
-      media: query,
-      addEventListener() {},
-      removeEventListener() {},
-    }));
-    const { client, chat, project } = await seeded();
-    renderApp({ client });
-    expect(screen.queryByRole('complementary')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Open sidebar' }));
-    const sidebar = await screen.findByRole('complementary');
-    expect(sidebar.className).toContain('fixed');
-    fireEvent.click(await within(sidebar).findByRole('button', { name: new RegExp(`^${project.name}`) }));
-    fireEvent.click(await within(sidebar).findByRole('link', { name: chat.title }));
-    await waitFor(() => expect(screen.queryByRole('complementary')).toBeNull());
-    await waitFor(() => expect(location()).toBe(`/chat/${chat.id}`));
-  });
-
-  it('Escape closes the overlay', async () => {
-    vi.stubGlobal('matchMedia', (query: string) => ({
-      matches: true,
-      media: query,
-      addEventListener() {},
-      removeEventListener() {},
-    }));
-    renderApp();
-    fireEvent.click(screen.getByRole('button', { name: 'Open sidebar' }));
-    await screen.findByRole('complementary');
-    fireEvent.keyDown(window, { key: 'Escape' });
-    await waitFor(() => expect(screen.queryByRole('complementary')).toBeNull());
   });
 });

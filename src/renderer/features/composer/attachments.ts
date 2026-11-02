@@ -11,6 +11,27 @@ export const IMAGE_UNSUPPORTED_MESSAGE = 'This model does not support image inpu
 
 const isImageFile = (file: File) => (IMAGE_MIME_TYPES as readonly string[]).includes(file.type);
 
+/**
+ * Composers that accept already-uploaded files (the Files panel's Attach button), by chat id. A reply composer
+ * registers itself with `Composer`'s `sinkKey`.
+ */
+const sinks = new Map<string, (ref: AttachmentRef) => void>();
+
+export function registerAttachmentSink(key: string, add: (ref: AttachmentRef) => void): () => void {
+  sinks.set(key, add);
+  return () => {
+    if (sinks.get(key) === add) sinks.delete(key);
+  };
+}
+
+/** Adds an uploaded attachment to the chat's reply composer. False when no composer is mounted for it. */
+export function addAttachmentRef(key: string, ref: AttachmentRef): boolean {
+  const add = sinks.get(key);
+  if (!add) return false;
+  add(ref);
+  return true;
+}
+
 export interface AddResult {
   /** Images were refused because the selected model has no image input. */
   rejectedImages: boolean;
@@ -85,6 +106,24 @@ export function useDraftAttachments(api: ApiClient, supportsImages: boolean) {
     [commit, upload],
   );
 
+  /** Adds a file that is already uploaded (unbound attachment). Same per-message limit as `add`. */
+  const addRef = useCallback(
+    (ref: AttachmentRef) => {
+      const live = itemsRef.current.filter((a) => a.status !== 'error').length;
+      const base = { key: crypto.randomUUID(), name: ref.name, size: ref.size, isImage: ref.kind === 'image' };
+      if (live >= LIMITS.attachmentsPerMessage) {
+        void api.deleteAttachment(ref.id).catch(() => {});
+        commit([
+          ...itemsRef.current,
+          { ...base, status: 'error', error: `Up to ${LIMITS.attachmentsPerMessage} files per message.` },
+        ]);
+        return;
+      }
+      commit([...itemsRef.current, { ...base, status: 'ready', ref }]);
+    },
+    [api, commit],
+  );
+
   const discard = useCallback(
     (list: DraftAttachment[]) => {
       for (const a of list) {
@@ -128,6 +167,7 @@ export function useDraftAttachments(api: ApiClient, supportsImages: boolean) {
     uploading: items.some((a) => a.status === 'uploading'),
     ready: items.filter((a) => a.status === 'ready' && a.ref),
     add,
+    addRef,
     remove,
     removeImages,
     take,

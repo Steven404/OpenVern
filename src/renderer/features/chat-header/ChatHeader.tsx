@@ -2,6 +2,7 @@ import { useProjects } from '@renderer/app/queries';
 import { APP_NAME } from '@shared/constants';
 import type { ChatSummary } from '@shared/types';
 import { useEffect } from 'react';
+import { RightPanelToggle } from '../right-panel';
 import { ChatOptionsMenu } from './ChatOptionsMenu';
 
 /** D8 + D9: breadcrumb (`PROJECT /` or `Chats /`), chat title, options menu. Also owns `document.title`. */
@@ -21,7 +22,7 @@ export function ChatHeader({ chat }: { chat: ChatSummary }) {
   }, [chat.title]);
 
   return (
-    <header className="flex min-h-(--height-header) items-center gap-3 border-b border-border-header px-6 py-3.5 group-data-[sidebar-hidden]:pl-16">
+    <header className="flex min-h-(--height-header) items-center gap-3 border-b border-border-header py-3 pr-3 pl-6 group-data-[sidebar-hidden]:pl-16">
       {crumb ? (
         <span className="max-w-[40%] shrink-0 truncate font-mono text-xs tracking-[0.08em] text-text-muted uppercase">
           {crumb} /
@@ -31,6 +32,8 @@ export function ChatHeader({ chat }: { chat: ChatSummary }) {
         {chat.title}
       </h1>
       <ChatOptionsMenu chat={chat} />
+      <span aria-hidden="true" className="h-5 w-px shrink-0 bg-border" />
+      <RightPanelToggle />
     </header>
   );
 }

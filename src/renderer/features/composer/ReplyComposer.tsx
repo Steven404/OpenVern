@@ -43,6 +43,7 @@ function ReplyComposerInner({ chat }: ReplyComposerProps) {
           onStop={() => stop(chat.id)}
           onSend={onSend}
           autoFocus
+          sinkKey={chat.id}
         />
       </div>
     </div>

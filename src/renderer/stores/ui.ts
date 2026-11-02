@@ -7,6 +7,7 @@ import { create } from 'zustand';
 export const STORAGE_KEYS = {
   sidebarCollapsed: 'openvern.sidebarCollapsed',
   expandedProjects: 'openvern.expandedProjects',
+  rightPanelOpen: 'openvern.rightPanelOpen',
 } as const;
 
 function readStorage(key: string): string | null {
@@ -26,7 +27,7 @@ function writeStorage(key: string, value: string): void {
 }
 
 /** Persisted slice of the UI state. Exported so tests can simulate a reload. */
-export function readPersistedUi(): Pick<UiState, 'sidebarCollapsed' | 'expandedProjects'> {
+export function readPersistedUi(): Pick<UiState, 'sidebarCollapsed' | 'expandedProjects' | 'rightPanelOpen'> {
   let expandedProjects: Record<Id, true> = {};
   try {
     const parsed: unknown = JSON.parse(readStorage(STORAGE_KEYS.expandedProjects) ?? '[]');
@@ -38,7 +39,11 @@ export function readPersistedUi(): Pick<UiState, 'sidebarCollapsed' | 'expandedP
   } catch {
     // Corrupt value: start with everything collapsed.
   }
-  return { sidebarCollapsed: readStorage(STORAGE_KEYS.sidebarCollapsed) === '1', expandedProjects };
+  return {
+    sidebarCollapsed: readStorage(STORAGE_KEYS.sidebarCollapsed) === '1',
+    expandedProjects,
+    rightPanelOpen: readStorage(STORAGE_KEYS.rightPanelOpen) === '1',
+  };
 }
 
 /**
@@ -84,9 +89,11 @@ export interface UiState {
   sidebarCollapsed: boolean;
   setSidebarCollapsed(collapsed: boolean): void;
   toggleSidebarCollapsed(): void;
-  /** Narrow windows (≤ 760px, D19): the sidebar is an overlay that starts closed and is never persisted. */
-  sidebarOverlayOpen: boolean;
-  setSidebarOverlayOpen(open: boolean): void;
+
+  /** Right panel (Files / Terminal / Diff) open state. Persisted in `localStorage` (`openvern.rightPanelOpen`). */
+  rightPanelOpen: boolean;
+  setRightPanelOpen(open: boolean): void;
+  toggleRightPanel(): void;
 
   /** Expanded project rows in the sidebar (D5), by project id. Persisted (`openvern.expandedProjects`). */
   expandedProjects: Record<Id, true>;
@@ -119,8 +126,11 @@ export const useUiStore = create<UiState>()((set, get) => ({
     set({ sidebarCollapsed: collapsed });
   },
   toggleSidebarCollapsed: () => get().setSidebarCollapsed(!get().sidebarCollapsed),
-  sidebarOverlayOpen: false,
-  setSidebarOverlayOpen: (open) => set({ sidebarOverlayOpen: open }),
+  setRightPanelOpen: (open) => {
+    writeStorage(STORAGE_KEYS.rightPanelOpen, open ? '1' : '0');
+    set({ rightPanelOpen: open });
+  },
+  toggleRightPanel: () => get().setRightPanelOpen(!get().rightPanelOpen),
 
   toggleProject: (id) => (get().expandedProjects[id] ? get().collapseProject(id) : get().expandProject(id)),
   expandProject: (id) => {

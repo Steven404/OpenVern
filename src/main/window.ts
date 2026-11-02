@@ -2,7 +2,7 @@
 
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { APP_NAME } from '@shared/constants';
+import { APP_NAME, LAYOUT } from '@shared/constants';
 import { app, BrowserWindow, shell } from 'electron';
 import { devRendererUrl, isAppUrl, PROD_ORIGIN } from './origin';
 
@@ -54,8 +54,8 @@ export function createMainWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1440,
     height: 900,
-    minWidth: 800,
-    minHeight: 600,
+    minWidth: LAYOUT.windowMinWidth,
+    minHeight: LAYOUT.windowMinHeight,
     title: APP_NAME,
     backgroundColor: '#0f1428',
     show: false,

@@ -11,26 +11,22 @@ export function isOverlayOpen(): boolean {
 
 export interface GlobalShortcutHandlers {
   toggleSidebar(): void;
-  /** Escape closes the narrow-window sidebar overlay. */
-  closeSidebarOverlay?: () => void;
+  /** `Ctrl+]`. Undefined where there is no right panel (anywhere but a chat). */
+  toggleRightPanel?: () => void;
 }
 
 /**
  * Global keyboard shortcuts (S6.9): `Ctrl+N` → New chat (with the current chat's project preselected),
- * `Ctrl+B` → toggle the sidebar, `Escape` → close the sidebar overlay. `Cmd` works like `Ctrl`.
+ * `Ctrl+B` → toggle the sidebar, `Ctrl+]` → toggle the right panel (chats only). `Cmd` works like `Ctrl`.
  * Ignored while a dialog or menu is open. (Browsers reserve `Ctrl+N`; it works in Electron.)
  */
-export function useGlobalShortcuts({ toggleSidebar, closeSidebarOverlay }: GlobalShortcutHandlers): void {
+export function useGlobalShortcuts({ toggleSidebar, toggleRightPanel }: GlobalShortcutHandlers): void {
   const navigate = useNavigate();
   const newChatPath = useNewChatPath();
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.repeat || isOverlayOpen()) return;
-      if (event.key === 'Escape') {
-        closeSidebarOverlay?.();
-        return;
-      }
       if (!(event.ctrlKey || event.metaKey) || event.shiftKey || event.altKey) return;
       const key = event.key.toLowerCase();
       if (key === 'n') {
@@ -39,9 +35,12 @@ export function useGlobalShortcuts({ toggleSidebar, closeSidebarOverlay }: Globa
       } else if (key === 'b') {
         event.preventDefault();
         toggleSidebar();
+      } else if (key === ']' && toggleRightPanel) {
+        event.preventDefault();
+        toggleRightPanel();
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [navigate, newChatPath, toggleSidebar, closeSidebarOverlay]);
+  }, [navigate, newChatPath, toggleSidebar, toggleRightPanel]);
 }

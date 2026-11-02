@@ -25,7 +25,6 @@ export function resetUi(): void {
     ...readPersistedUi(),
     settingsOpen: false,
     newProjectOpen: false,
-    sidebarOverlayOpen: false,
   });
 }
 

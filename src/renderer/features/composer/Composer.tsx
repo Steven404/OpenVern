@@ -20,7 +20,7 @@ import { queryKeys } from '../../lib/query-keys';
 import { useUiStore } from '../../stores/ui';
 import { AttachMenu } from './AttachMenu';
 import { ComposerAttachmentChips } from './AttachmentChips';
-import { IMAGE_UNSUPPORTED_MESSAGE, useDraftAttachments } from './attachments';
+import { IMAGE_UNSUPPORTED_MESSAGE, registerAttachmentSink, useDraftAttachments } from './attachments';
 import { ModelPicker } from './ModelPicker';
 import { useModels, useSettings } from './queries';
 
@@ -48,6 +48,8 @@ export interface ComposerProps {
   /** `new` variant: the project chip, rendered in the toolbar after the attach button. */
   projectSlot?: ReactNode;
   autoFocus?: boolean;
+  /** Lets other features add uploaded files here through `addAttachmentRef(sinkKey, ref)` (reply: the chat id). */
+  sinkKey?: string;
 }
 
 const HINT = 'Enter to send · Shift + Enter for a new line';
@@ -66,6 +68,7 @@ export function Composer({
   onSend,
   projectSlot,
   autoFocus,
+  sinkKey,
 }: ComposerProps) {
   const api = useApiClient();
   const queryClient = useQueryClient();
@@ -88,7 +91,9 @@ export function Composer({
   const [sendError, setSendError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const attachments = useDraftAttachments(api, supportsImages);
-  const { items, uploading, ready } = attachments;
+  const { items, uploading, ready, addRef } = attachments;
+
+  useEffect(() => (sinkKey ? registerAttachmentSink(sinkKey, addRef) : undefined), [sinkKey, addRef]);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
