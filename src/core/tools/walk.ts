@@ -5,7 +5,7 @@ import { lstat, open, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { LIMITS } from '@shared/constants';
 import { ALWAYS_SKIPPED_DIRS, IgnoreScope } from './ignore';
-import { isDeniedEntryName, isWithinAny } from './sandbox';
+import { isDeniedEntryName, isHarnessDataDir, isInsideHarnessDataDir, isWithinAny } from './sandbox';
 
 export interface WalkEntry {
   /** Project-relative POSIX path. */
@@ -78,6 +78,7 @@ export async function* walk(opts: WalkOptions): AsyncGenerator<WalkEntry> {
   const { root, startRel, maxDepth, signal, deniedRoots } = opts;
   // `root` is real and the walker never follows symlinks, so `path.join(root, rel)` is a real path.
   if (isWithinAny(deniedRoots, path.join(root, startRel))) return;
+  if (await isInsideHarnessDataDir(root, path.join(root, startRel))) return;
 
   // `.gitignore` files of the start directory's ancestors apply to everything below it.
   let scope = IgnoreScope.empty;
@@ -117,6 +118,7 @@ export async function* walk(opts: WalkOptions): AsyncGenerator<WalkEntry> {
       if (isDeniedEntryName(d.name)) continue;
       const rel = item.rel === '' ? d.name : `${item.rel}/${d.name}`;
       if (kind === 'dir' && isWithinAny(deniedRoots, path.join(root, rel))) continue;
+      if (kind === 'dir' && (await isHarnessDataDir(path.join(root, rel)))) continue;
       if (local.ignores(rel, kind === 'dir')) continue;
       children.push({ rel, name: d.name, kind, depth: item.depth });
     }

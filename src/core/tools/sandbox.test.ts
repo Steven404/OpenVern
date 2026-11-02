@@ -182,7 +182,8 @@ describe('deniedRoots (S1-M1)', () => {
     ).toMatchObject(blocked);
   });
 
-  it('without deniedRoots the data dir is an ordinary folder', async () => {
-    expect(await resolveInProject(proj, '.dev-data/secrets.json')).toMatchObject({ ok: true, exists: true });
+  it('without deniedRoots a data dir is still denied by name, but other files stay ordinary', async () => {
+    expect(await resolveInProject(proj, '.dev-data/secrets.json')).toMatchObject(blocked);
+    expect(await resolveInProject(proj, 'README.md')).toMatchObject({ ok: true, exists: true });
   });
 });
