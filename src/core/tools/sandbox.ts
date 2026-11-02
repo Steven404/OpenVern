@@ -1,6 +1,6 @@
 // Path sandbox + secret deny list (plan S3.1, S3.2). Every tool resolves user-supplied paths through here.
 
-import { realpath } from 'node:fs/promises';
+import { lstat, realpath } from 'node:fs/promises';
 import path from 'node:path';
 
 export const OUTSIDE_MESSAGE = 'Path is outside the project';
@@ -13,6 +13,9 @@ function isDeniedName(name: string): boolean {
   const n = name.toLowerCase();
   if (n === '.git') return true;
   if (n === '.env') return true;
+  // Another harness instance's data dir (dev builds use `.dev-data`) and the key file every data dir holds.
+  if (n === '.dev-data' || n.startsWith('.dev-data-')) return true;
+  if (n === 'secrets.json') return true;
   if (n.startsWith('.env.') && !SAFE_ENV_NAMES.has(n)) return true;
   if (n.endsWith('.pem') || n.endsWith('.key') || n.endsWith('.p12')) return true;
   if (n.startsWith('id_rsa') || n.startsWith('id_ed25519')) return true;
@@ -27,6 +30,40 @@ export function isDeniedPath(relPath: string): boolean {
 /** Deny check for one directory entry name (used by the walker). */
 export function isDeniedEntryName(name: string): boolean {
   return isDeniedName(name);
+}
+
+async function isFile(p: string): Promise<boolean> {
+  try {
+    return (await lstat(p)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * True when `dirAbs` looks like a harness data dir (see `dataPaths`): it has `chats/index.json` AND at least one of
+ * `projects.json`, `settings.json`, `secrets.json`. `chats/index.json` is written on the first chat, and a chat needs a
+ * project, so every dir that holds conversations has both; a fresh dir (nothing sensitive yet) has neither. A
+ * bare `chats/` folder in an ordinary repo has no such sibling file. Costs one `lstat` for ordinary directories.
+ */
+export async function isHarnessDataDir(dirAbs: string): Promise<boolean> {
+  if (!(await isFile(path.join(dirAbs, 'chats', 'index.json')))) return false;
+  for (const f of ['projects.json', 'settings.json', 'secrets.json']) {
+    if (await isFile(path.join(dirAbs, f))) return true;
+  }
+  return false;
+}
+
+/** True when `dirAbs` or any directory between `realRoot` (inclusive) and it is a harness data dir. */
+export async function isInsideHarnessDataDir(realRoot: string, dirAbs: string): Promise<boolean> {
+  const parts = path.relative(realRoot, dirAbs).split(path.sep).filter(Boolean);
+  let cur = realRoot;
+  if (await isHarnessDataDir(cur)) return true;
+  for (const part of parts) {
+    cur = path.join(cur, part);
+    if (await isHarnessDataDir(cur)) return true;
+  }
+  return false;
 }
 
 export type ResolveResult =
@@ -109,6 +146,10 @@ export async function resolveInProject(
   if (!isInside(realRoot, real)) return { ok: false, kind: 'outside', message: OUTSIDE_MESSAGE };
   const rel = toPosix(path.relative(realRoot, real));
   if (isDeniedPath(rel) || isWithinAny(deniedRoots, real)) {
+    return { ok: false, kind: 'blocked', message: BLOCKED_MESSAGE };
+  }
+  // The real path (or a directory above it) may be a data dir of any name; ancestors only, to keep the cost bounded.
+  if (await isInsideHarnessDataDir(realRoot, exists ? real : path.dirname(real))) {
     return { ok: false, kind: 'blocked', message: BLOCKED_MESSAGE };
   }
   return { ok: true, abs: real, rel, root: realRoot, exists };
