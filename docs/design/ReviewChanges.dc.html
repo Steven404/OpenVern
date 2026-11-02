@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>OpenVern — review changes</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&amp;family=Figtree:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;background:#0f1428}
+a{color:#ecf0fa}a:hover{color:#ffffff}
+::selection{background:rgba(246,189,96,0.28);color:#fff4e0}
+.v-root{height:100vh;min-height:720px}
+.v-btn{transition:background-color .15s ease,border-color .15s ease,color .15s ease,opacity .15s ease}
+.v-row:hover{background:rgba(200,215,255,0.05)}
+.v-ghost:hover{background:rgba(200,215,255,0.07);color:#ecf0fa}
+.v-new:hover{background:#2c3666;border-color:#46528c}
+.v-line:hover{background:#232c55;border-color:#46528c;color:#ecf0fa}
+.v-file:hover{background:rgba(200,215,255,0.05)}
+.v-primary:hover{filter:brightness(1.06)}
+.v-accept:hover{background:rgba(159,212,179,0.16);border-color:#5f927a;color:#d2efdd}
+.v-reject:hover{background:rgba(229,134,95,0.14);border-color:#a15b45;color:#f8c6b2}
+.v-btn:focus-visible,.v-input:focus-visible{outline:2px solid #f6bd60;outline-offset:2px}
+.v-composer:focus-within{border-color:#5a68a8}
+.v-input::placeholder{color:#8792b6}
+.v-scroll{scrollbar-width:thin;scrollbar-color:#343f72 transparent}
+.d-row{display:flex;align-items:flex-start;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px;line-height:20px;color:#bcc4dc}
+.d-num{flex:none;width:40px;padding-right:8px;text-align:right;color:#8590b4;user-select:none;font-variant-numeric:tabular-nums;box-sizing:border-box}
+.d-sign{flex:none;width:18px;text-align:center;user-select:none;color:#8590b4}
+.d-code{flex:1;min-width:0;padding-right:16px;white-space:pre-wrap;overflow-wrap:anywhere}
+.d-add{background:rgba(159,212,179,0.09);color:#e8f4ee}
+.d-add .d-num{background:rgba(159,212,179,0.10);color:#8fc2a4}
+.d-add .d-sign{color:#9fd4b3}
+.d-del{background:rgba(229,134,95,0.11);color:#f6e4dc}
+.d-del .d-num{background:rgba(229,134,95,0.12);color:#d89a84}
+.d-del .d-sign{color:#f09a7c}
+.d-none{background:repeating-linear-gradient(135deg,transparent 0 6px,rgba(200,215,255,0.025) 6px 12px)}
+.d-half{flex:1 1 50%;min-width:0;display:flex;align-items:flex-start}
+.d-half + .d-half{border-left:1px solid #20284a}
+@media (max-width:760px){.v-root{height:auto}.v-side{flex:1 1 100% !important;border-right:0 !important;border-bottom:1px solid #252e55}.v-pane{border-left:0 !important;border-top:1px solid #252e55;height:auto !important}}
+</style>
+</helmet>
+<div class="v-root" style="display: flex; flex-wrap: wrap; width: 100%; background: radial-gradient(90% 55% at 62% -12%, rgba(98,126,214,0.22), transparent 62%), linear-gradient(180deg, #121a38 0%, #0f1428 38%, #0d1224 100%); color: #ecf0fa; font-family: Figtree, system-ui, sans-serif; font-size: 15px; line-height: 1.5; box-sizing: border-box">
+
+  <!-- Sidebar (collapsed project list while reviewing) -->
+  <aside class="v-side" style="flex: 0 0 272px; display: flex; flex-direction: column; background: #0b0f20; border-right: 1px solid #20284a; box-sizing: border-box; min-height: 0">
+    <div style="display: flex; align-items: center; justify-content: space-between; padding: 18px 16px 14px 20px">
+      <span style="font-family: 'Bricolage Grotesque', sans-serif; font-weight: 700; font-size: 21px; letter-spacing: -0.02em; color: #ecf0fa">OpenVern<span style="color: {{accent}}">.</span></span>
+      <button class="v-btn v-ghost" type="button" aria-label="Collapse sidebar" style="width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 10px; background: transparent; color: #9ba5c6; cursor: pointer">
+        <svg width="18" height="18" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"></rect><path d="M9 4v16"></path></svg>
+      </button>
+    </div>
+    <div style="padding: 0 12px 8px">
+      <button class="v-btn v-new" type="button" style="width: 100%; min-height: 44px; display: flex; align-items: center; gap: 10px; padding: 0 12px; border: 1px solid #343f72; border-radius: 12px; background: #222a52; color: #ecf0fa; font: inherit; font-weight: 500; cursor: pointer; box-sizing: border-box">
+        <svg width="18" height="18" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+        <span style="flex: 1; text-align: left">New chat</span>
+        <span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9ba5c6; border: 1px solid #343f72; border-radius: 6px; padding: 1px 6px">Ctrl N</span>
+      </button>
+    </div>
+    <nav aria-label="Projects" style="flex: 1; overflow-y: auto; padding: 18px 12px 12px; min-height: 0">
+      <div style="display: flex; align-items: center; justify-content: space-between; padding: 0 8px 8px 8px">
+        <h2 style="margin: 0; font-family: 'JetBrains Mono', monospace; font-weight: 500; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: #9ba5c6">Projects</h2>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <button class="v-btn v-row" type="button" aria-expanded="true" style="width: 100%; min-height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 8px; border: 0; border-radius: 9px; background: transparent; color: #ecf0fa; font: inherit; font-size: 14px; font-weight: 500; cursor: pointer; text-align: left">
+          <svg width="14" height="14" sc-camel-view-box="0 0 24 24" fill="none" stroke="#8792b6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="transform: rotate(90deg)"><path d="M9 6l6 6-6 6"></path></svg>
+          <svg width="16" height="16" sc-camel-view-box="0 0 24 24" fill="none" stroke="#e5865f" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2h8.5A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"></path></svg>
+          <span style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">stefanos-ai-harness</span>
+          <span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #8792b6">4</span>
+        </button>
+        <ul style="list-style: none; margin: 2px 0 6px; padding: 0 0 0 30px; display: flex; flex-direction: column; gap: 1px">
+          <li><a class="v-btn v-row" href="#" aria-current="page" style="display: block; padding: 7px 10px; border-radius: 8px; font-size: 13.5px; text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: rgba(200,215,255,0.08); color: #ecf0fa">A write_file tool</a></li>
+          <li><a class="v-btn v-row" href="#" style="display: block; padding: 7px 10px; border-radius: 8px; font-size: 13.5px; text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #a9b2cf">Agent loop and tool calls</a></li>
+          <li><a class="v-btn v-row" href="#" style="display: block; padding: 7px 10px; border-radius: 8px; font-size: 13.5px; text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #a9b2cf">Streaming replies over SSE</a></li>
+        </ul>
+        <button class="v-btn v-row" type="button" aria-expanded="false" style="width: 100%; min-height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 8px; border: 0; border-radius: 9px; background: transparent; color: #ecf0fa; font: inherit; font-size: 14px; font-weight: 500; cursor: pointer; text-align: left">
+          <svg width="14" height="14" sc-camel-view-box="0 0 24 24" fill="none" stroke="#8792b6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg>
+          <svg width="16" height="16" sc-camel-view-box="0 0 24 24" fill="none" stroke="#e5865f" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2h8.5A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"></path></svg>
+          <span style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">Offline Notes App</span>
+          <span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #8792b6">2</span>
+        </button>
+      </div>
+    </nav>
+    <div style="padding: 10px 12px 14px; border-top: 1px solid #20284a; display: flex; align-items: center; gap: 4px">
+      <button class="v-btn v-ghost" type="button" aria-label="Settings" style="min-height: 40px; display: inline-flex; align-items: center; gap: 10px; padding: 0 10px; border: 0; border-radius: 10px; background: transparent; color: #c3cbe3; font: inherit; font-size: 14px; cursor: pointer">
+        <svg width="19" height="19" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        <span>Settings</span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- Conversation -->
+  <main style="flex: 999 1 360px; min-width: 0; display: flex; flex-direction: column; min-height: 0; height: 100%">
+    <header style="display: flex; align-items: center; gap: 12px; padding: 14px 24px; border-bottom: 1px solid #1c2343; min-height: 64px; box-sizing: border-box">
+      <span style="font-family: 'JetBrains Mono', monospace; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: #9ba5c6; white-space: nowrap">stefanos-ai-harness /</span>
+      <h1 style="margin: 0; flex: 1; min-width: 0; font-size: 15px; font-weight: 600; color: #ecf0fa; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">A write_file tool</h1>
+      <button class="v-btn v-ghost" type="button" aria-label="Chat options" style="width: 40px; height: 40px; flex: none; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 10px; background: transparent; color: #9ba5c6; cursor: pointer">
+        <svg width="18" height="18" sc-camel-view-box="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6"></circle><circle cx="12" cy="12" r="1.6"></circle><circle cx="19" cy="12" r="1.6"></circle></svg>
+      </button>
+    </header>
+
+    <section class="v-scroll" aria-label="Conversation" style="flex: 1; overflow-y: auto; padding: 36px 24px 24px; min-height: 0">
+      <div style="max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: 28px">
+
+        <div style="align-self: flex-end; max-width: 86%; background: #232c55; border: 1px solid #2f3a68; border-radius: 18px 18px 6px 18px; padding: 12px 16px; color: #ecf0fa; font-size: 15px">Add a write_file tool. It must ask me before anything touches disk, and stay off for projects that haven't opted in.</div>
+
+        <article style="display: flex; flex-direction: column; gap: 14px; color: #d8deef; font-size: 15px; line-height: 1.65">
+          <div style="display: flex; align-items: center; gap: 10px">
+            <span aria-hidden="true" style="width: 26px; height: 26px; border-radius: 8px; background: {{accent}}; color: #0f1428; display: inline-flex; align-items: center; justify-content: center"><svg width="15" height="15" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8"></path></svg></span>
+            <span style="font-weight: 600; color: #ecf0fa; font-size: 14px">OpenVern</span>
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 4px">
+            <div style="border: 1px solid #29325c; border-radius: 10px; background: #151b35; display: flex; align-items: center; gap: 10px; padding: 8px 12px; font-size: 13px; color: #c3cbe3">
+              <svg width="15" height="15" sc-camel-view-box="0 0 24 24" fill="none" stroke="#9fd4b3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5L20 7"></path></svg>
+              <span style="font-family: 'JetBrains Mono', monospace; font-size: 12.5px">read_file</span>
+              <span style="color: #9ba5c6; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">src/core/tools/index.ts</span>
+              <span style="font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: #8792b6">0.1s</span>
+            </div>
+            <div style="border: 1px solid #29325c; border-radius: 10px; background: #151b35; display: flex; align-items: center; gap: 10px; padding: 8px 12px; font-size: 13px; color: #c3cbe3">
+              <svg width="15" height="15" sc-camel-view-box="0 0 24 24" fill="none" stroke="#9fd4b3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5L20 7"></path></svg>
+              <span style="font-family: 'JetBrains Mono', monospace; font-size: 12.5px">read_file</span>
+              <span style="color: #9ba5c6; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">src/core/tools/sandbox.ts</span>
+              <span style="font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: #8792b6">0.1s</span>
+            </div>
+          </div>
+
+          <p style="margin: 0">The tool reuses the sandbox's <code style="font-family: 'JetBrains Mono', monospace; font-size: 13px; color: #ecf0fa; background: #1d2446; padding: 1px 5px; border-radius: 5px">resolveInside</code>, so it can't escape the project root, and it only joins the tool list when the project passes a confirm hook.</p>
+
+          <!-- Proposed edits card -->
+          <div style="border: 1px solid {{cardBorder}}; border-radius: 14px; background: #151b35; overflow: hidden">
+            <div style="display: flex; align-items: center; gap: 10px; padding: 12px 14px 10px 16px; flex-wrap: wrap">
+              <svg width="17" height="17" sc-camel-view-box="0 0 24 24" fill="none" stroke="{{accent}}" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path><path d="M14 3v5h5"></path><path d="M9 13h6M12 10v6"></path></svg>
+              <span style="font-weight: 600; font-size: 14px; color: #ecf0fa">{{cardTitle}}</span>
+              <span style="font-size: 13px; color: #9ba5c6">{{fileCountLabel}}</span>
+              <span style="flex: 1"></span>
+              <span style="font-family: 'JetBrains Mono', monospace; font-size: 12px; display: inline-flex; gap: 8px; font-variant-numeric: tabular-nums"><span style="color: #9fd4b3">+{{totalAdd}}</span><span style="color: #f09a7c">−{{totalDel}}</span></span>
+            </div>
+            <ul style="list-style: none; margin: 0; padding: 0 8px 8px; display: flex; flex-direction: column; gap: 1px">
+              <sc-for list="{{files}}" as="f" hint-placeholder-count="3">
+                <li>
+                  <button class="v-btn v-file" type="button" sc-camel-on-click="{{f.openFromCard}}" style="width: 100%; min-height: 34px; display: flex; align-items: center; gap: 10px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: #c3cbe3; font: inherit; font-size: 13px; cursor: pointer; text-align: left">
+                    <span style="{{f.badgeStyle}}">{{f.status}}</span>
+                    <span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: 'JetBrains Mono', monospace; font-size: 12.5px"><span style="color: #8792b6">{{f.dir}}</span><span style="color: #ecf0fa">{{f.name}}</span></span>
+                    <span style="font-family: 'JetBrains Mono', monospace; font-size: 11.5px; display: inline-flex; gap: 6px; font-variant-numeric: tabular-nums"><span style="color: #8fc2a4">+{{f.add}}</span><span style="color: #d89a84">−{{f.del}}</span></span>
+                  </button>
+                </li>
+              </sc-for>
+            </ul>
+            <div style="display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 16px; border-top: 1px solid #20284a; background: #111630; flex-wrap: wrap">
+              <sc-if value="{{applied}}" hint-placeholder-val="{{false}}">
+                <svg width="15" height="15" sc-camel-view-box="0 0 24 24" fill="none" stroke="#9fd4b3" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5L20 7"></path></svg>
+                <span style="flex: 1; min-width: 0; font-size: 13px; color: #c3cbe3">{{appliedLabel}}</span>
+              </sc-if>
+              <sc-if value="{{pending}}" hint-placeholder-val="{{true}}">
+                <span aria-hidden="true" style="width: 7px; height: 7px; border-radius: 50%; background: {{accent}}; flex: none"></span>
+                <span style="flex: 1; min-width: 0; font-size: 13px; color: #c3cbe3">Nothing is written until you apply. <span style="color: #9ba5c6">{{progressLabel}}</span></span>
+                <button class="v-btn v-line" type="button" aria-pressed="{{paneOpen}}" sc-camel-on-click="{{togglePane}}" style="min-height: 34px; display: inline-flex; align-items: center; gap: 8px; padding: 0 12px; border: 1px solid #343f72; border-radius: 10px; background: {{reviewBtnBg}}; color: #ecf0fa; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer">
+                  {{reviewBtnLabel}}
+                  <svg width="14" height="14" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"></rect><path d="M15 4v16"></path></svg>
+                </button>
+              </sc-if>
+            </div>
+          </div>
+
+          <p style="margin: 0">Once this lands, the agent loop's turn limit still applies, and a declined write comes back to the model as a failed tool result, so it can ask what you'd prefer instead.</p>
+        </article>
+      </div>
+    </section>
+
+    <div style="padding: 8px 24px 20px">
+      <form class="v-composer" style="max-width: 720px; margin: 0 auto; background: #1a2142; border: 1px solid #343f72; border-radius: 18px; padding: 14px 14px 10px 18px; box-sizing: border-box; display: flex; flex-direction: column; gap: 8px">
+        <label for="composer-review" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Message</label>
+        <textarea id="composer-review" class="v-input" rows="2" placeholder="Reply to OpenVern…" style="resize: none; border: 0; outline: 0; background: transparent; color: #ecf0fa; font: inherit; font-size: 15px; line-height: 1.5"></textarea>
+        <div style="display: flex; align-items: center; gap: 6px">
+          <button class="v-btn v-ghost" type="button" aria-label="Attach file" style="width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 10px; background: transparent; color: #9ba5c6; cursor: pointer">
+            <svg width="18" height="18" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+          </button>
+          <span style="flex: 1"></span>
+          <button class="v-btn v-ghost" type="button" style="min-height: 36px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border: 0; border-radius: 10px; background: transparent; color: #c3cbe3; font: inherit; font-size: 13.5px; cursor: pointer">
+            [Model name]
+            <svg width="14" height="14" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
+          </button>
+          <button class="v-btn" type="submit" aria-label="Send message" style="width: 38px; height: 38px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 12px; background: {{accent}}; color: #0f1428; cursor: pointer">
+            <svg width="18" height="18" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"></path></svg>
+          </button>
+        </div>
+      </form>
+    </div>
+  </main>
+
+  <!-- Review pane -->
+  <sc-if value="{{paneOpen}}" hint-placeholder-val="{{true}}">
+    <section class="v-pane" aria-label="Review changes" style="flex: 0 1 {{paneWidth}}; max-width: 100%; min-width: 0; height: 100%; display: flex; flex-direction: column; background: #0b0f20; border-left: 1px solid #20284a; box-sizing: border-box; min-height: 0">
+
+      <header style="display: flex; align-items: center; gap: 10px; padding: 12px 12px 12px 20px; border-bottom: 1px solid #1c2343; min-height: 64px; box-sizing: border-box; flex-wrap: wrap">
+        <h2 style="margin: 0; font-size: 15px; font-weight: 600; color: #ecf0fa">Review changes</h2>
+        <span style="font-family: 'JetBrains Mono', monospace; font-size: 12px; display: inline-flex; gap: 8px; font-variant-numeric: tabular-nums"><span style="color: #9fd4b3">+{{totalAdd}}</span><span style="color: #f09a7c">−{{totalDel}}</span></span>
+        <span style="flex: 1"></span>
+        <div role="group" aria-label="Diff layout" style="display: inline-flex; padding: 3px; gap: 2px; border: 1px solid #29325c; border-radius: 10px; background: #131932">
+          <button class="v-btn" type="button" aria-pressed="{{unified}}" sc-camel-on-click="{{setUnified}}" style="{{unifiedBtnStyle}}">
+            <svg width="14" height="14" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2.5"></rect><path d="M8 9h8M8 12h8M8 15h5"></path></svg>
+            Unified
+          </button>
+          <button class="v-btn" type="button" aria-pressed="{{split}}" sc-camel-on-click="{{setSplit}}" style="{{splitBtnStyle}}">
+            <svg width="14" height="14" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2.5"></rect><path d="M12 4v16"></path></svg>
+            Split
+          </button>
+        </div>
+        <button class="v-btn v-ghost" type="button" aria-label="Close review" sc-camel-on-click="{{togglePane}}" style="width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 10px; background: transparent; color: #9ba5c6; cursor: pointer">
+          <svg width="17" height="17" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+        </button>
+      </header>
+
+      <!-- Files -->
+      <nav aria-label="Changed files" style="padding: 10px 10px 10px; border-bottom: 1px solid #1c2343">
+        <ul style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px">
+          <sc-for list="{{files}}" as="f" hint-placeholder-count="3">
+            <li>
+              <button class="v-btn v-file" type="button" aria-current="{{f.current}}" sc-camel-on-click="{{f.select}}" style="{{f.rowStyle}}">
+                <span style="{{f.badgeStyle}}">{{f.status}}</span>
+                <span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: 'JetBrains Mono', monospace; font-size: 12.5px"><span style="color: #8792b6">{{f.dir}}</span><span style="color: #ecf0fa">{{f.name}}</span></span>
+                <span style="font-size: 12px; color: {{f.stateColor}}; white-space: nowrap">{{f.stateLabel}}</span>
+                <span style="font-family: 'JetBrains Mono', monospace; font-size: 11.5px; display: inline-flex; gap: 6px; min-width: 64px; justify-content: flex-end; font-variant-numeric: tabular-nums"><span style="color: #8fc2a4">+{{f.add}}</span><span style="color: #d89a84">−{{f.del}}</span></span>
+              </button>
+            </li>
+          </sc-for>
+        </ul>
+      </nav>
+
+      <!-- Diff for the selected file -->
+      <div class="v-scroll" style="flex: 1; min-height: 0; overflow-y: auto; background: #0a0d1c">
+        <div style="position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 10px; padding: 10px 16px; background: #0a0d1c; border-bottom: 1px solid #1a2142">
+          <span style="font-family: 'JetBrains Mono', monospace; font-size: 12.5px; color: #ecf0fa; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{cur.path}}</span>
+          <span style="font-size: 12px; color: #9ba5c6; white-space: nowrap">{{cur.kindLabel}}</span>
+        </div>
+
+        <sc-for list="{{cur.hunks}}" as="h" hint-placeholder-count="2">
+          <div>
+            <sc-if value="{{h.gapLabel}}" hint-placeholder-val="{{false}}">
+              <button class="v-btn v-ghost" type="button" style="width: 100%; min-height: 30px; display: flex; align-items: center; gap: 8px; padding: 0 16px 0 22px; border: 0; border-top: 1px solid #1a2040; border-bottom: 1px solid #1a2040; background: #0d1123; color: #8792b6; font: inherit; font-size: 12px; cursor: pointer; text-align: left">
+                <svg width="14" height="14" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 9l4-4 4 4M8 15l4 4 4-4"></path></svg>
+                {{h.gapLabel}}
+              </button>
+            </sc-if>
+            <div style="{{h.wrapStyle}}">
+              <div style="display: flex; align-items: center; gap: 10px; padding: 8px 12px 8px 16px; background: #121731; border-bottom: 1px solid #1a2142; flex-wrap: wrap">
+                <span style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #9ba5c6; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap"><span style="color: #a9b8f0">{{h.range}}</span> {{h.label}}</span>
+                <sc-if value="{{h.undecided}}" hint-placeholder-val="{{true}}">
+                  <div style="display: inline-flex; gap: 6px">
+                    <button class="v-btn v-reject" type="button" sc-camel-on-click="{{h.reject}}" aria-label="Reject this change" style="min-height: 30px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border: 1px solid #343f72; border-radius: 8px; background: transparent; color: #c3cbe3; font: inherit; font-size: 12.5px; cursor: pointer">
+                      <svg width="13" height="13" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+                      Reject
+                    </button>
+                    <button class="v-btn v-accept" type="button" sc-camel-on-click="{{h.accept}}" aria-label="Accept this change" style="min-height: 30px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border: 1px solid #343f72; border-radius: 8px; background: transparent; color: #c3cbe3; font: inherit; font-size: 12.5px; cursor: pointer">
+                      <svg width="13" height="13" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5L20 7"></path></svg>
+                      Accept
+                    </button>
+                  </div>
+                </sc-if>
+                <sc-if value="{{h.decided}}" hint-placeholder-val="{{false}}">
+                  <div style="display: inline-flex; align-items: center; gap: 4px">
+                    <span style="{{h.pillStyle}}">{{h.decisionLabel}}</span>
+                    <button class="v-btn v-ghost" type="button" sc-camel-on-click="{{h.undo}}" style="min-height: 30px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: #9ba5c6; font: inherit; font-size: 12.5px; cursor: pointer">Undo</button>
+                  </div>
+                </sc-if>
+              </div>
+
+              <div style="padding: 4px 0 8px">
+                <sc-if value="{{unified}}" hint-placeholder-val="{{true}}">
+                  <sc-for list="{{h.lines}}" as="l" hint-placeholder-count="6">
+                    <div class="d-row {{l.cls}}"><span class="d-num">{{l.o}}</span><span class="d-num">{{l.n}}</span><span class="d-sign">{{l.sign}}</span><span class="d-code">{{l.code}}</span></div>
+                  </sc-for>
+                </sc-if>
+                <sc-if value="{{split}}" hint-placeholder-val="{{false}}">
+                  <sc-for list="{{h.pairs}}" as="r" hint-placeholder-count="6">
+                    <div class="d-row">
+                      <div class="d-half {{r.lc}}"><span class="d-num">{{r.lo}}</span><span class="d-sign">{{r.ls}}</span><span class="d-code">{{r.lcode}}</span></div>
+                      <div class="d-half {{r.rc}}"><span class="d-num">{{r.rn}}</span><span class="d-sign">{{r.rs}}</span><span class="d-code">{{r.rcode}}</span></div>
+                    </div>
+                  </sc-for>
+                </sc-if>
+              </div>
+            </div>
+          </div>
+        </sc-for>
+
+        <sc-if value="{{cur.nextLabel}}" hint-placeholder-val="{{true}}">
+          <div style="display: flex; justify-content: flex-end; padding: 16px">
+            <button class="v-btn v-line" type="button" sc-camel-on-click="{{cur.next}}" style="min-height: 34px; display: inline-flex; align-items: center; gap: 8px; padding: 0 12px; border: 1px solid #343f72; border-radius: 10px; background: transparent; color: #c3cbe3; font: inherit; font-size: 13px; cursor: pointer">
+              {{cur.nextLabel}}
+              <svg width="14" height="14" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
+            </button>
+          </div>
+        </sc-if>
+      </div>
+
+      <!-- Apply bar -->
+      <footer style="display: flex; align-items: center; gap: 8px; padding: 12px 14px 14px 20px; border-top: 1px solid #20284a; flex-wrap: wrap">
+        <div style="flex: 1; min-width: 160px; display: flex; flex-direction: column; gap: 2px">
+          <span style="font-size: 13px; color: #ecf0fa; font-weight: 500">{{progressLabel}}</span>
+          <span style="font-size: 12px; color: #9ba5c6">{{footerHint}}</span>
+        </div>
+        <button class="v-btn v-ghost" type="button" sc-camel-on-click="{{rejectAll}}" style="min-height: 38px; padding: 0 12px; border: 0; border-radius: 10px; background: transparent; color: #c3cbe3; font: inherit; font-size: 13.5px; cursor: pointer">Reject all</button>
+        <button class="v-btn v-line" type="button" sc-camel-on-click="{{acceptAll}}" style="min-height: 38px; padding: 0 12px; border: 1px solid #343f72; border-radius: 10px; background: transparent; color: #ecf0fa; font: inherit; font-size: 13.5px; cursor: pointer">Accept all</button>
+        <button class="v-btn v-primary" type="button" sc-camel-on-click="{{apply}}" disabled="{{applyDisabled}}" style="{{applyStyle}}">
+          <svg width="15" height="15" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5L20 7"></path></svg>
+          {{applyLabel}}
+        </button>
+      </footer>
+    </section>
+  </sc-if></div>
+</x-dc>
+<script type="text/x-dc" data-dc-script="" data-props="{&quot;accent&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#f6bd60&quot;,&quot;options&quot;:[&quot;#f6bd60&quot;,&quot;#e5865f&quot;,&quot;#a9b8f0&quot;]},&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:900}}">
+class Component extends DCLogic {
+  static build() {
+    const FILES = [
+      {
+        id: 'write', path: 'src/core/tools/write-file.ts', status: 'A',
+        hunks: [{ id: 'w1', os: 0, ns: 1, label: '', lines: [
+          "+import { promises as fs } from 'node:fs';",
+          "+import { LIMITS } from '@shared/constants';",
+          "+import { CoreError } from '../errors';",
+          "+import { resolveInside } from './sandbox';",
+          "+import type { Tool } from './types';",
+          "+",
+          "+export type ConfirmWrite = (req: { path: string; bytes: number }, signal: AbortSignal) => Promise<boolean>;",
+          "+",
+          "+/** Creates or overwrites a file inside the project. Every call waits for the user's approval. */",
+          "+export function writeFileTool(root: string, confirm: ConfirmWrite): Tool {",
+          "+  return {",
+          "+    name: 'write_file',",
+          "+    description: 'Create or overwrite a UTF-8 text file inside the project.',",
+          "+    async run({ path, content }, signal) {",
+          "+      const target = await resolveInside(root, path);",
+          "+      const bytes = Buffer.byteLength(content);",
+          "+      if (bytes > LIMITS.maxWriteBytes) throw new CoreError('too_large', `${path} is over the write limit.`);",
+          "+      if (!(await confirm({ path, bytes }, signal))) {",
+          "+        throw new CoreError('tool_rejected', `Writing ${path} was declined.`);",
+          "+      }",
+          "+      await fs.writeFile(target, content, 'utf8');",
+          "+      return { ok: true, output: `Wrote ${bytes} bytes to ${path}`, summary: path };",
+          "+    },",
+          "+  };",
+          "+}"
+        ] }]
+      },
+      {
+        id: 'index', path: 'src/core/tools/index.ts', status: 'M',
+        hunks: [
+          { id: 'i1', os: 4, ns: 4, label: '', lines: [
+            " import { readFileTool } from './read-file';",
+            " import { searchTool } from './search';",
+            " import type { GetProjectTools, Tool } from './types';",
+            "+import { type ConfirmWrite, writeFileTool } from './write-file';",
+            " ",
+            " export { createWalker } from './walk';"
+          ] },
+          { id: 'i2', os: 21, ns: 22, label: 'export function createProjectTools', lines: [
+            " /** The tools a chat gets for its project. */",
+            "-export function createProjectTools(root: string): Tool[] {",
+            "-  return [listFilesTool(root), readFileTool(root), searchTool(root)];",
+            "+export function createProjectTools(root: string, confirm?: ConfirmWrite): Tool[] {",
+            "+  const tools = [listFilesTool(root), readFileTool(root), searchTool(root)];",
+            "+  // Write access is opt-in: without a confirm hook the project stays read-only.",
+            "+  if (confirm) tools.push(writeFileTool(root, confirm));",
+            "+  return tools;",
+            " }",
+            " ",
+            " export const getProjectTools: GetProjectTools = (project) =>",
+            "-  createProjectTools(project.root);",
+            "+  createProjectTools(project.root, project.confirmWrite);"
+          ] }
+        ]
+      },
+      {
+        id: 'const', path: 'src/shared/constants.ts', status: 'M',
+        hunks: [{ id: 'c1', os: 42, ns: 42, label: 'export const LIMITS = {', lines: [
+          "   searchMaxResults: 200,",
+          "   readFileMaxBytes: 256 * 1024,",
+          "+  /** Largest file write_file may create or overwrite. */",
+          "+  maxWriteBytes: 256 * 1024,",
+          " } as const;"
+        ] }]
+      }
+    ];
+
+    function parseHunk(h) {
+      let o = h.os, n = h.ns, oc = 0, nc = 0;
+      const lines = h.lines.map((raw) => {
+        const t = raw[0], code = raw.slice(1);
+        if (t === '+') { nc++; return { cls: 'd-add', o: '', n: String(n++), sign: '+', code, t }; }
+        if (t === '-') { oc++; return { cls: 'd-del', o: String(o++), n: '', sign: '−', code, t }; }
+        oc++; nc++;
+        return { cls: '', o: String(o++), n: String(n++), sign: '', code, t };
+      });
+      const pairs = [];
+      for (let i = 0; i < lines.length;) {
+        if (lines[i].t === ' ') {
+          const l = lines[i++];
+          pairs.push({ lc: '', rc: '', lo: l.o, rn: l.n, ls: '', rs: '', lcode: l.code, rcode: l.code });
+          continue;
+        }
+        const dels = [], adds = [];
+        while (i < lines.length && lines[i].t === '-') dels.push(lines[i++]);
+        while (i < lines.length && lines[i].t === '+') adds.push(lines[i++]);
+        for (let k = 0; k < Math.max(dels.length, adds.length); k++) {
+          const d = dels[k], a = adds[k];
+          pairs.push({
+            lc: d ? 'd-del' : 'd-none', lo: d ? d.o : '', ls: d ? '−' : '', lcode: d ? d.code : '',
+            rc: a ? 'd-add' : 'd-none', rn: a ? a.n : '', rs: a ? '+' : '', rcode: a ? a.code : ''
+          });
+        }
+      }
+      const range = '@@ -' + h.os + ',' + (h.os === 0 ? 0 : oc) + ' +' + h.ns + ',' + nc + ' @@';
+      return { lines, pairs, range, oc, nc, add: lines.filter((l) => l.t === '+').length, del: lines.filter((l) => l.t === '-').length };
+    }
+
+    const PARSED = FILES.map((f) => ({ ...f, hunks: f.hunks.map((h) => ({ ...h, ...parseHunk(h) })) }));
+    const ALL_HUNKS = PARSED.flatMap((f) => f.hunks.map((h) => h.id));
+    return { PARSED, ALL_HUNKS };
+  }
+  constructor(props) {
+    super(props);
+    this.state = { paneOpen: true, mode: 'unified', file: 'index', decisions: { c1: 'accepted' }, applied: false };
+  }
+  decide(id, value) {
+    const decisions = { ...this.state.decisions };
+    if (value) decisions[id] = value; else delete decisions[id];
+    this.setState({ decisions });
+  }
+  renderVals() {
+    if (!this.data) this.data = Component.build();
+    const { PARSED, ALL_HUNKS } = this.data;
+    const accent = this.props.accent ?? '#f6bd60';
+    const { paneOpen, mode, file, decisions, applied } = this.state;
+    const unified = mode === 'unified';
+    const accepted = ALL_HUNKS.filter((id) => decisions[id] === 'accepted').length;
+    const rejected = ALL_HUNKS.filter((id) => decisions[id] === 'rejected').length;
+    const decided = accepted + rejected;
+    const total = ALL_HUNKS.length;
+    const plural = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
+
+    const badge = (s) => 'flex: none; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; font-family: \'JetBrains Mono\', monospace; font-size: 11px; font-weight: 500; '
+      + (s === 'A' ? 'background: rgba(159,212,179,0.14); color: #9fd4b3;' : 'background: rgba(246,189,96,0.12); color: #f6bd60;');
+
+    const files = PARSED.map((f, idx) => {
+      const slash = f.path.lastIndexOf('/') + 1;
+      const fileDecided = f.hunks.filter((h) => decisions[h.id]).length;
+      const fileAccepted = f.hunks.filter((h) => decisions[h.id] === 'accepted').length;
+      const done = fileDecided === f.hunks.length;
+      const current = f.id === file;
+      return {
+        status: f.status,
+        dir: f.path.slice(0, slash),
+        name: f.path.slice(slash),
+        add: String(f.hunks.reduce((s, h) => s + h.add, 0)),
+        del: String(f.hunks.reduce((s, h) => s + h.del, 0)),
+        badgeStyle: badge(f.status),
+        current: current ? 'true' : 'false',
+        stateLabel: done ? (fileAccepted === f.hunks.length ? 'Accepted' : fileAccepted === 0 ? 'Rejected' : 'Partly accepted') : (fileDecided ? fileDecided + ' of ' + f.hunks.length : ''),
+        stateColor: done ? (fileAccepted === 0 ? '#d89a84' : '#8fc2a4') : '#9ba5c6',
+        rowStyle: 'width: 100%; min-height: 36px; display: flex; align-items: center; gap: 10px; padding: 0 10px; border: 0; border-radius: 9px; font: inherit; font-size: 13px; cursor: pointer; text-align: left; color: #c3cbe3; '
+          + (current ? 'background: #222a52;' : 'background: transparent;'),
+        select: () => this.setState({ file: f.id }),
+        openFromCard: () => this.setState({ file: f.id, paneOpen: true }),
+        idx
+      };
+    });
+
+    const curIdx = PARSED.findIndex((f) => f.id === file);
+    const curFile = PARSED[curIdx];
+    const nextFile = PARSED[curIdx + 1];
+    const hunks = curFile.hunks.map((h, i) => {
+      const d = decisions[h.id];
+      const prev = curFile.hunks[i - 1];
+      const gap = prev ? h.os - (prev.os + prev.oc) : 0;
+      return {
+        range: h.range,
+        label: h.label,
+        lines: h.lines,
+        pairs: h.pairs,
+        gapLabel: gap > 0 ? plural(gap, 'unchanged line') : '',
+        undecided: !d,
+        decided: !!d,
+        decisionLabel: d === 'accepted' ? 'Accepted' : 'Rejected',
+        pillStyle: 'display: inline-flex; align-items: center; min-height: 24px; padding: 0 9px; border-radius: 999px; font-size: 12px; font-weight: 500; '
+          + (d === 'accepted' ? 'background: rgba(159,212,179,0.14); color: #b5e0c6;' : 'background: rgba(229,134,95,0.14); color: #f2ad94;'),
+        wrapStyle: 'border-bottom: 1px solid #1a2142; transition: opacity .2s ease; ' + (d === 'rejected' ? 'opacity: 0.42;' : ''),
+        accept: () => this.decide(h.id, 'accepted'),
+        reject: () => this.decide(h.id, 'rejected'),
+        undo: () => this.decide(h.id, null)
+      };
+    });
+
+    const totalAdd = PARSED.reduce((s, f) => s + f.hunks.reduce((a, h) => a + h.add, 0), 0);
+    const totalDel = PARSED.reduce((s, f) => s + f.hunks.reduce((a, h) => a + h.del, 0), 0);
+    const filesTouched = PARSED.filter((f) => f.hunks.some((h) => decisions[h.id] === 'accepted')).length;
+
+    const seg = (on) => 'min-height: 30px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border: 0; border-radius: 7px; font: inherit; font-size: 12.5px; cursor: pointer; '
+      + (on ? 'background: #283160; color: #ecf0fa; box-shadow: 0 1px 2px rgba(0,0,0,0.35);' : 'background: transparent; color: #9ba5c6;');
+
+    const applyDisabled = accepted === 0;
+    return {
+      accent,
+      files,
+      paneOpen: paneOpen && !applied,
+      paneWidth: mode === 'split' ? '800px' : '600px',
+      unified,
+      split: !unified,
+      unifiedBtnStyle: seg(unified),
+      splitBtnStyle: seg(!unified),
+      setUnified: () => this.setState({ mode: 'unified' }),
+      setSplit: () => this.setState({ mode: 'split' }),
+      togglePane: () => this.setState({ paneOpen: !paneOpen }),
+      cur: {
+        path: curFile.path,
+        kindLabel: curFile.status === 'A' ? 'New file' : plural(curFile.hunks.length, 'change'),
+        hunks,
+        nextLabel: nextFile ? 'Next file' : '',
+        next: () => nextFile && this.setState({ file: nextFile.id })
+      },
+      totalAdd: String(totalAdd),
+      totalDel: String(totalDel),
+      fileCountLabel: plural(PARSED.length, 'file'),
+      cardTitle: applied ? 'Edits applied' : 'Proposed edits',
+      cardBorder: paneOpen && !applied ? '#46528c' : '#29325c',
+      applied,
+      pending: !applied,
+      appliedLabel: 'Wrote ' + plural(accepted, 'change') + ' to ' + plural(filesTouched, 'file') + (rejected ? ' · ' + rejected + ' rejected' : ''),
+      progressLabel: decided === total ? 'All ' + total + ' changes reviewed' : decided + ' of ' + total + ' changes reviewed',
+      footerHint: decided === total ? (rejected ? rejected + ' rejected change' + (rejected === 1 ? '' : 's') + ' will be dropped.' : 'Ready to write to disk.') : 'Undecided changes are left out when you apply.',
+      reviewBtnLabel: paneOpen ? 'Reviewing' : 'Review changes',
+      reviewBtnBg: paneOpen ? '#222a52' : 'transparent',
+      applyDisabled,
+      applyLabel: applyDisabled ? 'Apply' : 'Apply ' + accepted,
+      applyStyle: 'min-height: 38px; display: inline-flex; align-items: center; gap: 8px; padding: 0 14px; border: 0; border-radius: 10px; background: ' + accent + '; color: #0f1428; font: inherit; font-size: 13.5px; font-weight: 600; '
+        + (applyDisabled ? 'opacity: 0.4; cursor: not-allowed;' : 'cursor: pointer;'),
+      acceptAll: () => this.setState({ decisions: Object.fromEntries(ALL_HUNKS.map((id) => [id, 'accepted'])) }),
+      rejectAll: () => this.setState({ decisions: Object.fromEntries(ALL_HUNKS.map((id) => [id, 'rejected'])) }),
+      apply: () => !applyDisabled && this.setState({ applied: true })
+    };
+  }
+}
+</script>
+
+
+</body></html>

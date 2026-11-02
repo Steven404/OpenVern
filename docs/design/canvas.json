@@ -1,7 +1,16 @@
 {
-  "v": 3,
   "attachments": {},
   "boards": {
+    "FilesPanel.dc.html": {
+      "expand": "fill",
+      "h": 900,
+      "is_interactive": true,
+      "page": "prototype",
+      "title": "Right panel \u00b7 files",
+      "w": 1440,
+      "x": 0,
+      "y": 980
+    },
     "Main.dc.html": {
       "expand": "fill",
       "h": 900,
@@ -20,6 +29,16 @@
       "w": 1440,
       "x": 1520,
       "y": 0
+    },
+    "ReviewChanges.dc.html": {
+      "expand": "fill",
+      "h": 900,
+      "is_interactive": true,
+      "page": "prototype",
+      "title": "Review changes",
+      "w": 1440,
+      "x": 1520,
+      "y": 980
     }
   },
   "createdOnFiles": {
@@ -33,7 +52,9 @@
   "notes": {},
   "order": [
     "Main.dc.html",
-    "NewChat.dc.html"
+    "NewChat.dc.html",
+    "FilesPanel.dc.html",
+    "ReviewChanges.dc.html"
   ],
   "pages": [
     {
@@ -41,5 +62,6 @@
       "name": "Prototype"
     }
   ],
-  "title": "stefanos-ai-harness"
+  "title": "openvern",
+  "v": 3
 }

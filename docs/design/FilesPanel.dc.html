@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>OpenVern — files panel</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&amp;family=Figtree:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;background:#0f1428}
+a{color:#ecf0fa}a:hover{color:#ffffff}
+::selection{background:rgba(246,189,96,0.28);color:#fff4e0}
+.v-root{height:100vh;min-height:720px}
+.v-btn{transition:background-color .15s ease,border-color .15s ease,color .15s ease,opacity .15s ease}
+.v-row:hover{background:rgba(200,215,255,0.05)}
+.v-ghost:hover{background:rgba(200,215,255,0.07);color:#ecf0fa}
+.v-new:hover{background:#2c3666;border-color:#46528c}
+.v-surface:hover:not(:disabled){background:rgba(200,215,255,0.06);color:#ecf0fa}
+.v-surface:disabled{cursor:not-allowed}
+.v-tree:hover{background:rgba(200,215,255,0.05)}
+.v-tab:hover,.v-crumb:hover{background:rgba(200,215,255,0.06);color:#ecf0fa}
+.v-tabclose:hover{background:rgba(200,215,255,0.10);color:#ecf0fa}
+.v-line:hover{background:rgba(200,215,255,0.035)}
+.v-right{transition:flex-basis .22s cubic-bezier(.16,1,.3,1)}
+.v-btn:focus-visible,.v-input:focus-visible,.v-filter:focus-visible{outline:2px solid #f6bd60;outline-offset:2px}
+.v-composer:focus-within{border-color:#5a68a8}
+.v-search:focus-within{border-color:#5a68a8}
+.v-input::placeholder,.v-filter::placeholder{color:#8792b6}
+.v-scroll{scrollbar-width:thin;scrollbar-color:#343f72 transparent}
+.v-panel{animation:v-in .22s cubic-bezier(.16,1,.3,1)}
+@keyframes v-in{from{opacity:0;transform:translateX(12px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.v-panel{animation:none}}
+@media (max-width:760px){.v-root{height:auto}.v-side{flex:1 1 100% !important;border-right:0 !important;border-bottom:1px solid #252e55}.v-right{border-left:0 !important;border-top:1px solid #252e55;height:auto !important}}
+</style>
+</helmet>
+<div class="v-root" style="display: flex; flex-wrap: wrap; width: 100%; background: radial-gradient(90% 55% at 62% -12%, rgba(98,126,214,0.22), transparent 62%), linear-gradient(180deg, #121a38 0%, #0f1428 38%, #0d1224 100%); color: #ecf0fa; font-family: Figtree, system-ui, sans-serif; font-size: 15px; line-height: 1.5; box-sizing: border-box">
+
+  <!-- Left sidebar -->
+  <aside class="v-side" style="flex: 0 0 272px; display: flex; flex-direction: column; background: #0b0f20; border-right: 1px solid #20284a; box-sizing: border-box; min-height: 0">
+    <div style="display: flex; align-items: center; justify-content: space-between; padding: 18px 16px 14px 20px">
+      <span style="font-family: 'Bricolage Grotesque', sans-serif; font-weight: 700; font-size: 21px; letter-spacing: -0.02em; color: #ecf0fa">OpenVern<span style="color: {{accent}}">.</span></span>
+      <button class="v-btn v-ghost" type="button" aria-label="Collapse sidebar" style="width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 10px; background: transparent; color: #9ba5c6; cursor: pointer">
+        <svg width="18" height="18" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"></rect><path d="M9 4v16"></path></svg>
+      </button>
+    </div>
+    <div style="padding: 0 12px 8px">
+      <button class="v-btn v-new" type="button" style="width: 100%; min-height: 44px; display: flex; align-items: center; gap: 10px; padding: 0 12px; border: 1px solid #343f72; border-radius: 12px; background: #222a52; color: #ecf0fa; font: inherit; font-weight: 500; cursor: pointer; box-sizing: border-box">
+        <svg width="18" height="18" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+        <span style="flex: 1; text-align: left">New chat</span>
+        <span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9ba5c6; border: 1px solid #343f72; border-radius: 6px; padding: 1px 6px">Ctrl N</span>
+      </button>
+    </div>
+    <nav aria-label="Projects" style="flex: 1; overflow-y: auto; padding: 18px 12px 12px; min-height: 0">
+      <div style="padding: 0 8px 8px 8px">
+        <h2 style="margin: 0; font-family: 'JetBrains Mono', monospace; font-weight: 500; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: #9ba5c6">Projects</h2>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <button class="v-btn v-row" type="button" aria-expanded="true" style="width: 100%; min-height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 8px; border: 0; border-radius: 9px; background: transparent; color: #ecf0fa; font: inherit; font-size: 14px; font-weight: 500; cursor: pointer; text-align: left">
+          <svg width="14" height="14" sc-camel-view-box="0 0 24 24" fill="none" stroke="#8792b6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="transform: rotate(90deg)"><path d="M9 6l6 6-6 6"></path></svg>
+          <svg width="16" height="16" sc-camel-view-box="0 0 24 24" fill="none" stroke="#e5865f" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2h8.5A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"></path></svg>
+          <span style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">stefanos-ai-harness</span>
+          <span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #8792b6">3</span>
+        </button>
+        <ul style="list-style: none; margin: 2px 0 6px; padding: 0 0 0 30px; display: flex; flex-direction: column; gap: 1px">
+          <li><a class="v-btn v-row" href="#" aria-current="page" style="display: block; padding: 7px 10px; border-radius: 8px; font-size: 13.5px; text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: rgba(200,215,255,0.08); color: #ecf0fa; box-shadow: inset 2px 0 0 {{accent}}">Design tokens walkthrough</a></li>
+          <li><a class="v-btn v-row" href="#" style="display: block; padding: 7px 10px; border-radius: 8px; font-size: 13.5px; text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #a9b2cf">Agent loop and tool calls</a></li>
+          <li><a class="v-btn v-row" href="#" style="display: block; padding: 7px 10px; border-radius: 8px; font-size: 13.5px; text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #a9b2cf">Streaming replies over SSE</a></li>
+        </ul>
+      </div>
+    </nav>
+    <div style="padding: 10px 12px 14px; border-top: 1px solid #20284a; display: flex; align-items: center; gap: 4px">
+      <button class="v-btn v-ghost" type="button" style="min-height: 40px; display: inline-flex; align-items: center; gap: 10px; padding: 0 10px; border: 0; border-radius: 10px; background: transparent; color: #c3cbe3; font: inherit; font-size: 14px; cursor: pointer">
+        <svg width="19" height="19" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        <span>Settings</span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- Conversation -->
+  <main style="flex: 999 1 360px; min-width: 0; display: flex; flex-direction: column; min-height: 0; height: 100%">
+    <header style="display: flex; align-items: center; gap: 8px; padding: 12px 12px 12px 24px; border-bottom: 1px solid #1c2343; min-height: 64px; box-sizing: border-box">
+      <span style="font-family: 'JetBrains Mono', monospace; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: #9ba5c6; white-space: nowrap">stefanos-ai-harness /</span>
+      <h1 style="margin: 0; flex: 1; min-width: 0; font-size: 15px; font-weight: 600; color: #ecf0fa; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">Design tokens walkthrough</h1>
+      <button class="v-btn v-ghost" type="button" aria-label="Chat options" style="width: 40px; height: 40px; flex: none; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 10px; background: transparent; color: #9ba5c6; cursor: pointer">
+        <svg width="18" height="18" sc-camel-view-box="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6"></circle><circle cx="12" cy="12" r="1.6"></circle><circle cx="19" cy="12" r="1.6"></circle></svg>
+      </button>
+      <span aria-hidden="true" style="width: 1px; height: 20px; background: #20284a"></span>
+      <button class="v-btn v-ghost" type="button" aria-label="Toggle right panel" aria-pressed="{{panelOpen}}" aria-controls="right-panel" title="Toggle right panel (Ctrl ])" sc-camel-on-click="{{togglePanel}}" style="{{toggleStyle}}">
+        <svg width="18" height="18" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"></rect><path d="M15 4v16"></path></svg>
+      </button>
+    </header>
+
+    <section class="v-scroll" aria-label="Conversation" style="flex: 1; overflow-y: auto; padding: 36px 24px 24px; min-height: 0">
+      <div style="max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: 28px">
+        <div style="align-self: flex-end; max-width: 86%; background: #232c55; border: 1px solid #2f3a68; border-radius: 18px 18px 6px 18px; padding: 12px 16px; color: #ecf0fa; font-size: 15px">Where do the theme colours live, and how would a second theme plug in?</div>
+        <article style="display: flex; flex-direction: column; gap: 14px; color: #d8deef; font-size: 15px; line-height: 1.65">
+          <div style="display: flex; align-items: center; gap: 10px">
+            <span aria-hidden="true" style="width: 26px; height: 26px; border-radius: 8px; background: {{accent}}; color: #0f1428; display: inline-flex; align-items: center; justify-content: center"><svg width="15" height="15" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8"></path></svg></span>
+            <span style="font-weight: 600; color: #ecf0fa; font-size: 14px">OpenVern</span>
+          </div>
+          <div style="border: 1px solid #29325c; border-radius: 10px; background: #151b35; display: flex; align-items: center; gap: 10px; padding: 8px 12px; font-size: 13px; color: #c3cbe3">
+            <svg width="15" height="15" sc-camel-view-box="0 0 24 24" fill="none" stroke="#9fd4b3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5L20 7"></path></svg>
+            <span style="font-family: 'JetBrains Mono', monospace; font-size: 12.5px">read_file</span>
+            <span style="color: #9ba5c6; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">src/renderer/styles/tokens.css</span>
+            <span style="font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: #8792b6">0.1s</span>
+          </div>
+          <p style="margin: 0">Every colour is a custom property in the <code style="font-family: 'JetBrains Mono', monospace; font-size: 13px; color: #ecf0fa; background: #1d2446; padding: 1px 5px; border-radius: 5px">@theme</code> block, and Tailwind turns each one into a utility. A second theme only overrides the same names under a <code style="font-family: 'JetBrains Mono', monospace; font-size: 13px; color: #ecf0fa; background: #1d2446; padding: 1px 5px; border-radius: 5px">data-theme</code> selector, so no component changes.</p>
+        </article>
+      </div>
+    </section>
+
+    <div style="padding: 8px 24px 20px">
+      <form class="v-composer" style="max-width: 720px; margin: 0 auto; background: #1a2142; border: 1px solid #343f72; border-radius: 18px; padding: 14px 14px 10px 18px; box-sizing: border-box; display: flex; flex-direction: column; gap: 8px">
+        <label for="composer-files" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Message</label>
+        <textarea id="composer-files" class="v-input" rows="2" placeholder="Reply to OpenVern…" style="resize: none; border: 0; outline: 0; background: transparent; color: #ecf0fa; font: inherit; font-size: 15px; line-height: 1.5"></textarea>
+        <div style="display: flex; align-items: center; gap: 6px">
+          <button class="v-btn v-ghost" type="button" aria-label="Attach file" style="width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 10px; background: transparent; color: #9ba5c6; cursor: pointer">
+            <svg width="18" height="18" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+          </button>
+          <span style="flex: 1"></span>
+          <button class="v-btn v-ghost" type="button" style="min-height: 36px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border: 0; border-radius: 10px; background: transparent; color: #c3cbe3; font: inherit; font-size: 13.5px; cursor: pointer">
+            [Model name]
+            <svg width="14" height="14" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
+          </button>
+          <button class="v-btn" type="submit" aria-label="Send message" style="width: 38px; height: 38px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 12px; background: {{accent}}; color: #0f1428; cursor: pointer">
+            <svg width="18" height="18" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"></path></svg>
+          </button>
+        </div>
+      </form>
+    </div>
+  </main>
+
+  <!-- Right panel: a tab strip (Files, open files) over one surface at a time -->
+  <sc-if value="{{panelOpen}}" hint-placeholder-val="{{true}}">
+    <aside id="right-panel" class="v-right v-panel" aria-label="Right panel" style="{{panelStyle}}">
+
+      <header style="display: flex; align-items: center; gap: 6px; padding: 8px 8px 8px 10px; min-height: 52px; box-sizing: border-box; border-bottom: 1px solid #1c2343">
+        <div class="v-scroll" role="tablist" aria-label="Open panels" style="flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; overflow-x: auto">
+          <button class="v-btn v-tab" type="button" role="tab" aria-selected="{{filesSelected}}" sc-camel-on-click="{{showFiles}}" style="{{filesTabStyle}}">
+            <svg width="14" height="14" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: none"><path d="M15 3H8a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V7z"></path><path d="M15 3v4h4"></path><path d="M4 7v12a2 2 0 0 0 2 2h9"></path></svg>
+            Files
+          </button>
+          <sc-for list="{{tabs}}" as="tb" hint-placeholder-count="1">
+            <div style="{{tb.wrapStyle}}">
+              <button class="v-btn" type="button" role="tab" aria-selected="{{tb.selected}}" title="{{tb.path}}" sc-camel-on-click="{{tb.activate}}" style="{{tb.labelStyle}}">
+                <svg width="14" height="14" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: none"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path><path d="M14 3v5h5"></path></svg>
+                <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{tb.name}}</span>
+              </button>
+              <button class="v-btn v-tabclose" type="button" aria-label="Close {{tb.name}}" sc-camel-on-click="{{tb.close}}" style="width: 22px; height: 22px; flex: none; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 8px; background: transparent; color: #9ba5c6; cursor: pointer; border-radius: 6px">
+                <svg width="12" height="12" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+              </button>
+            </div>
+          </sc-for>
+          <button class="v-btn v-ghost" type="button" aria-label="Open a panel" aria-pressed="{{isLauncher}}" sc-camel-on-click="{{toLauncher}}" style="width: 30px; height: 30px; flex: none; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 8px; background: transparent; color: #9ba5c6; cursor: pointer">
+            <svg width="15" height="15" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+          </button>
+        </div>
+        <button class="v-btn v-ghost" type="button" aria-label="Close panel" sc-camel-on-click="{{togglePanel}}" style="width: 34px; height: 34px; flex: none; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 8px; background: transparent; color: #9ba5c6; cursor: pointer; border-radius: 10px">
+          <svg width="17" height="17" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+        </button>
+      </header>
+
+      <!-- Launcher -->
+      <sc-if value="{{isLauncher}}" hint-placeholder-val="{{false}}">
+        <div style="flex: 1; display: flex; flex-direction: column; justify-content: center; padding: 24px 28px 96px; gap: 14px">
+          <h2 style="margin: 0 0 4px 10px; font-size: 15px; font-weight: 600; color: #ecf0fa">Open a panel</h2>
+          <ul style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px">
+            <sc-for list="{{surfaces}}" as="s" hint-placeholder-count="3">
+              <li>
+                <button class="v-btn v-surface" type="button" disabled="{{s.disabled}}" aria-keyshortcuts="{{s.key}}" title="{{s.hint}}" sc-camel-on-click="{{s.open}}" style="{{s.style}}">
+                  <span style="width: 18px; height: 18px; display: inline-flex">
+                    <sc-if value="{{s.isFiles}}" hint-placeholder-val="{{true}}"><svg width="18" height="18" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3H8a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V7z"></path><path d="M15 3v4h4"></path><path d="M4 7v12a2 2 0 0 0 2 2h9"></path></svg></sc-if>
+                    <sc-if value="{{s.isTerminal}}" hint-placeholder-val="{{false}}"><svg width="18" height="18" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"></rect><path d="M7 9l3 3-3 3M13 15h4"></path></svg></sc-if>
+                    <sc-if value="{{s.isDiff}}" hint-placeholder-val="{{false}}"><svg width="18" height="18" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path><path d="M14 3v5h5"></path><path d="M9 12h6M12 9v6M9 17h6"></path></svg></sc-if>
+                  </span>
+                  <span style="flex: 1; display: flex; flex-direction: column; gap: 1px; text-align: left">
+                    <span>{{s.label}}</span>
+                    <span style="font-size: 12px; color: #8792b6">{{s.hint}}</span>
+                  </span>
+                  <span style="{{s.keyStyle}}">{{s.key}}</span>
+                </button>
+              </li>
+            </sc-for>
+          </ul>
+        </div>
+      </sc-if>
+
+      <!-- Files: tree -->
+      <sc-if value="{{isFiles}}" hint-placeholder-val="{{true}}">
+        <div style="display: flex; align-items: center; gap: 4px; padding: 10px 8px 0 16px">
+          <span style="flex: 1; min-width: 0; font-size: 13px; font-weight: 600; color: #ecf0fa; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">stefanos-ai-harness</span>
+          <button class="v-btn v-ghost" type="button" aria-label="Collapse all folders" title="Collapse all" sc-camel-on-click="{{collapseAll}}" style="width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 8px; background: transparent; color: #9ba5c6; cursor: pointer">
+            <svg width="15" height="15" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4l5 5 5-5M7 20l5-5 5 5"></path></svg>
+          </button>
+        </div>
+        <div style="padding: 10px 12px 6px">
+          <label class="v-search" style="display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 10px; border: 1px solid #29325c; border-radius: 10px; background: #151b35; transition: border-color .15s ease">
+            <svg width="15" height="15" sc-camel-view-box="0 0 24 24" fill="none" stroke="#8792b6" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"></circle><path d="M16 16l4 4"></path></svg>
+            <span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Filter files</span>
+            <input class="v-filter" type="search" placeholder="Filter files" value="{{query}}" sc-camel-on-input="{{onQuery}}" style="flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: #ecf0fa; font: inherit; font-size: 13.5px">
+          </label>
+        </div>
+
+        <nav class="v-scroll" aria-label="Project files" style="flex: 1 1 0; min-height: 120px; overflow-y: auto; padding: 4px 8px 8px">
+          <sc-if value="{{noMatches}}" hint-placeholder-val="{{false}}">
+            <p style="margin: 16px 10px; font-size: 13px; color: #9ba5c6">No files match “{{query}}”.</p>
+          </sc-if>
+          <ul style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column">
+            <sc-for list="{{rows}}" as="r" hint-placeholder-count="14">
+              <li>
+                <button class="v-btn v-tree" type="button" aria-expanded="{{r.expanded}}" aria-current="{{r.current}}" sc-camel-on-click="{{r.click}}" style="{{r.style}}">
+                  <span style="{{r.chevronBox}}"><svg width="12" height="12" sc-camel-view-box="0 0 24 24" fill="none" stroke="#8792b6" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="{{r.chevron}}"><path d="M9 6l6 6-6 6"></path></svg></span>
+                  <sc-if value="{{r.isDir}}" hint-placeholder-val="{{false}}"><svg width="15" height="15" sc-camel-view-box="0 0 24 24" fill="none" stroke="#e5865f" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true" style="flex: none"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2h8.5A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"></path></svg></sc-if>
+                  <sc-if value="{{r.isFile}}" hint-placeholder-val="{{true}}"><svg width="15" height="15" sc-camel-view-box="0 0 24 24" fill="none" stroke="#8792b6" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: none"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path><path d="M14 3v5h5"></path></svg></sc-if>
+                  <span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap"><span style="color: #8792b6">{{r.dir}}</span>{{r.name}}</span>
+                </button>
+              </li>
+            </sc-for>
+          </ul>
+        </nav>
+
+        <footer style="display: flex; align-items: center; gap: 8px; padding: 9px 14px; border-top: 1px solid #1c2343; font-size: 12px; color: #9ba5c6">
+          <svg width="13" height="13" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"></rect><path d="M8 11V8a4 4 0 0 1 8 0v3"></path></svg>
+          <span>Ignored and secret files are hidden (.env, .git, keys)</span>
+        </footer>
+      </sc-if>
+
+      <!-- Open file -->
+      <sc-if value="{{isViewer}}" hint-placeholder-val="{{false}}">
+        <div style="display: flex; align-items: center; gap: 6px; padding: 8px 8px 8px 16px; border-bottom: 1px solid #1c2343">
+          <nav aria-label="File path" style="flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; font-size: 12.5px; white-space: nowrap; overflow: hidden">
+            <button class="v-btn v-crumb" type="button" sc-camel-on-click="{{showFiles}}" style="padding: 2px 4px; border: 0; border-radius: 6px; background: transparent; color: #ecf0fa; font: inherit; font-weight: 600; cursor: pointer">stefanos-ai-harness</button>
+            <svg width="12" height="12" sc-camel-view-box="0 0 24 24" fill="none" stroke="#8792b6" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: none"><path d="M9 6l6 6-6 6"></path></svg>
+            <span style="min-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: 'JetBrains Mono', monospace; color: #9ba5c6">{{viewer.dir}}<span style="color: #ecf0fa">{{viewer.name}}</span></span>
+          </nav>
+          <span style="font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: #8792b6; white-space: nowrap">{{viewer.meta}}</span>
+          <button class="v-btn v-ghost" type="button" title="Attach to message" style="min-height: 30px; display: inline-flex; align-items: center; gap: 6px; padding: 0 9px; border: 0; border-radius: 8px; background: transparent; color: #c3cbe3; font: inherit; font-size: 12.5px; cursor: pointer">
+            <svg width="13" height="13" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+            Attach
+          </button>
+        </div>
+        <div class="v-scroll" role="tabpanel" aria-label="{{viewer.path}}" style="flex: 1; min-height: 0; overflow: auto; background: #0a0d1c; padding: 8px 0 24px">
+          <sc-if value="{{viewer.hasLines}}" hint-placeholder-val="{{true}}">
+            <div style="width: max-content; min-width: 100%">
+              <sc-for list="{{viewer.lines}}" as="l" hint-placeholder-count="24">
+                <div class="v-line" style="display: flex; font-family: 'JetBrains Mono', monospace; font-size: 12.5px; line-height: 20px; color: #e2e7f5"><span style="flex: none; width: 48px; padding-right: 14px; text-align: right; color: #8590b4; user-select: none; font-variant-numeric: tabular-nums; box-sizing: border-box">{{l.n}}</span><span style="white-space: pre; padding-right: 20px">{{l.code}}</span></div>
+              </sc-for>
+            </div>
+          </sc-if>
+          <sc-if value="{{viewer.noLines}}" hint-placeholder-val="{{false}}">
+            <p style="margin: 16px; font-size: 13px; color: #9ba5c6">[Contents of {{viewer.name}} load here]</p>
+          </sc-if>
+        </div>
+      </sc-if>
+    </aside>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script="" data-props="{&quot;accent&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#f6bd60&quot;,&quot;options&quot;:[&quot;#f6bd60&quot;,&quot;#e5865f&quot;,&quot;#a9b8f0&quot;]},&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:900}}">
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = {
+      panelOpen: true,
+      active: 'files',
+      tabs: ['src/renderer/styles/tokens.css'],
+      query: '',
+      open: { 'src': true, 'src/renderer': true, 'src/renderer/styles': true }
+    };
+  }
+  openFile(path) {
+    const tabs = this.state.tabs.includes(path) ? this.state.tabs : [...this.state.tabs, path];
+    this.setState({ tabs, active: path });
+  }
+  closeTab(path) {
+    const { tabs, active } = this.state;
+    const i = tabs.indexOf(path);
+    const next = tabs.filter((p) => p !== path);
+    const fallback = next[Math.min(i, next.length - 1)] || 'files';
+    this.setState({ tabs: next, active: active === path ? fallback : active });
+  }
+  static data() {
+    return {"tree": [{"n": "build", "c": [{"n": "icon.png"}, {"n": "icon.svg"}, {"n": "make-icon.mjs"}]}, {"n": "docs", "c": [{"n": "design", "c": [{"n": "canvas.json"}, {"n": "Main.dc.html"}, {"n": "NewChat.dc.html"}]}]}, {"n": "scripts", "c": [{"n": "e2e", "c": [{"n": "cdp.mjs"}, {"n": "lib.sh"}, {"n": "run-electron.sh"}, {"n": "run-web.sh"}, {"n": "shots.mjs"}, {"n": "smoke.mjs"}]}, {"n": "spikes", "c": [{"n": "protocol-stream", "c": [{"n": "main.cjs"}]}]}, {"n": "install-local.sh"}, {"n": "try-openrouter.ts"}]}, {"n": "src", "c": [{"n": "core", "c": [{"n": "agent", "c": [{"n": "history.test.ts"}, {"n": "history.ts"}, {"n": "index.ts"}, {"n": "loop.test.ts"}, {"n": "loop.ts"}, {"n": "system-prompt.test.ts"}, {"n": "system-prompt.ts"}, {"n": "test-helpers.ts"}, {"n": "title.test.ts"}, {"n": "title.ts"}]}, {"n": "providers", "c": [{"n": "__fixtures__", "c": [{"n": "midstream-error.sse"}, {"n": "models.json"}, {"n": "parallel-tool-calls.sse"}, {"n": "reasoning-tool-call.sse"}, {"n": "text-stream.sse"}]}, {"n": "fake.test.ts"}, {"n": "fake.ts"}, {"n": "models.test.ts"}, {"n": "models.ts"}, {"n": "openrouter.test.ts"}, {"n": "openrouter.ts"}, {"n": "types.ts"}]}, {"n": "security", "c": [{"n": "redact.test.ts"}, {"n": "redact.ts"}]}, {"n": "storage", "c": [{"n": "attachments.test.ts"}, {"n": "attachments.ts"}, {"n": "chats.test.ts"}, {"n": "chats.ts"}, {"n": "index.ts"}, {"n": "json-file.test.ts"}, {"n": "json-file.ts"}, {"n": "mutex.ts"}, {"n": "paths.ts"}, {"n": "projects.test.ts"}, {"n": "projects.ts"}, {"n": "schemas.test.ts"}, {"n": "schemas.ts"}, {"n": "secrets.ts"}, {"n": "settings.test.ts"}, {"n": "settings.ts"}, {"n": "test-helpers.ts"}]}, {"n": "tools", "c": [{"n": "bench.test.ts"}, {"n": "data-dir.test.ts"}, {"n": "glob.test.ts"}, {"n": "glob.ts"}, {"n": "ignore.ts"}, {"n": "index.ts"}, {"n": "list-files.ts"}, {"n": "read-file.ts"}, {"n": "sandbox.test.ts"}, {"n": "sandbox.ts"}, {"n": "search.ts"}, {"n": "test-fixture.ts"}, {"n": "tools.test.ts"}, {"n": "tree.ts"}, {"n": "types.ts"}, {"n": "util.ts"}, {"n": "walk.test.ts"}, {"n": "walk.ts"}]}, {"n": "errors.ts"}, {"n": "index.ts"}, {"n": "types.ts"}]}, {"n": "main", "c": [{"n": "backend.ts"}, {"n": "electron-builder-config.test.ts"}, {"n": "index.ts"}, {"n": "ipc.ts"}, {"n": "origin.ts"}, {"n": "protocol.ts"}, {"n": "safe-storage-secret-store.test.ts"}, {"n": "safe-storage-secret-store.ts"}, {"n": "startup.test.ts"}, {"n": "startup.ts"}, {"n": "static-files.test.ts"}, {"n": "static-files.ts"}, {"n": "window.ts"}]}, {"n": "preload", "c": [{"n": "index.ts"}]}, {"n": "renderer", "c": [{"n": "app", "c": [{"n": "App.test.tsx"}, {"n": "App.tsx"}, {"n": "AppShell.tsx"}, {"n": "ChatScreen.tsx"}, {"n": "queries.ts"}, {"n": "shortcuts.ts"}, {"n": "test-utils.tsx"}, {"n": "useMediaQuery.ts"}]}, {"n": "components", "c": [{"n": "ui", "c": [{"n": "Button.tsx"}, {"n": "cx.ts"}, {"n": "Dialog.tsx"}, {"n": "IconButton.tsx"}, {"n": "index.ts"}, {"n": "Kbd.tsx"}, {"n": "Menu.tsx"}, {"n": "Popover.tsx"}, {"n": "Spinner.tsx"}, {"n": "TextField.tsx"}, {"n": "ui.test.tsx"}]}]}, {"n": "features", "c": [{"n": "chat-header", "c": [{"n": "ChatHeader.test.tsx"}, {"n": "ChatHeader.tsx"}, {"n": "ChatOptionsMenu.tsx"}, {"n": "index.ts"}, {"n": "RenameDialog.tsx"}]}, {"n": "composer", "c": [{"n": "AttachmentChips.tsx"}, {"n": "attachments.ts"}, {"n": "AttachMenu.tsx"}, {"n": "Composer.test.tsx"}, {"n": "Composer.tsx"}, {"n": "format.ts"}, {"n": "index.ts"}, {"n": "ModelPicker.tsx"}, {"n": "models.ts"}, {"n": "queries.ts"}, {"n": "ReplyComposer.tsx"}, {"n": "test-utils.tsx"}]}, {"n": "conversation", "c": [{"n": "AssistantTurn.tsx"}, {"n": "CodeBlock.tsx"}, {"n": "Conversation.test.tsx"}, {"n": "Conversation.tsx"}, {"n": "ErrorCard.tsx"}, {"n": "highlight.ts"}, {"n": "index.ts"}, {"n": "Markdown.tsx"}, {"n": "ToolCallRow.tsx"}, {"n": "turns.ts"}, {"n": "useFrameThrottled.test.tsx"}, {"n": "UserBubble.tsx"}]}, {"n": "new-chat", "c": [{"n": "index.ts"}, {"n": "NewChatScreen.test.tsx"}, {"n": "NewChatScreen.tsx"}, {"n": "ProjectChip.tsx"}]}, {"n": "projects", "c": [{"n": "index.ts"}, {"n": "NewProjectModal.test.tsx"}, {"n": "NewProjectModal.tsx"}, {"n": "ProjectMenu.tsx"}]}, {"n": "settings", "c": [{"n": "index.ts"}, {"n": "SettingsModal.test.tsx"}, {"n": "SettingsModal.tsx"}]}, {"n": "sidebar", "c": [{"n": "ChatLink.tsx"}, {"n": "icons.tsx"}, {"n": "index.ts"}, {"n": "ProjectRow.tsx"}, {"n": "Sidebar.test.tsx"}, {"n": "Sidebar.tsx"}]}]}, {"n": "lib", "c": [{"n": "api-client.ts"}, {"n": "api-context.tsx"}, {"n": "create-api-client.ts"}, {"n": "http-api-client.test.ts"}, {"n": "http-api-client.ts"}, {"n": "mock-api-client.test.ts"}, {"n": "mock-api-client.ts"}, {"n": "query-keys.ts"}, {"n": "routes.ts"}]}, {"n": "stores", "c": [{"n": "runs.test.ts"}, {"n": "runs.ts"}, {"n": "ui.test.tsx"}, {"n": "ui.ts"}]}, {"n": "styles", "c": [{"n": "global.css"}, {"n": "shiki-theme.ts"}, {"n": "tokens.css"}]}, {"n": "index.html"}, {"n": "main.tsx"}, {"n": "test-setup.test.tsx"}, {"n": "test-setup.ts"}, {"n": "vite-env.d.ts"}]}, {"n": "server", "c": [{"n": "middleware", "c": [{"n": "security.ts"}]}, {"n": "routes", "c": [{"n": "attachments.ts"}, {"n": "chats.ts"}, {"n": "projects.ts"}, {"n": "settings.ts"}]}, {"n": "app.test.ts"}, {"n": "app.ts"}, {"n": "data-dir.test.ts"}, {"n": "dev.ts"}, {"n": "http.ts"}, {"n": "README.md"}, {"n": "security.test.ts"}, {"n": "sse.ts"}, {"n": "stream.test.ts"}, {"n": "test-helpers.ts"}]}, {"n": "shared", "c": [{"n": "api.test.ts"}, {"n": "api.ts"}, {"n": "attachment-sniff.ts"}, {"n": "constants.ts"}, {"n": "errors.ts"}, {"n": "events.ts"}, {"n": "sample-data.ts"}, {"n": "sse.test.ts"}, {"n": "sse.ts"}, {"n": "types.ts"}]}]}, {"n": ".gitignore"}, {"n": "AGENTS.md"}, {"n": "biome.json"}, {"n": "CLAUDE.md"}, {"n": "electron-builder.yml"}, {"n": "electron.vite.config.ts"}, {"n": "package-lock.json"}, {"n": "package.json"}, {"n": "README.md"}, {"n": "renderer.vite.ts"}, {"n": "tsconfig.base.json"}, {"n": "tsconfig.json"}, {"n": "tsconfig.node.json"}, {"n": "tsconfig.web.json"}, {"n": "vite.web.config.ts"}, {"n": "vitest.config.ts"}], "prev": {"src/renderer/styles/tokens.css": {"lines": ["/* Design tokens (plan \u00a75.1). Tailwind v4 turns each `--color-*` / `--font-*` into utilities (`bg-surface`, `font-display`, \u2026). */", "", "@import \"@fontsource-variable/bricolage-grotesque\";", "@import \"@fontsource-variable/figtree\";", "@import \"@fontsource-variable/jetbrains-mono\";", "", "@theme {", "  /* Blue hour (default theme): lamplight on canal water. */", "  --color-bg: #0f1428;", "  --color-sidebar: #0b0f20;", "  --color-surface: #1a2142;", "  --color-surface-raised: #222a52;", "  --color-surface-raised-hover: #2c3666;", "  --color-surface-raised-active: #263058;", "  --color-bubble: #232c55;", "  --color-tool: #151b35;", "  --color-code: #0a0d1c;", "", "  --color-border: #20284a;", "  --color-border-header: #1c2343;", "  --color-border-tool: #29325c;", "  --color-border-bubble: #2f3a68;", "  --color-border-control: #343f72;", "  --color-border-hover: #46528c;", "  --color-border-focus: #5a68a8;", "", "  --color-text: #ecf0fa;", "  --color-text-body: #d8deef;", "  --color-text-code: #e2e7f5;", "  --color-text-secondary: #c3cbe3;", "  --color-text-chat: #a9b2cf;", "  --color-text-muted: #9ba5c6;", "  --color-text-faint: #8792b6;", "", "  --color-accent: #f6bd60;", "  --color-accent-2: #e5865f;", "  --color-success: #9fd4b3;", "  --color-danger: #ff8f87;", "", "  --color-overlay-row: rgb(200 215 255 / 0.05);", "  --color-overlay-ghost: rgb(200 215 255 / 0.07);", "  --color-overlay-current: rgb(200 215 255 / 0.08);", "", "  --font-display: \"Bricolage Grotesque Variable\", \"Bricolage Grotesque\", sans-serif;", "  --font-sans: \"Figtree Variable\", \"Figtree\", system-ui, sans-serif;", "  --font-mono: \"JetBrains Mono Variable\", \"JetBrains Mono\", ui-monospace, monospace;", "", "  --width-sidebar: 272px;", "  --width-conversation: 760px;", "  --width-new-chat: 720px;", "  --height-header: 64px;", "}", "", "/* The app background: a faint dusk glow at the top of the window over the ground colour. */", ":root {", "  --backdrop:", "    radial-gradient(90% 55% at 62% -12%, rgb(98 126 214 / 0.22), transparent 62%),", "    linear-gradient(180deg, #121a38 0%, var(--color-bg) 38%, #0d1224 100%);", "}", "", "/* Late Workshop: the original warm theme. Not selectable yet; a future theme setting sets `data-theme` on <html>. */", "[data-theme=\"late-workshop\"] {", "  --color-bg: #161316;", "  --color-sidebar: #120f12;", "  --color-surface: #221c21;", "  --color-surface-raised: #2a2228;", "  --color-surface-raised-hover: #352b33;", "  --color-surface-raised-active: #31282f;", "  --color-bubble: #2b2329;", "  --color-tool: #1c171b;", "  --color-code: #100d10;", "", "  --color-border: #2a2229;", "  --color-border-header: #241d23;", "  --color-border-tool: #332a31;", "  --color-border-bubble: #372d35;", "  --color-border-control: #3d3139;", "  --color-border-hover: #4d3e48;", "  --color-border-focus: #5e4c58;", "", "  --color-text: #f0e6e6;", "  --color-text-body: #e2d6d7;", "  --color-text-code: #e8dddd;", "  --color-text-secondary: #d3c6c8;", "  --color-text-chat: #b9abae;", "  --color-text-muted: #aa9a9f;", "  --color-text-faint: #96878d;", "", "  --color-accent: #f2cc8f;", "  --color-accent-2: #e07a5f;", "  --color-success: #b8d4a0;", "  --color-danger: #ff8f87;", "", "  --color-overlay-row: rgb(240 230 230 / 0.05);", "  --color-overlay-ghost: rgb(240 230 230 / 0.07);", "  --color-overlay-current: rgb(240 230 230 / 0.08);", "  --backdrop: var(--color-bg);", "}"], "total": 98}, "package.json": {"lines": ["{", "  \"name\": \"harness\",", "  \"productName\": \"harness\",", "  \"version\": \"0.1.0\",", "  \"private\": true,", "  \"description\": \"A desktop AI harness: chat with LLMs about your local code projects.\",", "  \"author\": \"Stefanos Michelakis\",", "  \"license\": \"UNLICENSED\",", "  \"type\": \"module\",", "  \"main\": \"out/main/index.js\",", "  \"engines\": {", "    \"node\": \">=22\"", "  },", "  \"scripts\": {", "    \"dev:server\": \"tsx watch --clear-screen=false --tsconfig tsconfig.node.json src/server/dev.ts\",", "    \"dev:web\": \"concurrently -k -n server,web -c yellow,cyan \\\"npm:dev:server\\\" \\\"vite --config vite.web.config.ts\\\"\",", "    \"dev\": \"concurrently -k -n server,electron -c yellow,cyan \\\"npm:dev:server\\\" \\\"electron-vite dev\\\"\",", "    \"build\": \"electron-vite build\",", "    \"preview\": \"electron-vite build && HARNESS_DATA_DIR=./.dev-data-preview electron-vite preview --skipBuild\",", "    \"dist\": \"electron-vite build && electron-builder --linux AppImage\",", "    \"test\": \"vitest run\",", "    \"test:watch\": \"vitest\",", "    \"typecheck\": \"tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json\",", "    \"lint\": \"biome check .\",", "    \"e2e\": \"bash scripts/e2e/run-web.sh && bash scripts/e2e/run-electron.sh\",", "    \"e2e:web\": \"bash scripts/e2e/run-web.sh\",", "    \"e2e:electron\": \"bash scripts/e2e/run-electron.sh\",", "    \"format\": \"biome check --write .\",", "    \"try:openrouter\": \"tsx --tsconfig tsconfig.node.json scripts/try-openrouter.ts\"", "  },", "  \"dependencies\": {", "    \"@fontsource-variable/bricolage-grotesque\": \"5.3.0\",", "    \"@fontsource-variable/figtree\": \"5.3.0\",", "    \"@fontsource-variable/jetbrains-mono\": \"5.3.0\",", "    \"@hono/node-server\": \"2.1.5\",", "    \"@radix-ui/react-dialog\": \"1.3.1\",", "    \"@radix-ui/react-dropdown-menu\": \"2.2.1\",", "    \"@radix-ui/react-popover\": \"1.3.1\",", "    \"@tanstack/react-query\": \"5.105.0\",", "    \"cmdk\": \"1.1.1\",", "    \"eventsource-parser\": \"4.1.3\",", "    \"hono\": \"4.13.14\",", "    \"ignore\": \"7.0.14\",", "    \"lucide-react\": \"1.66.0\",", "    \"react\": \"19.3.1\",", "    \"react-dom\": \"19.3.1\",", "    \"react-markdown\": \"10.1.0\",", "    \"react-router\": \"7.18.5\",", "    \"remark-gfm\": \"4.0.1\",", "    \"shiki\": \"4.5.0\",", "    \"zod\": \"4.6.7\",", "    \"zustand\": \"5.0.16\"", "  },", "  \"devDependencies\": {", "    \"@biomejs/biome\": \"2.6.4\",", "    \"@tailwindcss/vite\": \"4.3.3\",", "    \"@testing-library/dom\": \"10.4.2\",", "    \"@testing-library/react\": \"16.3.3\",", "    \"@types/node\": \"24.19.2\",", "    \"@types/react\": \"19.3.0\",", "    \"@types/react-dom\": \"19.3.0\",", "    \"@vitejs/plugin-react\": \"6.1.2\",", "    \"concurrently\": \"10.0.6\",", "    \"electron\": \"45.2.1\",", "    \"electron-builder\": \"26.18.0\",", "    \"electron-vite\": \"6.0.0\",", "    \"jsdom\": \"30.1.3\",", "    \"tailwindcss\": \"4.3.3\",", "    \"tsx\": \"4.23.15\",", "    \"typescript\": \"7.0.2\",", "    \"vite\": \"8.3.5\",", "    \"vitest\": \"5.0.5\"", "  }", "}"], "total": 74}, "AGENTS.md": {"lines": ["# Agent rules for this repo", "", "Read this before taking any action in this project.", "", "## Local-only folders: never commit", "", "- `reports/` and `research_notes/` are local-only. They must never be added to git.", "- Do not `git add` them, do not force-add (`git add -f`) anything under them, and do not", "  remove their entries from `.gitignore`.", "- Avoid broad staging that could sweep them in. Stage files by path rather than with", "  `git add -A` / `git add .` when unsure.", "- Before committing, check `git status` and confirm nothing under these folders is staged."], "total": 12}, "src/renderer/app/AppShell.tsx": {"lines": ["// Layout of the design: sidebar (272px) + main. Also owns sidebar collapse (D2), the narrow-window overlay (D19),", "// global shortcuts, and the two app-level modals (Settings, New project).", "", "import { IconButton } from '@renderer/components/ui';", "import { NewProjectModal } from '@renderer/features/projects';", "import { SettingsModal } from '@renderer/features/settings';", "import { SIDEBAR_COLLAPSE_BUTTON_ID, Sidebar } from '@renderer/features/sidebar';", "import { PanelIcon } from '@renderer/features/sidebar/icons';", "import { useUiStore } from '@renderer/stores/ui';", "import { APP_NAME } from '@shared/constants';", "import { useCallback, useEffect, useRef } from 'react';", "import { Outlet, useLocation } from 'react-router';", "import { useCurrentChatId } from './queries';", "import { useGlobalShortcuts } from './shortcuts';", "import { NARROW_QUERY, useMediaQuery } from './useMediaQuery';", "", "const OPEN_SIDEBAR_BUTTON_ID = 'sidebar-open';", "", "export function AppShell() {", "  const narrow = useMediaQuery(NARROW_QUERY);", "  const collapsed = useUiStore((s) => s.sidebarCollapsed);", "  const overlayOpen = useUiStore((s) => s.sidebarOverlayOpen);", "  const setCollapsed = useUiStore((s) => s.setSidebarCollapsed);", "  const setOverlayOpen = useUiStore((s) => s.setSidebarOverlayOpen);", "  const location = useLocation();", "  const currentChatId = useCurrentChatId();", "", "  // `ChatHeader` titles the window after its chat; everywhere else it is just the app name.", "  useEffect(() => {", "    if (!currentChatId) document.title = APP_NAME;", "  }, [currentChatId]);", "", "  // Wide windows remember a collapsed sidebar; narrow windows always start with it closed (D19).", "  const visible = narrow ? overlayOpen : !collapsed;", "", "  // Focus follows the button the user pressed (the pressed button unmounts with its sidebar / main-area slot).", "  const pendingFocus = useRef<string | null>(null);", "  // biome-ignore lint/correctness/useExhaustiveDependencies: runs when visibility flips, nothing else", "  useEffect(() => {", "    const id = pendingFocus.current;", "    pendingFocus.current = null;", "    if (id) document.getElementById(id)?.focus();", "  }, [visible]);", "", "  const setVisible = useCallback(", "    (next: boolean) => (narrow ? setOverlayOpen(next) : setCollapsed(!next)),", "    [narrow, setOverlayOpen, setCollapsed],", "  );", "  const toggleSidebar = useCallback(() => setVisible(!visible), [setVisible, visible]);", "  const closeOverlay = useCallback(() => setOverlayOpen(false), [setOverlayOpen]);", "", "  // Picking a chat (or leaving narrow mode) closes the overlay.", "  // biome-ignore lint/correctness/useExhaustiveDependencies: location is the trigger", "  useEffect(() => {", "    setOverlayOpen(false);", "  }, [location.pathname, location.search, narrow, setOverlayOpen]);", "", "  useGlobalShortcuts({", "    toggleSidebar,", "    closeSidebarOverlay: narrow && overlayOpen ? closeOverlay : undefined,", "  });", "", "  return (", "    <div className=\"flex h-full w-full overflow-hidden bg-(image:--backdrop) bg-bg text-text\">", "      {narrow && visible ? (", "        <button", "          type=\"button\"", "          tabIndex={-1}", "          aria-label=\"Close sidebar\"", "          onClick={closeOverlay}", "          className=\"fixed inset-0 z-30 cursor-default bg-black/60\"", "        />", "      ) : null}", "      {visible ? (", "        <Sidebar", "          className={narrow ? 'fixed inset-y-0 left-0 z-40 shadow-2xl' : undefined}", "          onCollapse={() => {", "            pendingFocus.current = OPEN_SIDEBAR_BUTTON_ID;", "            setVisible(false);", "          }}", "        />", "      ) : null}", "", "      <main", "        data-sidebar-hidden={visible ? undefined : ''}", "        className=\"group relative flex min-h-0 min-w-0 flex-1 flex-col\"", "      >", "        {visible ? null : (", "          <IconButton", "            id={OPEN_SIDEBAR_BUTTON_ID}", "            aria-label=\"Open sidebar\"", "            className=\"absolute top-3.5 left-4 z-10\"", "            onClick={() => {", "              pendingFocus.current = SIDEBAR_COLLAPSE_BUTTON_ID;", "              setVisible(true);", "            }}", "          >", "            <PanelIcon />", "          </IconButton>", "        )}", "        <Outlet />", "      </main>", "", "      <SettingsModal />", "      <NewProjectModal />", "    </div>", "  );", "}"], "total": 108}, "README.md": {"lines": ["# harness", "", "A desktop AI harness: chat with LLMs about your local code projects. V0 talks to [OpenRouter](https://openrouter.ai)", "only, lets the model **read** a project (list, read and search files) through tool calls, and runs both in a browser", "(dev) and as a Linux AppImage. It cannot modify files or run commands.", "", "The plan, contracts, work sections and the acceptance checklist are in [`docs/v0-plan.md`](docs/v0-plan.md).", "", "## Prerequisites", "", "- Linux x86_64 (developed on CachyOS / Arch, KDE Wayland)", "- Node.js 22 or newer, npm 10 or newer", "- `fuse2` to run the AppImage, and unprivileged user namespaces for Chromium's sandbox (enabled on Arch / CachyOS kernels)", "- An [OpenRouter API key](https://openrouter.ai/keys) to chat for real. Not needed with the fake provider or the mock API (see below)", "- For `npm run e2e` (web half): a Chromium, either Playwright's (`npx playwright install chromium`), one on `PATH`, or", "  `E2E_CHROME=/path/to/chrome`. The Electron half needs a display and a keyring (KWallet/libsecret)", "", "## Install", "", "```bash", "npm ci", "```", "", "Electron's binary is downloaded by a postinstall step. If `npm run dev` or `npm run preview` complain that it is", "missing, fetch it with:", "", "```bash", "node node_modules/electron/install.js", "```", "", "## Run it", "", "| Command | What you get |", "|---|---|", "| `npm run dev:web` | API server on `http://127.0.0.1:8787/api` plus the renderer in your browser at `http://localhost:5173` (Vite proxies `/api`). Data in `./.dev-data`. |", "| `npm run dev` | The same API server plus an Electron window on the Vite dev server (DevTools, hot reload). Data in `./.dev-data`. |", "| `npm run dev:server` | API server only (`tsx watch`). |", "| `npm run preview` | Builds, then runs Electron on the **production wiring** (`app://harness/`, backend inside the main process). Data in `./.dev-data-preview`. |", "", "Ports 8787 (API) and 5173 (Vite, strict) are fixed; stop other dev servers first.", "", "Environment variables:", "", "| Variable | Effect |", "|---|---|", "| `HARNESS_FAKE_PROVIDER=1` | The dev server (and the production wiring, so also `preview` and the AppImage) uses a scripted fake provider instead of OpenRouter: any key starting with `sk-or-` is accepted, no network, no cost. Replies read `README.md` with a `read_file` call, then answer with a code block. Test markers in a message: `[fake:slow]` (slow stream, to try Stop), `[fake:error=<code>]` (the call fails with that error code, e.g. `invalid_api_key`, `provider_error`) `[fake:flaky]` (fails once, succeeds on Retry) and `[fake:read=<path>]` (the first tool call reads that path, e.g. `.env`, to see the sandbox refuse it). |", "| `HARNESS_DATA_DIR=<dir>` | Overrides the data directory in every mode. |", "| `VITE_API=mock` | The renderer uses an in-memory mock API (seeded sample data, fake streaming); no server needed. E.g. `VITE_API=mock npm run dev:web`. |", "", "Typical keyless session: `HARNESS_FAKE_PROVIDER=1 npm run dev:web`, open Settings, paste any `sk-or-\u2026` key.", "", "## Build and install", "", "```bash", "npm run build           # main, preload and renderer into out/ (the renderer bundle is minified)", "npm run dist            # build + package release/harness-<version>-x86_64.AppImage", "scripts/install-local.sh              # install the newest AppImage for your user", "scripts/install-local.sh --uninstall  # remove what it installed", "```", "", "`install-local.sh` copies the AppImage to `~/.local/bin/harness.AppImage`, the icon to", "`~/.local/share/icons/hicolor/512x512/apps/harness.png` and writes `~/.local/share/applications/harness.desktop`", "(then refreshes the desktop database if the tool exists). It is idempotent. Run `harness.AppImage` from a terminal", "to see the logs.", "", "## Data", "", "| Mode | Data directory |", "|---|---|", "| AppImage | `~/.config/harness` (Electron's `userData`) |", "| `npm run dev:web`, `npm run dev` | `./.dev-data` |", "| `npm run preview` | `./.dev-data-preview` |", "| any, with `HARNESS_DATA_DIR` | that directory (its Electron profile is `<dir>/electron-profile`) |", "", "Electron's profile (Chromium state, `localStorage`, single-instance lock): `~/.config/harness` for the AppImage,", "`~/.config/harness-dev` for `npm run dev`, `~/.config/harness-preview` for `npm run preview`. A run with `HARNESS_DATA_DIR` gets its profile (and lock) at", "`<dir>/electron-profile` in every mode, so it never collides with the installed app. `--user-data-dir=<dir>`", "overrides it.", "", "```", "<dataDir>/", "  settings.json         last chosen model", "  secrets.json          the OpenRouter key (mode 0600)", "  projects.json         projects (name, absolute folder path)", "  chats/index.json      chat list (rebuilt from chats/ if missing or corrupt)", "  chats/<chatId>.json   one file per chat: messages, tool calls and results", "  attachments/<id>.bin  uploaded file bytes; <id>.json is its metadata", "  cache/models.json     OpenRouter model list (refreshed hourly)", "```", "", "**Where the API key lives.** In the AppImage (and `npm run preview`) the key is encrypted with Electron's", "`safeStorage` (KWallet on KDE) and `secrets.json` says `\"enc\": \"safeStorage\"`. If the desktop has no usable keyring,", "it falls back to plaintext with mode 0600 and logs that. In `npm run dev:web` / `npm run dev` the key is plaintext", "in `secrets.json` (mode 0600) by design. The renderer never receives the key after saving; it only sees whether one is", "configured and a masked hint (`sk-or-v1-\u2026a1b2`). Projects are never copied or modified: removing a project only", "forgets the folder.", "", "The browser build keeps UI state (sidebar collapsed, expanded projects) in `localStorage`; in the app it lives in", "that mode's Electron profile (see above).", "", "## Tests", "", "| Command | What it does |", "|---|---|", "| `npm test` | Vitest: node tests for `shared` / `core` / `server`, jsdom tests for `renderer`. |", "| `npm run typecheck` | `tsc --noEmit` for the node and web halves. |", "| `npm run lint` | Biome lint and format check (`npm run format` applies fixes). |", "| `npm run e2e` | End-to-end tour of the real UI (checklist items A1\u2013A18 of the plan, except the manual parts listed under Limitations) against the real backend with the fake provider: first in web dev (headless Chromium), then in the built Electron app (`npm run build` first). Not part of `npm test`. |", "| `npm run e2e:web` / `npm run e2e:electron` | One half only. |", "", "Every change must pass `npm run typecheck && npm run lint && npm test`.", "", "The e2e scripts (`scripts/e2e/`) use temporary data and Electron profile directories (never `~/.config/harness`), start", "and stop every process they need, and clean up on exit. Useful switches: `E2E_KEEP=1` keeps the scratch directory", "(screenshots, logs, the fixtures), `E2E_OUT_DIR=<dir>` chooses it, `E2E_SECTIONS=A2,A11` runs only those sections", "(A2 stores the key most others need), `E2E_SKIP_BUILD=1` reuses `out/`, and `E2E_SHOTS=1` also takes screenshots of", "the main screens at 1440\u00d7900, 800\u00d7600 and 720\u00d7600 (with an overflow check) into `<scratch>/shots`", "(`E2E_SKIP_SMOKE=1` for only those).", "", "## Known limitations (V0)", "", "- **OpenRouter only**, and untested against the live API in this repo's automation (it needs a key): the", "  `reasoning_details` round trip for reasoning models with tools is implemented from the docs and unverified; OpenRouter's", "  capability metadata (`tools`, image input) can be wrong for some models, in which case the error is shown.", "- **Read-only project access**: no file edits, no commands. Tools are sandboxed to the project root, skip ignored and", "  secret-looking files (`.env`, keys), and cap file and result sizes.", "- **No** editing or regenerating past messages, branching, token or cost display (usage is stored, not shown), context", "  compaction, chat search, light theme, auto-update, pacman/AUR package, or Windows/macOS builds.", "- **Attachments**: text files and images (PNG, JPEG, WebP, GIF) through the attach menu only: no paste, no drag and drop,", "  no picking project files. Text up to 512 KB, images up to 10 MB, 10 files per message.", "- `Ctrl+N` (New chat) works in the app; browsers reserve it.", "- A chat whose first reply was stopped or failed keeps the title \"New chat\" (titles are generated after the first", "  completed turn). Failed \"move to project\" requests only refetch; there is no toast component.", "- The AppImage needs `fuse2` and user namespaces. It is x86_64 only. The minimum window size is 800\u00d7600; below 760 px", "  wide the sidebar becomes an overlay.", "- Automated checks cover web dev and the built Electron app with the fake provider. Still manual: the A5 tool-row spinner and the `list_files` row (the fake provider only calls `read_file`), the A12 real offline case (the script only injects `[fake:error=network_error]`), a real key against", "  OpenRouter, the native folder picker, launching from the KDE launcher after `install-local.sh`, and the AppImage on the", "  Arch machine.", "", "## Layout", "", "```", "src/shared/     contracts shared by everything: types, errors, API schemas, stream events, constants, SSE reader", "src/core/       storage, provider adapters, project tools, agent loop (no Electron imports)", "src/server/     Hono app (/api) and the standalone dev server", "src/main/       Electron main process (prod backend, protocol handler, safeStorage)", "src/preload/    Electron preload (window.harness bridge)", "src/renderer/   React UI", "scripts/        install-local.sh, e2e/ (end-to-end tests and screenshots), spikes/, try-openrouter.ts", "```", "", "Path aliases: `@shared/*`, `@core/*`, `@server/*`, `@renderer/*`."], "total": 152}, "CLAUDE.md": {"lines": ["@AGENTS.md"], "total": 1}, "biome.json": {"lines": ["{", "  \"$schema\": \"./node_modules/@biomejs/biome/configuration_schema.json\",", "  \"vcs\": { \"enabled\": true, \"clientKind\": \"git\", \"useIgnoreFile\": true },", "  \"files\": {", "    \"includes\": [\"**\", \"!docs\", \"!**/*.md\", \"!**/*.html\"]", "  },", "  \"formatter\": {", "    \"enabled\": true,", "    \"indentStyle\": \"space\",", "    \"indentWidth\": 2,", "    \"lineWidth\": 120", "  },", "  \"javascript\": {", "    \"formatter\": { \"quoteStyle\": \"single\", \"trailingCommas\": \"all\", \"semicolons\": \"always\" }", "  },", "  \"css\": {", "    \"parser\": { \"tailwindDirectives\": true }", "  },", "  \"linter\": {", "    \"enabled\": true,", "    \"rules\": { \"preset\": \"recommended\" }", "  },", "  \"assist\": { \"actions\": { \"source\": { \"organizeImports\": \"on\" } } }", "}"], "total": 24}}};
+  }
+  renderVals() {
+    if (!this.d) this.d = Component.data();
+    const accent = this.props.accent ?? '#f6bd60';
+    const { panelOpen, active, tabs, query, open } = this.state;
+    const isFiles = active === 'files', isLauncher = active === 'launcher', isViewer = !isFiles && !isLauncher;
+    const selected = isViewer ? active : tabs[tabs.length - 1];
+
+    const iconBtn = 'width: 40px; height: 40px; flex: none; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 10px; cursor: pointer; ';
+    const toggleStyle = iconBtn + (panelOpen ? 'background: #222a52; color: #ecf0fa; box-shadow: inset 0 0 0 1px #343f72;' : 'background: transparent; color: #9ba5c6;');
+
+    const surfaceDefs = [
+      { id: 'files', label: 'Files', key: 'F', hint: 'Browse the project, read-only', disabled: false },
+      { id: 'terminal', label: 'Terminal', key: 'T', hint: 'Not available yet', disabled: true },
+      { id: 'diff', label: 'Diff', key: 'D', hint: 'Available after the current chat has made edits', disabled: true }
+    ];
+    const surfaces = surfaceDefs.map((s) => ({
+      ...s,
+      isFiles: s.id === 'files', isTerminal: s.id === 'terminal', isDiff: s.id === 'diff',
+      open: () => !s.disabled && this.setState({ active: s.id }),
+      style: 'width: 100%; min-height: 52px; display: flex; align-items: center; gap: 12px; padding: 6px 10px; border: 0; border-radius: 10px; background: transparent; font: inherit; font-size: 14.5px; ' + (s.disabled ? 'color: #8792b6; opacity: 0.6;' : 'color: #c3cbe3; cursor: pointer;'),
+      keyStyle: 'min-width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid #343f72; border-radius: 6px; background: #151b35; font-family: \'JetBrains Mono\', monospace; font-size: 11px; color: #9ba5c6;'
+    }));
+
+    const rowBase = 'width: 100%; min-height: 28px; display: flex; align-items: center; gap: 6px; border: 0; border-radius: 7px; font-family: \'JetBrains Mono\', monospace; font-size: 12.5px; cursor: pointer; text-align: left; padding-right: 8px; ';
+    const rows = [];
+    const q = query.trim().toLowerCase();
+    const walk = (nodes, prefix, depth) => {
+      for (const node of nodes) {
+        const path = prefix ? prefix + '/' + node.n : node.n;
+        const isDir = !!node.c;
+        if (q) {
+          if (isDir) walk(node.c, path, depth);
+          else if (path.toLowerCase().includes(q)) rows.push(this.row(path, node.n, false, 0, prefix ? prefix + '/' : '', rowBase));
+          continue;
+        }
+        rows.push(this.row(path, node.n, isDir, depth, '', rowBase));
+        if (isDir && open[path]) walk(node.c, path, depth + 1);
+      }
+    };
+    walk(this.d.tree, '', 0);
+
+    const tabBase = "display: inline-flex; align-items: center; gap: 7px; min-height: 30px; border: 0; border-radius: 8px; font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap; ";
+    const on = 'background: #222a52; color: #ecf0fa; box-shadow: inset 0 0 0 1px #343f72;';
+    const off = 'background: transparent; color: #9ba5c6;';
+    const p = isViewer ? this.d.prev[active] : null;
+    const slash = isViewer ? active.lastIndexOf('/') + 1 : 0;
+    return {
+      accent,
+      panelOpen,
+      toggleStyle,
+      panelStyle: 'flex: 0 1 ' + (isViewer ? 560 : 380) + 'px; max-width: 100%; min-width: 0; height: 100%; display: flex; flex-direction: column; background: #0b0f20; border-left: 1px solid #20284a; box-sizing: border-box; min-height: 0',
+      togglePanel: () => this.setState({ panelOpen: !panelOpen }),
+      isLauncher, isFiles, isViewer,
+      filesSelected: String(isFiles),
+      filesTabStyle: tabBase + 'padding: 0 10px; flex: none; ' + (isFiles ? on : off),
+      showFiles: () => this.setState({ active: 'files' }),
+      toLauncher: () => this.setState({ active: 'launcher' }),
+      tabs: tabs.map((path) => {
+        const sel = path === active;
+        return {
+          path,
+          name: path.slice(path.lastIndexOf('/') + 1),
+          selected: String(sel),
+          wrapStyle: 'flex: none; display: inline-flex; align-items: center; gap: 2px; padding-right: 4px; border-radius: 8px; ' + (sel ? on : 'background: transparent;'),
+          labelStyle: tabBase + 'padding: 0 4px 0 10px; max-width: 180px; background: transparent; ' + (sel ? 'color: #ecf0fa;' : 'color: #9ba5c6;'),
+          activate: () => this.setState({ active: path }),
+          close: () => this.closeTab(path)
+        };
+      }),
+      collapseAll: () => this.setState({ open: {} }),
+      surfaces,
+      query,
+      onQuery: (e) => this.setState({ query: e.target.value }),
+      rows,
+      noMatches: !!q && rows.length === 0,
+      viewer: {
+        path: isViewer ? active : '',
+        dir: isViewer ? active.slice(0, slash) : '',
+        name: isViewer ? active.slice(slash) : '',
+        meta: p ? p.total + ' lines' : '',
+        hasLines: !!p,
+        noLines: isViewer && !p,
+        lines: p ? p.lines.map((code, i) => ({ n: String(i + 1), code })) : []
+      }
+    };
+  }
+  row(path, name, isDir, depth, dir, rowBase) {
+    const { open, active } = this.state;
+    const selected = active;
+    const expanded = isDir && !!open[path];
+    const current = !isDir && path === selected;
+    return {
+      name, dir, isDir, isFile: !isDir,
+      expanded: isDir ? String(expanded) : undefined,
+      current: current ? 'true' : undefined,
+      chevronBox: 'flex: none; width: 12px; display: inline-flex; ' + (isDir ? '' : 'visibility: hidden;'),
+      chevron: 'transition: transform .15s ease; transform: rotate(' + (expanded ? 90 : 0) + 'deg)',
+      style: rowBase + 'padding-left: ' + (8 + depth * 14) + 'px; ' + (current ? 'background: #222a52; color: #ecf0fa;' : 'background: transparent; color: ' + (isDir ? '#c3cbe3' : '#a9b2cf') + ';'),
+      click: () => isDir
+        ? this.setState({ open: { ...open, [path]: !expanded } })
+        : this.openFile(path)
+    };
+  }
+}
+</script>
+
+
+</body></html>
