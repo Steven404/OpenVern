@@ -757,7 +757,7 @@ the orchestrator swaps the imports when both land. S6's "New chat" button / `Ctr
 **Owns:** cross-cutting fixes, `README.md`. **Depends on:** everything.
 
 - [x] S9.1 Switch the default `ApiClient` to `HttpApiClient` (mock stays behind `VITE_API=mock`); remove all placeholders.
-- [ ] S9.2 Run §8 in web dev, Electron dev, preview, and the AppImage on **CachyOS** and **Arch**; file and fix bugs (or hand them back to the owning section).
+- [x] S9.2 Run §8 in web dev, Electron dev, preview, and the AppImage on **CachyOS** and **Arch**; file and fix bugs (or hand them back to the owning section).
 - [x] S9.3 Visual pass against the design at 1440×900 and at 800×600.
 - [x] S9.4 README: install, dev, build, data dir, where the key is stored, known limitations (§10).
 - [ ] S9.5 Tag `v0.1.0`.
