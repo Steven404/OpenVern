@@ -47,14 +47,25 @@ export function createListFilesTool(opts: SandboxOptions = {}): Tool {
 
       const res = await resolveInProject(ctx.projectRoot, relPath, opts);
       if (!res.ok) return fail(res.message, summary);
-      if (!res.exists)
+
+      // Proposed edits are listed too (plan G2.3): created files appear, deleted files are hidden.
+      const staged = ctx.changes ? await ctx.changes.staged() : [];
+      const overlay = {
+        created: staged.filter((s) => s.kind === 'create').map((s) => s.path),
+        deleted: new Set(staged.filter((s) => s.kind === 'delete').map((s) => s.path)),
+      };
+      const dirPrefix = res.rel === '' ? '' : `${res.rel}/`;
+      const proposedInside = overlay.created.some((p) => p.startsWith(dirPrefix));
+      if (!res.exists && !proposedInside)
         return fail(`Path not found: ${relPath}. Use list_files on a parent directory to see what exists.`, summary);
-      try {
-        if (!(await stat(res.abs)).isDirectory()) {
-          return fail(`Not a directory: ${relPath}. Use read_file to read a file.`, summary);
+      if (res.exists) {
+        try {
+          if (!(await stat(res.abs)).isDirectory()) {
+            return fail(`Not a directory: ${relPath}. Use read_file to read a file.`, summary);
+          }
+        } catch {
+          return fail(`Cannot read: ${relPath}`, summary);
         }
-      } catch {
-        return fail(`Cannot read: ${relPath}`, summary);
       }
 
       const tree = await buildTree(res.root, res.rel, {
@@ -62,6 +73,7 @@ export function createListFilesTool(opts: SandboxOptions = {}): Tool {
         maxEntries: LIMITS.listFilesMaxEntries,
         signal: ctx.signal,
         deniedRoots: opts.deniedRoots,
+        ...(ctx.changes ? { overlay } : {}),
       });
       if (tree.aborted) return abortedResult(summary);
 

@@ -8,6 +8,7 @@ import type { Tool, ToolContext, ToolResult } from '../tools/types';
 import type {
   AgentService,
   AttachmentsService,
+  ChangesService,
   ChatsService,
   ModelCatalog,
   ProjectsService,
@@ -268,6 +269,10 @@ export interface HarnessOptions {
   renderTree?: AgentServiceDeps['renderTree'];
   /** Reuse a provider (e.g. for custom delay). */
   provider?: FakeProvider;
+  /** A change-set service; enables the edit tools for project chats with a tools-capable model. */
+  changes?: ChangesService;
+  /** Real folder for the project (default: the fictional demo path). */
+  projectRoot?: string;
 }
 
 export interface Harness {
@@ -290,7 +295,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   const now = createClock();
   const chats = createFakeChats(now);
   const attachments = createFakeAttachments();
-  const projects = createFakeProjects([PROJECT]);
+  const projects = createFakeProjects([opts.projectRoot ? { ...PROJECT, rootPath: opts.projectRoot } : PROJECT]);
   const models = createFakeModels(opts.models ?? [model(MODEL, { tools: true, images: true })]);
   const provider = opts.provider ?? createFakeProvider({ script: opts.script, delayMs: 0 });
   const tools = opts.tools ?? [createFakeTool('read_file')];
@@ -307,6 +312,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     models,
     provider,
     getProjectTools: () => tools,
+    ...(opts.changes ? { changes: opts.changes } : {}),
     renderTree:
       opts.renderTree ??
       (async (root, o) => {

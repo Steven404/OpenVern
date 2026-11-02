@@ -1,6 +1,7 @@
 // System prompt construction (S4.9). Pure: the caller supplies the date, project and rendered tree.
 
 import { LIMITS } from '@shared/constants';
+import { editPromptLines } from './edit-mode';
 
 export interface SystemPromptInput {
   /** From `buildIdentity`: who the model is and where it runs. */
@@ -10,6 +11,8 @@ export interface SystemPromptInput {
   project?: { name: string; rootPath: string };
   /** True when project tools are actually offered for this request (project chat + model supports tools). */
   hasTools: boolean;
+  /** True when the edit tools are offered too (project chat, tools-capable model, change set attached). */
+  canEdit?: boolean;
   /** Output of `renderTree`; used in every project prompt. */
   tree?: string;
   /** The tree could not be read in time; tell the model instead of showing one. */
@@ -29,6 +32,7 @@ export function buildSystemPrompt({
   now,
   project,
   hasTools,
+  canEdit = false,
   tree,
   treeUnavailable,
 }: SystemPromptInput): string {
@@ -79,13 +83,20 @@ export function buildSystemPrompt({
   const out = [
     ...header,
     '',
-    'You can explore the project with read-only tools:',
+    canEdit
+      ? 'You can explore the project with these read tools:'
+      : 'You can explore the project with read-only tools:',
     '- list_files: list a directory as a tree.',
     '- read_file: read a file (optionally a line range). Large files are truncated; request further ranges if needed.',
     '- search: find text or a regular expression across files.',
+    ...(canEdit ? ['', ...editPromptLines()] : []),
     '',
     'Limits and rules:',
-    '- You cannot modify files or run commands. If the user asks for a change, show the code in your answer so they can apply it.',
+    ...(canEdit
+      ? []
+      : [
+          '- You cannot modify files or run commands. If the user asks for a change, show the code in your answer so they can apply it.',
+        ]),
     '- Read before you claim: never state what a file contains, or that something does or does not exist, without having looked. If you have not checked, say so.',
     '- All paths are relative to the project root. Do not use absolute paths or `..`.',
     '- Files that look like secrets (.env, private keys) are blocked, and ignored folders (node_modules, .git, build output) are hidden.',

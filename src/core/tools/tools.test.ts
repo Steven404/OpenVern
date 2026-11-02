@@ -25,9 +25,16 @@ const search = (args: unknown, ctx: ToolContext = fx.ctx) => tool('search').run(
 const abortedCtx = (): ToolContext => ({ projectRoot: fx.root, signal: AbortSignal.abort() });
 
 describe('getProjectTools', () => {
-  it('exposes list_files, read_file and search with clean JSON Schema parameters', () => {
+  it('exposes the read and edit tools with clean JSON Schema parameters', () => {
     const tools = getProjectTools();
-    expect(tools.map((t) => t.spec.name)).toEqual(['list_files', 'read_file', 'search']);
+    expect(tools.map((t) => t.spec.name)).toEqual([
+      'list_files',
+      'read_file',
+      'search',
+      'edit_file',
+      'write_file',
+      'delete_file',
+    ]);
     for (const t of tools) {
       expect(t.spec.description.length).toBeGreaterThan(50);
       expect(t.spec.parameters.type).toBe('object');

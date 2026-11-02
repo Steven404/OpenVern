@@ -54,18 +54,25 @@ async function searchFile(
   limit: number,
   signal: AbortSignal,
   secrets: { known?: readonly string[]; deniedFiles?: readonly string[] },
+  /** Proposed content (plan G2.3): searched instead of the disk. */
+  staged?: string,
 ): Promise<string[]> {
-  let buf: Buffer;
-  try {
-    const info = await stat(abs);
-    if (!info.isFile() || info.size > LIMITS.searchMaxFileBytes) return [];
-    if (await isDeniedHardlink(info, secrets.deniedFiles)) return [];
-    buf = await readFile(abs, { signal });
-  } catch {
-    return [];
+  let raw: string;
+  if (staged !== undefined) {
+    raw = staged;
+  } else {
+    let buf: Buffer;
+    try {
+      const info = await stat(abs);
+      if (!info.isFile() || info.size > LIMITS.searchMaxFileBytes) return [];
+      if (await isDeniedHardlink(info, secrets.deniedFiles)) return [];
+      buf = await readFile(abs, { signal });
+    } catch {
+      return [];
+    }
+    if (buf.subarray(0, BINARY_SNIFF_BYTES).includes(0)) return [];
+    raw = buf.toString('utf8');
   }
-  if (buf.subarray(0, BINARY_SNIFF_BYTES).includes(0)) return [];
-  const raw = buf.toString('utf8');
   if (quickReject(raw)) return [];
   // Match against the redacted text, so a query cannot probe a secret one character at a time (plan K1).
   const text = redactSecrets(raw, { known: secrets.known }).text;
@@ -130,14 +137,31 @@ export function createSearchTool(opts: SandboxOptions = {}): Tool {
 
       const res = await resolveInProject(ctx.projectRoot, relPath, opts);
       if (!res.ok) return fail(res.message, summary);
-      if (!res.exists) return fail(`Path not found: ${relPath}. Use list_files to see what exists.`, summary);
 
-      let isDir: boolean;
-      try {
-        isDir = (await stat(res.abs)).isDirectory();
-      } catch {
-        return fail(`Cannot read: ${relPath}`, summary);
+      // Proposed edits are searched instead of the disk (plan G2.3): staged content, created files, no deleted files.
+      const stagedContent = new Map<string, string>();
+      const deletedPaths = new Set<string>();
+      if (ctx.changes) {
+        for (const f of await ctx.changes.staged()) {
+          const cur = await ctx.changes.read(f.path);
+          if (cur?.kind === 'staged') stagedContent.set(f.path, cur.content);
+          else if (cur?.kind === 'deleted') deletedPaths.add(f.path);
+        }
       }
+      const dirPrefix = res.rel === '' ? '' : `${res.rel}/`;
+      const proposedInside = [...stagedContent.keys()].some((p) => p.startsWith(dirPrefix));
+      if (!res.exists && !stagedContent.has(res.rel) && !proposedInside) {
+        return fail(`Path not found: ${relPath}. Use list_files to see what exists.`, summary);
+      }
+
+      let isDir = true;
+      if (res.exists) {
+        try {
+          isDir = (await stat(res.abs)).isDirectory();
+        } catch {
+          return fail(`Cannot read: ${relPath}`, summary);
+        }
+      } else isDir = !stagedContent.has(res.rel);
 
       const cap = LIMITS.searchMaxMatches;
       const results: string[] = [];
@@ -153,12 +177,19 @@ export function createSearchTool(opts: SandboxOptions = {}): Tool {
       };
 
       const processBatch = async (batch: { rel: string; abs: string }[]): Promise<void> => {
+        batch = batch.filter((f) => !deletedPaths.has(f.rel));
         const perFile = await Promise.all(
           batch.map((f) =>
-            searchFile(f.abs, f.rel, quickReject, matches, cap + 1, ctx.signal, {
-              known: ctx.knownSecrets,
-              deniedFiles: opts.deniedFiles,
-            }),
+            searchFile(
+              f.abs,
+              f.rel,
+              quickReject,
+              matches,
+              cap + 1,
+              ctx.signal,
+              { known: ctx.knownSecrets, deniedFiles: opts.deniedFiles },
+              stagedContent.get(f.rel),
+            ),
           ),
         );
         filesSearched += batch.length;
@@ -173,7 +204,9 @@ export function createSearchTool(opts: SandboxOptions = {}): Tool {
         }
       };
 
+      const seen = new Set<string>();
       if (!isDir) {
+        seen.add(res.rel);
         if (passesGlob(res.rel)) await processBatch([{ rel: res.rel, abs: res.abs }]);
       } else {
         let batch: { rel: string; abs: string }[] = [];
@@ -185,6 +218,7 @@ export function createSearchTool(opts: SandboxOptions = {}): Tool {
           deniedRoots: opts.deniedRoots,
         })) {
           if (entry.kind !== 'file' || !passesGlob(entry.rel)) continue;
+          seen.add(entry.rel);
           batch.push({ rel: entry.rel, abs: `${res.root}/${entry.rel}` });
           if (batch.length >= BATCH) {
             await processBatch(batch);
@@ -193,6 +227,13 @@ export function createSearchTool(opts: SandboxOptions = {}): Tool {
           }
         }
         if (!truncated && !ctx.signal.aborted && batch.length > 0) await processBatch(batch);
+        // Files that only exist in the proposal.
+        const created = [...stagedContent.keys()].filter(
+          (p) => !seen.has(p) && p.startsWith(dirPrefix) && passesGlob(p),
+        );
+        if (!truncated && !ctx.signal.aborted && created.length > 0) {
+          await processBatch(created.map((p) => ({ rel: p, abs: `${res.root}/${p}` })));
+        }
       }
       if (ctx.signal.aborted) return abortedResult(summary);
 

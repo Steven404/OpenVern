@@ -44,8 +44,10 @@ export async function createCore(deps: CoreDeps): Promise<Core> {
   const deniedFiles = deniedRoots.map((r) => dataPaths(r).secrets);
   const cacheFile = dataPaths(dataReal).modelsCache;
   const models = createModelCatalog({ provider, cacheFile });
+  const changes = createChangesService({ dataDir: dataReal, sandbox: { deniedRoots, deniedFiles } });
   const agent = createAgentService({
     version: deps.version,
+    changes,
     chats,
     attachments,
     projects,
@@ -69,7 +71,7 @@ export async function createCore(deps: CoreDeps): Promise<Core> {
     models,
     agent,
     provider,
-    changes: createChangesService({ dataDir: dataReal, sandbox: { deniedRoots, deniedFiles } }),
+    changes,
     projectFiles: createProjectFilesService({ projects, deniedRoots, deniedFiles }),
     version: deps.version,
   };
