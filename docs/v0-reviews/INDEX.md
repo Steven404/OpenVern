@@ -188,11 +188,25 @@ An independent verifier, who wrote none of the fixes, re-checked every ID agains
 - **Regression found and fixed:** the S6-N1 focus fallback moved focus to the composer behind a still-open Settings modal (Settings → Remove key → confirm). Fixed in `2b2fedf` with a test.
 - **Final state:** `npx vitest run` 571 passed / 1 skipped (baseline 491); typecheck and lint clean; `npm run e2e` passed on the merged code before the last fix (web 78+11, Electron 79+11).
 
-### Open questions / follow-ups (not fixed)
-1. **S8-N3 partial:** a *packaged* app started with `HARNESS_DATA_DIR` still shares `~/.config/harness` and the single-instance lock with the installed app. This was the B7 planner's default. The `index.ts` `setPath` wiring is covered only through the pure helper.
-2. **S1-M1 follow-up:** each instance denies only its own data dir. A `preview` run with the harness repo as a project could still read dev's plaintext `./.dev-data/secrets.json`, and a dev run with `~` as a project could reach `~/.config/harness`. Option: also deny `.dev-data*` by name, and/or the default prod userData path.
-3. **Tool calls when no tools were offered:** if a model emits tool calls anyway, the next step in the same turn still sends tool content (`loop.ts` ~l.250).
-4. **`renderTree` has no abort or timeout.** A stalled network mount could hang a turn. It now also runs for non-tool project chats (S4-N2).
+### Open questions / follow-ups
+
+Decided by the user on 2026-11-02 and implemented. Each has a failing test written first; full suite 594 passed / 1 skipped; `npm run e2e` passes (web 78+11, Electron 79+11).
+
+1. ~~**S8-N3 partial**~~ **Done in `f6b4a1b`:** when `HARNESS_DATA_DIR` is set and no `--user-data-dir` is given, the Electron profile is `<data dir>/electron-profile` in every mode. A plain installed launch keeps `~/.config/harness`.
+2. ~~**S1-M1 follow-up**~~ **Done in `ce8eb4e`:** the tools now deny all of the following:
+   - (a) `.dev-data` and `.dev-data-*` by name;
+   - (c) `secrets.json` by name, at any depth;
+   - (b) the default prod data dir (`$XDG_CONFIG_HOME/harness`, else `~/.config/harness`) by real path;
+   - (d) any directory that looks like a harness data dir: `chats/index.json` plus `projects.json`, `settings.json` or `secrets.json`.
+
+   Remaining gaps:
+   - A project root that sits *inside* a custom-location data dir isn't caught by (d), which only checks from the project root down.
+   - The (b) wiring in `createCore` is tested only through the helper.
+3. ~~**Tool calls when no tools were offered**~~ **Done in `dd0cecb`:** inside the same turn they are flattened to plain text, using the same format as B5.
+4. ~~**`renderTree` has no abort/timeout**~~ **Done in `1bba11c`:**
+   - The tree times out after `LIMITS.systemPromptTreeTimeoutMs` (2.5 s) and Stop works during the wait.
+   - The turn continues without the tree, and the system prompt says it couldn't be read.
+   - The first reply of the turn carries a persisted `notice`, shown in the UI with `role="status"`.
 5. ~~**image/* outside IMAGE_MIME_TYPES**~~ **Done in `c8b29ba`:** the server and the mock now share `@shared/attachment-sniff`, so they classify the same bytes the same way.
 6. **Minor leftovers:** the `scripts/try-openrouter.ts` header comment shows the old usage. The S9-N1 `expandedProjects` comparison is weak, because the row is flipped back before the snapshot; the collapsed-sidebar assertion carries the check. S4-N1's re-read and write are not atomic (accepted default). A hardlink to `secrets.json` inside a project isn't caught by the path-based deny.
 7. **Out of scope:** S9.2 (manual runs on CachyOS/Arch and the AppImage) and S9.5 (tag `v0.1.0`).
