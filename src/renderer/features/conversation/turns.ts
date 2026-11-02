@@ -21,6 +21,8 @@ export interface TextBlock {
 export interface ToolBlock {
   kind: 'tool';
   key: string;
+  /** The assistant message that made the call. */
+  messageId: string;
   call: ToolCall;
   result?: ToolMessage;
   /** `queued`: run open, no `tool_call` yet. `skipped`: the run ended (stopped / failed) before the tool produced a result. */
@@ -93,6 +95,7 @@ export function buildTurns(messages: Message[], { active, streamingId, runningTo
         current.blocks.push({
           kind: 'tool',
           key: `${m.id}:${call.id}`,
+          messageId: m.id,
           call,
           result,
           state: result
@@ -120,3 +123,7 @@ export function isWaiting(turns: Turn[], run: RunState | undefined): boolean {
   const tail = blocks.at(-1);
   return !(tail?.kind === 'text' && tail.streaming && tail.text.length > 0);
 }
+
+/** The turn holds a block of this assistant message (where the Proposed edits card belongs). */
+export const turnHasMessage = (turn: Turn, messageId: string): boolean =>
+  turn.blocks.some((b) => (b.kind === 'text' ? b.messageId : b.messageId) === messageId);

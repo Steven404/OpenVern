@@ -1,7 +1,7 @@
 import { APP_NAME } from '@shared/constants';
 import type { ApiErrorInfo } from '@shared/errors';
 import { Info } from 'lucide-react';
-import { memo } from 'react';
+import { memo, type ReactNode } from 'react';
 import { Button } from '../../components/ui';
 import { ErrorCard } from './ErrorCard';
 import { Markdown } from './Markdown';
@@ -16,6 +16,8 @@ export interface AssistantTurnProps {
   modelLabel?: string;
   /** "Thinking…" before the first token (and between tool calls and the next reply). */
   waiting?: boolean;
+  /** Rendered after the blocks (the Proposed edits card). */
+  footer?: ReactNode;
   /** Run-level error to show at the end of the turn (no persisted message carries it). */
   error?: ApiErrorInfo | null;
   /** The run was stopped but no message carries the `stopped` status yet. */
@@ -32,6 +34,7 @@ export const AssistantTurn = memo(function AssistantTurn({
   notice,
   modelLabel,
   waiting = false,
+  footer,
   error,
   stopped = false,
   forceRetry = false,
@@ -80,6 +83,8 @@ export const AssistantTurn = memo(function AssistantTurn({
           <TextPart key={b.key} block={b} onRetry={b === lastText ? onRetry : undefined} />
         ),
       )}
+
+      {footer}
 
       {waiting && (
         <p role="status" className="m-0 animate-pulse font-mono text-[13px] text-text-faint motion-reduce:animate-none">
