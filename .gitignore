@@ -10,3 +10,7 @@ coverage/
 .env.*
 !.env.example
 .claude/worktrees/
+
+# Local-only notes and reports. Never commit these (see AGENTS.md).
+reports/
+research_notes/

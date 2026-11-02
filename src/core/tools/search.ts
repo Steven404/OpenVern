@@ -3,8 +3,9 @@
 import { readFile, stat } from 'node:fs/promises';
 import { LIMITS } from '@shared/constants';
 import { z } from 'zod';
+import { redactSecrets } from '../security/redact';
 import { compileGlob, type GlobMatcher } from './glob';
-import { resolveInProject, type SandboxOptions } from './sandbox';
+import { isDeniedHardlink, resolveInProject, type SandboxOptions } from './sandbox';
 import type { Tool } from './types';
 import { abortedResult, displayPath, fail, parseArgs, succeed, toParameters } from './util';
 import { walk } from './walk';
@@ -52,18 +53,22 @@ async function searchFile(
   matches: Matcher,
   limit: number,
   signal: AbortSignal,
+  secrets: { known?: readonly string[]; deniedFiles?: readonly string[] },
 ): Promise<string[]> {
   let buf: Buffer;
   try {
     const info = await stat(abs);
     if (!info.isFile() || info.size > LIMITS.searchMaxFileBytes) return [];
+    if (await isDeniedHardlink(info, secrets.deniedFiles)) return [];
     buf = await readFile(abs, { signal });
   } catch {
     return [];
   }
   if (buf.subarray(0, BINARY_SNIFF_BYTES).includes(0)) return [];
-  const text = buf.toString('utf8');
-  if (quickReject(text)) return [];
+  const raw = buf.toString('utf8');
+  if (quickReject(raw)) return [];
+  // Match against the redacted text, so a query cannot probe a secret one character at a time (plan K1).
+  const text = redactSecrets(raw, { known: secrets.known }).text;
 
   const found: string[] = [];
   const lines = text.split('\n');
@@ -149,7 +154,12 @@ export function createSearchTool(opts: SandboxOptions = {}): Tool {
 
       const processBatch = async (batch: { rel: string; abs: string }[]): Promise<void> => {
         const perFile = await Promise.all(
-          batch.map((f) => searchFile(f.abs, f.rel, quickReject, matches, cap + 1, ctx.signal)),
+          batch.map((f) =>
+            searchFile(f.abs, f.rel, quickReject, matches, cap + 1, ctx.signal, {
+              known: ctx.knownSecrets,
+              deniedFiles: opts.deniedFiles,
+            }),
+          ),
         );
         filesSearched += batch.length;
         for (const found of perFile) {

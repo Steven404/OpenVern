@@ -78,6 +78,7 @@ export function buildSystemPrompt({ now, project, hasTools, tree, treeUnavailabl
     '- Read before you claim: never state what a file contains, or that something does or does not exist, without having looked. If you have not checked, say so.',
     '- All paths are relative to the project root. Do not use absolute paths or `..`.',
     '- Files that look like secrets (.env, private keys) are blocked, and ignored folders (node_modules, .git, build output) are hidden.',
+    '- Secret-looking values in tool output (API keys, tokens, private keys) are replaced with «redacted:…» placeholders. Never write a placeholder back into a file or ask the user to reveal the value.',
     '- Prefer a few targeted tool calls over reading everything.',
     '',
     'Answer in Markdown. Use fenced code blocks (with a language) for code, and mention file paths in backticks.',

@@ -3,6 +3,7 @@
 import { readFile, stat } from 'node:fs/promises';
 import { LIMITS } from '@shared/constants';
 import { z } from 'zod';
+import { redactionNote, redactSecrets } from '../security/redact';
 import { resolveInProject, type SandboxOptions } from './sandbox';
 import type { Tool } from './types';
 import { abortedResult, displayPath, fail, parseArgs, succeed, toParameters } from './util';
@@ -91,7 +92,9 @@ export function createReadFileTool(opts: SandboxOptions = {}): Tool {
         return fail(`Binary file: ${relPath} cannot be displayed as text.`, summary);
       }
 
-      const lines = buf.toString('utf8').split('\n');
+      // Redact before slicing: line numbers stay valid (replacements keep line breaks) and no limit can cut a key in two.
+      const redacted = redactSecrets(buf.toString('utf8'), { known: ctx.knownSecrets });
+      const lines = redacted.text.split('\n');
       if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
       const total = lines.length;
       if (total === 0) return succeed(`${displayPath(res.rel)} (empty file, 0 lines)`, summary);
@@ -140,6 +143,7 @@ export function createReadFileTool(opts: SandboxOptions = {}): Tool {
       } else if (last < total) {
         out.push(`... ${total - last} more line(s) in the file. Continue with start_line=${last + 1}.`);
       }
+      if (redacted.count > 0) out.push(redactionNote(redacted.count));
       const range = start === 1 && last === total ? '' : ` (lines ${start}-${last})`;
       return succeed(out.join('\n'), `${relPath}${range}`);
     },

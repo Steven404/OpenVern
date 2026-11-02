@@ -1,6 +1,7 @@
 // Path sandbox + secret deny list (plan S3.1, S3.2). Every tool resolves user-supplied paths through here.
 
-import { lstat, realpath } from 'node:fs/promises';
+import type { Stats } from 'node:fs';
+import { lstat, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 export const OUTSIDE_MESSAGE = 'Path is outside the project';
@@ -96,6 +97,26 @@ export interface SandboxOptions {
    * Matched by real path only: a folder that merely shares the name is not affected.
    */
   deniedRoots?: readonly string[];
+  /**
+   * Absolute paths of files no tool may read under another name (the app's `secrets.json`, plan K1). Only hardlinks
+   * can alias a file to an allowed name once symlinks are resolved, so this is checked only for files with `nlink > 1`,
+   * against the denied file's current inode.
+   */
+  deniedFiles?: readonly string[];
+}
+
+/** True when `info` (a regular file with more than one link) is the same inode as one of `deniedFiles`. */
+export async function isDeniedHardlink(info: Stats, deniedFiles: readonly string[] | undefined): Promise<boolean> {
+  if (!deniedFiles?.length || !info.isFile() || info.nlink < 2) return false;
+  for (const f of deniedFiles) {
+    try {
+      const d = await stat(f);
+      if (d.ino === info.ino && d.dev === info.dev) return true;
+    } catch {
+      // A denied file that does not exist cannot be aliased.
+    }
+  }
+  return false;
 }
 
 function toPosix(rel: string): string {
@@ -151,6 +172,12 @@ export async function resolveInProject(
   // The real path (or a directory above it) may be a data dir of any name; ancestors only, to keep the cost bounded.
   if (await isInsideHarnessDataDir(realRoot, exists ? real : path.dirname(real))) {
     return { ok: false, kind: 'blocked', message: BLOCKED_MESSAGE };
+  }
+  if (exists && opts.deniedFiles?.length) {
+    const info = await lstat(real).catch(() => null);
+    if (info && (await isDeniedHardlink(info, opts.deniedFiles))) {
+      return { ok: false, kind: 'blocked', message: BLOCKED_MESSAGE };
+    }
   }
   return { ok: true, abs: real, rel, root: realRoot, exists };
 }

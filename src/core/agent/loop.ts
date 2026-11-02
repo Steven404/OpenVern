@@ -28,6 +28,7 @@ import type {
 } from '@shared/types';
 import { CoreError, toErrorInfo } from '../errors';
 import type { Provider, ProviderMessage } from '../providers/types';
+import { redactionNote, redactSecrets } from '../security/redact';
 import type { GetProjectTools, RenderTree, Tool } from '../tools/types';
 import type {
   AgentService,
@@ -49,6 +50,11 @@ export interface AgentServiceDeps {
   provider: Provider;
   getProjectTools: GetProjectTools;
   renderTree: RenderTree;
+  /**
+   * Exact secret values (the stored API key) redacted from tool output and replayed history (plan K1). Read once per
+   * turn; a failure counts as "none", and prefix-based redaction still applies.
+   */
+  getKnownSecrets?: () => Promise<readonly string[]>;
   /** Clock, injectable for tests. Also used to measure tool durations. */
   now?: () => Date;
   /** Title request timeout; default 10 s. */
@@ -206,8 +212,10 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
       ...(treeTimedOut ? { treeUnavailable: true } : {}),
     });
     const toolSpecs = tools.map((t) => t.spec);
+    const knownSecrets = (await deps.getKnownSecrets?.().catch(() => [])) ?? [];
     const history: ProviderMessage[] = await buildHistory(chat.messages, {
       model,
+      knownSecrets,
       supportsImages: modelInfo.supportsImages,
       toolsOffered: toolSpecs.length > 0,
       readAttachment: (id) => attachments.readBytes(id),
@@ -282,7 +290,7 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
       }
       const flattened: string[] = text.length > 0 ? [text] : [];
       for (const call of toolCalls) {
-        const toolMessage = await runTool(call, messageId, tools, project, signal, emit);
+        const toolMessage = await runTool(call, messageId, tools, project, signal, emit, knownSecrets);
         await chats.appendMessage(chatId, toolMessage);
         await emit({ type: 'tool_result', message: toolMessage });
         if (toolsOffered) history.push({ role: 'tool', toolCallId: call.id, content: toolMessage.output });
@@ -329,6 +337,7 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
     project: Project | undefined,
     signal: AbortSignal,
     emit: Emit,
+    knownSecrets: readonly string[],
   ): Promise<ToolMessage> {
     await emit({ type: 'tool_call', messageId, toolCall: call });
     const started = now().getTime();
@@ -358,7 +367,7 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
         };
       }
       try {
-        const result = await tool.run(args, { projectRoot: project.rootPath, signal });
+        const result = await tool.run(args, { projectRoot: project.rootPath, signal, knownSecrets });
         // A result that arrives after a stop is replaced, so what is stored never depends on a race.
         return signal.aborted ? interrupted() : result;
       } catch {
@@ -367,7 +376,14 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
       }
     };
 
-    const result = await execute();
+    const raw = await execute();
+    // Backstop for the tools' own redaction (plan K1): nothing secret-looking is emitted, stored or replayed.
+    const output = redactSecrets(raw.output, { known: knownSecrets });
+    const result = {
+      ok: raw.ok,
+      output: output.count > 0 ? `${output.text}\n${redactionNote(output.count)}` : output.text,
+      summary: redactSecrets(raw.summary, { known: knownSecrets }).text,
+    };
     return {
       id: crypto.randomUUID(),
       role: 'tool',

@@ -5,6 +5,8 @@ import type { ToolSpec } from '../providers/types';
 export interface ToolContext {
   projectRoot: string;
   signal: AbortSignal;
+  /** Exact secret values (the app's stored key) to redact from anything read from disk (plan K1). */
+  knownSecrets?: readonly string[];
 }
 
 export interface ToolResult {

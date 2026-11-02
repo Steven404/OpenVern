@@ -2,6 +2,7 @@
 
 import type { AttachmentRef, Message, ToolCall, ToolMessage } from '@shared/types';
 import type { ContentPart, ProviderMessage } from '../providers/types';
+import { redactSecrets } from '../security/redact';
 
 export interface HistoryOptions {
   /** The model the next request is for. */
@@ -11,6 +12,8 @@ export interface HistoryOptions {
   /** True when this request includes tool definitions. When false, tool calls/results are flattened into text. */
   toolsOffered: boolean;
   readAttachment(id: string): Promise<Uint8Array>;
+  /** Exact secret values to redact from replayed tool output (plan K1). */
+  knownSecrets?: readonly string[];
 }
 
 export const INTERRUPTED_OUTPUT = 'Interrupted: the run was stopped before this tool finished.';
@@ -74,7 +77,12 @@ async function attachmentParts(att: AttachmentRef, opts: HistoryOptions): Promis
  */
 export async function buildHistory(messages: Message[], opts: HistoryOptions): Promise<ProviderMessage[]> {
   const results = new Map<string, ToolMessage>();
-  for (const m of messages) if (m.role === 'tool') results.set(m.toolCallId, m);
+  // Tool output is redacted when it is stored; chats saved before that (plan K1) are scrubbed here on the way out.
+  for (const m of messages) {
+    if (m.role === 'tool') {
+      results.set(m.toolCallId, { ...m, output: redactSecrets(m.output, { known: opts.knownSecrets }).text });
+    }
+  }
 
   const out: ProviderMessage[] = [];
   for (const m of messages) {

@@ -32,6 +32,8 @@ export async function createCore(deps: CoreDeps): Promise<Core> {
   // what the tool sandbox compares against, so a project folder containing the data dir cannot reach it (S1-M1).
   const dataReal = await realpath(path.resolve(expandHome(deps.dataDir)));
   const deniedRoots = [...new Set([dataReal, ...(await defaultDataDirRoots())])];
+  // A hardlink of a key file under an allowed name is blocked by inode (plan K1).
+  const deniedFiles = deniedRoots.map((r) => dataPaths(r).secrets);
   const cacheFile = dataPaths(dataReal).modelsCache;
   const models = createModelCatalog({ provider, cacheFile });
   const agent = createAgentService({
@@ -40,7 +42,11 @@ export async function createCore(deps: CoreDeps): Promise<Core> {
     projects,
     models,
     provider,
-    getProjectTools: () => getProjectTools({ deniedRoots }),
+    getProjectTools: () => getProjectTools({ deniedRoots, deniedFiles }),
+    getKnownSecrets: async () => {
+      const key = await settings.getApiKey();
+      return key ? [key] : [];
+    },
     renderTree: (root, opts) => renderTree(root, { ...opts, deniedRoots }),
   });
 
