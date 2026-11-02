@@ -292,6 +292,28 @@ describe('tools availability', () => {
     const events = await h.run();
     expect(find(events, 'tool_result')[0]?.message.output).toContain('No tools are available');
   });
+
+  it('flattens in-turn tool calls into plain text when no tools were offered', async () => {
+    const h = await createHarness({
+      project: false,
+      script: scriptFromTurns([
+        callTools([['c1', 'read_file', '{"path":"x"}']], 'Let me look. '),
+        reply('Fine.'),
+        TITLE_TURN,
+      ]),
+    });
+    const events = await h.run();
+    const req = h.provider.calls[1];
+    expect(req?.tools).toBeUndefined();
+    expect(req?.messages.some((m) => m.role === 'tool')).toBe(false);
+    for (const m of req?.messages ?? []) if (m.role === 'assistant') expect(m.toolCalls).toEqual([]);
+    const assistants = req?.messages.filter((m) => m.role === 'assistant') ?? [];
+    expect(assistants).toHaveLength(1);
+    expect(assistants[0]).toMatchObject({ text: expect.stringContaining('[tool read_file {"path":"x"} → error]') });
+    expect(assistants[0]).toMatchObject({ text: expect.stringContaining('Let me look.') });
+    expect(find(events, 'tool_call')).toHaveLength(1);
+    expect(h.messages().at(-1)).toMatchObject({ role: 'assistant', text: 'Fine.', status: 'complete' });
+  });
 });
 
 describe('history when tools are no longer offered', () => {

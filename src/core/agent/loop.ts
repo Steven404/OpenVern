@@ -37,7 +37,7 @@ import type {
   ProjectsService,
   RunTurnInput,
 } from '../types';
-import { buildHistory, INTERRUPTED_OUTPUT } from './history';
+import { buildHistory, flattenToolCall, INTERRUPTED_OUTPUT } from './history';
 import { buildSystemPrompt } from './system-prompt';
 import { generateTitle } from './title';
 
@@ -248,17 +248,31 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
         return;
       }
 
-      history.push({
-        role: 'assistant',
-        text,
-        toolCalls,
-        ...(providerMeta !== undefined ? { providerMeta } : {}),
-      });
+      const toolsOffered = toolSpecs.length > 0;
+      if (toolsOffered) {
+        history.push({
+          role: 'assistant',
+          text,
+          toolCalls,
+          ...(providerMeta !== undefined ? { providerMeta } : {}),
+        });
+      }
+      const flattened: string[] = text.length > 0 ? [text] : [];
       for (const call of toolCalls) {
         const toolMessage = await runTool(call, messageId, tools, project, signal, emit);
         await chats.appendMessage(chatId, toolMessage);
         await emit({ type: 'tool_result', message: toolMessage });
-        history.push({ role: 'tool', toolCallId: call.id, content: toolMessage.output });
+        if (toolsOffered) history.push({ role: 'tool', toolCallId: call.id, content: toolMessage.output });
+        else flattened.push(flattenToolCall(call, toolMessage));
+      }
+      if (!toolsOffered) {
+        // No tool definitions were sent, so providers would reject tool content: replay it as plain text, as buildHistory does.
+        const merged = flattened.join('\n\n');
+        const prev = history.at(-1);
+        if (prev?.role === 'assistant') {
+          prev.text = `${prev.text}\n\n${merged}`;
+          delete prev.providerMeta;
+        } else history.push({ role: 'assistant', text: merged, toolCalls: [] });
       }
       if (signal.aborted) return; // S4.5: stopped during/after the tools; results above are all persisted
     }
