@@ -57,6 +57,9 @@ start_api || { cat "$OUT/api.log"; RC=1; exit 1; }
 E2E_PHASE=persist node scripts/e2e/smoke.mjs || RC=1
 fi
 
+# v0.2 edit / review flow (G7.1).
+if [ "${E2E_SKIP_EDITS:-0}" != 1 ]; then node scripts/e2e/edits.mjs || RC=1; fi
+
 # S9.3 screenshots (after the persistence check: they add their own project and chat).
 if [ "${E2E_SHOTS:-0}" = 1 ]; then node scripts/e2e/shots.mjs || RC=1; fi
 

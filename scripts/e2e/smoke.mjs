@@ -792,7 +792,7 @@ async function mainPhase() {
           const e = document.activeElement;
           const cs = getComputedStyle(e);
           return { tag: e.tagName.toLowerCase(), label: e.getAttribute('aria-label') || e.textContent.trim().slice(0, 24),
-                   ring: e.matches(':focus-visible') && cs.outlineStyle === 'solid' && cs.outlineWidth === '2px' && cs.outlineColor === 'rgb(242, 204, 143)' };
+                   ring: e.matches(':focus-visible') && cs.outlineStyle === 'solid' && cs.outlineWidth === '2px' && cs.outlineColor === 'rgb(246, 189, 96)' };
         })()`),
       );
     }

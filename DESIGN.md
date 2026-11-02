@@ -199,8 +199,8 @@ A cool night-blue ramp lit by warm lamplight, taken from canal streets at blue h
 ### Backdrop
 `--backdrop` (not a colour token): a radial glow of `rgb(98 126 214 / 0.22)` from above the window's top edge over a vertical ramp `#121a38 → bg → #0d1224`. Painted once, on the app shell.
 
-### Proposed: diff colours (Review changes artboard, not yet tokens)
-Added lines sit on seafoam at 10% opacity with a seafoam sign; removed lines on gable brick at 12% with a `#f09a7c` sign; line-number gutters take the same hue a step stronger. Promote these to `diff-*` tokens when the review feature is built.
+### Diff colours
+Tokens `diff-add-*`, `diff-del-*`, `diff-text`, `diff-range` and `segment-on` (the selected half of the Unified/Split control). Added lines sit on seafoam at 9% opacity with a `#9fd4b3` sign; removed lines on gable brick at 11% with a `#f09a7c` sign; line-number gutters (`*-num`, `*-num-bg`) take the same hue a step stronger. Rejected hunks are dimmed to 42% opacity.
 
 ### Alternate theme: Late Workshop
 The original warm theme, kept for a future theme setting. Same token names, warm plum-black values: ground `#161316`, sidebar `#120f12`, surface `#221c21`, text `#f0e6e6`, accent Late Sand `#f2cc8f`, accent-2 Terracotta `#e07a5f`, success Sage `#b8d4a0`, no backdrop glow. The full set lives in `src/renderer/styles/tokens.css` under `[data-theme="late-workshop"]`; setting that attribute on `<html>` switches the whole app.
@@ -234,9 +234,9 @@ The original warm theme, kept for a future theme setting. Same token names, warm
 
 ## Layout
 
-A flex row that wraps: sidebar (272px, fixed basis) then content (`flex: 999 1 560px; min-width: 0`). The conversation and composer centre in a 760px column (New chat: 720px). The header is 64px with a 1px divider. Turns are 32px apart; inside a turn, 14px. Side padding is 24px. Below 760px the sidebar becomes an overlay. Minimum window is 800×600.
+A flex row that wraps: sidebar (272px, fixed basis) then content (`flex: 999 1 560px; min-width: 0`). The conversation and composer centre in a 760px column (New chat: 720px). The header is 64px with a 1px divider. Turns are 32px apart; inside a turn, 14px. Side padding is 24px. There is no overlay mode: the minimum window is 1080×720 (`LAYOUT` in `src/shared/constants.ts`), which fits the sidebar, a 420px conversation and a 380px panel without wrapping.
 
-A docked side pane (Review changes) joins the row at a 600px basis (800px in split view) and the conversation shrinks to a 360px floor.
+The **right panel** docks to the right of the conversation (1px left border, sidebar colour, 220ms width transition, 12px slide-in). Its width depends on what it shows: 380px for Files, 560px for an open file, 600px for Diff (800px in split view). The conversation shrinks to a 420px floor; the panel to 380px. Split is disabled when the window can't hold the wider panel next to the sidebar and the conversation.
 
 ## Elevation & Depth
 
@@ -286,8 +286,11 @@ Soft-cornered and quiet: ghost by default, the accent saved for the one action t
 ### Composer (signature)
 Dusk surface, 18px corners, borderless textarea, a tools row with attach (ghost icon), model picker (ghost text) and a 38px sand send button. The border brightens to border-focus while focused.
 
-### Review pane (signature, proposed)
-Docked right of the conversation: header with +/− totals and a Unified/Split segmented control, file list with per-file review state, diff body on night canal with sticky file header, per-change Accept/Reject, and an apply bar whose primary button counts the accepted changes.
+### Right panel
+A tab strip (pinned Files tab, closable tabs for open files and Diff, a "+" that opens the launcher, a close button) over a surface. The launcher lists Files, Terminal and Diff with a hint and a key (F, T, D); unavailable rows are dimmed with the reason ("Not available yet", "Only for chats in a project", "Available after the current chat has made edits"). Files: project name, collapse-all, a filter field, the tree in mono, and a footer saying ignored and secret files are hidden. The file viewer has a breadcrumb, line count, an Attach ghost button and numbered lines on the code surface.
+
+### Review pane (signature)
+The Diff surface: header with +/− totals and a Unified/Split segmented control, file list with per-file review state (or "Changed on disk" for a skipped file), diff body on night canal with a sticky file header, per-hunk Reject/Accept (then a status pill and Undo), and an apply bar whose primary button counts the accepted changes (Discard when everything is rejected). Applied batches are listed below, read-only. The **Proposed edits** card in the conversation (and **Edits applied** after applying) uses the tool-row surface with a status dot and a "Review changes" button that reads "Reviewing" while the pane is open.
 
 ## Do's and Don'ts
 

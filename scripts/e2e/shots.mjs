@@ -1,5 +1,5 @@
-// S9.3 visual pass: screenshots of the main screens at 1440x900 and 800x600 (Electron's minimum window), plus the
-// narrow-window sidebar overlay, with an automatic overflow check. Run through the runners with E2E_SHOTS=1; the
+// Visual pass (S9.3, G7.2): screenshots of the main screens at 1440x900 and 1080x720 (the v0.2 minimum window), incl.
+// the right panel (Files, an open file, Diff unified and split), with an automatic overflow check. Run through the runners with E2E_SHOTS=1; the
 // screenshots land in $E2E_OUT/shots (keep them with E2E_KEEP=1 or E2E_OUT_DIR=<dir>).
 // Same env as smoke.mjs: E2E_MODE, E2E_BASE, E2E_OUT, CDP_PORT.
 
@@ -18,6 +18,10 @@ const PROJECT = join(OUT, 'fixtures', 'shots-proj');
 mkdirSync(SHOTS, { recursive: true });
 mkdirSync(PROJECT, { recursive: true });
 writeFileSync(join(PROJECT, 'README.md'), '# Demo project\n\nA tiny fixture for the screenshots.\n');
+mkdirSync(join(PROJECT, 'src'), { recursive: true });
+writeFileSync(join(PROJECT, 'src', 'index.ts'), 'export function main() {\n  return 1;\n}\n');
+writeFileSync(join(PROJECT, 'notes.txt'), 'first note line\nsecond note line\n');
+writeFileSync(join(PROJECT, 'old.txt'), 'this file goes away\n');
 
 const page = await connect(PORT, { urlPrefix: MODE === 'electron' ? 'app://' : undefined });
 const { ev, waitFor, click, key, type, byText, viewport } = page;
@@ -105,12 +109,53 @@ await waitFor(
 await sleep(1500);
 const chatHash = await ev('location.hash');
 
+// A second chat that proposes edits (fake markers), for the right panel shots.
+await page.send('Page.navigate', { url: `${BASE}#/new?project=${project.id}` });
+await waitFor(`document.body.innerText.includes('What are we building')`, 'new chat (edits)');
+await type(
+  'textarea',
+  'Update things [fake:edit=notes.txt] [fake:edit=src/index.ts] [fake:write=src/new.ts] [fake:delete=old.txt]',
+);
+await key('Enter');
+await waitFor(`location.hash.startsWith('#/chat/')`, 'edits chat');
+await waitFor(
+  `!!document.querySelector('[data-testid=changes-card]') && !document.querySelector('button[aria-label="Stop"]')`,
+  'edits proposed',
+  25000,
+);
+await sleep(800);
+const editsHash = await ev('location.hash');
+const panelIsOpen = () => ev(`!!document.querySelector('#right-panel')`);
+const setPanel = async (open) => {
+  if ((await panelIsOpen()) === open) return;
+  await sleep(600);
+  await click(`document.querySelector('button[aria-label="Toggle right panel"]')`, 'panel toggle');
+  await waitFor(open ? `!!document.querySelector('#right-panel')` : `!document.querySelector('#right-panel')`, 'panel');
+  await sleep(600);
+};
+const tab = (label) =>
+  `[...document.querySelectorAll('#right-panel [role=tab]')].find((t) => t.textContent.trim() === ${JSON.stringify(label)})`;
+const openFromLauncher = async (label) => {
+  await sleep(600);
+  await click(`document.querySelector('button[aria-label="Open a panel"]')`, 'plus');
+  await waitFor(`document.body.innerText.includes('Open a panel')`, 'launcher');
+  await shot('panel-launcher', curVp);
+  await click(
+    `[...document.querySelectorAll('#right-panel ul button')].find((b) => b.querySelector('span span')?.textContent === ${JSON.stringify(label)})`,
+    label,
+  );
+  await sleep(600);
+};
+let curVp = '';
+
 // ----------------------------------------------------------------------------------------------- the passes
 for (const [w, h] of [
   [1440, 900],
-  [800, 600],
+  [1080, 720],
 ]) {
   const vp = `${w}x${h}`;
+  curVp = vp;
+  await setPanel(false);
   await viewport(w, h);
   await page.send('Page.navigate', { url: `${BASE}#/new?project=${project.id}` });
   await waitFor(`document.body.innerText.includes('What are we building')`, 'new chat');
@@ -142,16 +187,42 @@ for (const [w, h] of [
   await waitFor(`!!document.querySelector('[role=menu]')`, 'chat menu');
   await shot('chat-options-menu', vp);
   await closeOverlays();
-}
 
-// Narrow window (<= 760 px): the sidebar is an overlay.
-await viewport(720, 600);
-await page.send('Page.navigate', { url: `${BASE}${chatHash}` });
-await waitFor(`document.body.innerText.includes('Add a step limit early')`, 'chat (narrow)');
-await shot('narrow-closed', '720x600');
-await click(`document.querySelector('button[aria-label="Open sidebar"]')`, 'Open sidebar');
-await waitFor(`!!document.querySelector('aside')`, 'overlay open');
-await shot('narrow-sidebar-overlay', '720x600');
+  // Right panel: Files, an open file, Diff (unified, split).
+  await ev(`location.hash = ${JSON.stringify(editsHash)}`);
+  await waitFor(`!!document.querySelector('[data-testid=changes-card]')`, 'edits chat');
+  await shot('edits-card', vp);
+  await setPanel(true);
+  if (!(await ev(`!!document.querySelector('nav[aria-label="Project files"]')`)))
+    await click(tab('Files'), 'Files tab');
+  await waitFor(`!!document.querySelector('nav[aria-label="Project files"] button')`, 'tree');
+  await shot('panel-files', vp);
+  await click(byText('nav[aria-label="Project files"] button', 'notes.txt'), 'notes.txt');
+  await waitFor(`document.querySelector('[role=tabpanel]')?.innerText.includes('first note line')`, 'viewer');
+  await shot('panel-file-open', vp);
+  if (!(await ev(`!!${tab('Diff')}`))) await openFromLauncher('Diff');
+  else {
+    await sleep(600);
+    await click(tab('Diff'), 'Diff tab');
+  }
+  await waitFor(`!!document.querySelector('section[aria-label="Review changes"]')`, 'diff');
+  await sleep(700);
+  await shot('panel-diff-unified', vp);
+  const splitBtn = `[...document.querySelectorAll('button[aria-pressed]')].find((b) => b.textContent.trim() === 'Split')`;
+  const splitDisabled = await ev(`${splitBtn}.disabled`);
+  console.log(`${vp}: Split ${splitDisabled ? 'disabled (too narrow)' : 'enabled'}`);
+  if (!splitDisabled) {
+    await click(splitBtn, 'Split');
+    await sleep(900);
+    await shot('panel-diff-split', vp);
+    await click(
+      `[...document.querySelectorAll('button[aria-pressed]')].find((b) => b.textContent.trim() === 'Unified')`,
+      'Unified',
+    );
+    await sleep(600);
+  }
+  await setPanel(false);
+}
 
 const bad = findings.filter((f) => f.bad);
 console.log(`\nscreenshots: ${SHOTS}\n${findings.length} taken, ${bad.length} with overflow`);

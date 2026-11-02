@@ -149,7 +149,9 @@ export function buildDecisions(files: FileChange[], decisions: Decisions): Decis
 export function appliedLabel(b: AppliedBatch): string {
   const changes = b.written.reduce((n, f) => n + f.hunks.length, 0);
   const base = `Wrote ${plural(changes, 'change')} to ${plural(b.written.length, 'file')}`;
-  return b.rejectedHunks > 0 ? `${base} · ${b.rejectedHunks} rejected` : base;
+  const rejected = b.rejectedHunks > 0 ? ` · ${b.rejectedHunks} rejected` : '';
+  const skipped = b.conflicts.length > 0 ? ` · ${b.conflicts.length} not written (changed on disk)` : '';
+  return `${base}${rejected}${skipped}`;
 }
 
 export const CONFLICT_LABEL: Record<AppliedBatch['conflicts'][number]['reason'], string> = {
