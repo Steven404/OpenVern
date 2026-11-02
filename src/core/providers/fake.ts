@@ -77,6 +77,79 @@ export const defaultFakeScript: FakeScript = (req) => {
   return [...textDeltas(FINAL_ANSWER), usage, { type: 'finish', reason: 'stop' }];
 };
 
+/** Markers `[fake:edit=<path>]`, `[fake:write=<path>]`, `[fake:delete=<path>]` in a user message, in order. */
+function editMarkers(text: string): { kind: 'edit' | 'write' | 'delete'; path: string }[] {
+  return [...text.matchAll(/\[fake:(edit|write|delete)=([^\]]+)\]/g)].map((m) => ({
+    kind: m[1] as 'edit' | 'write' | 'delete',
+    path: m[2] as string,
+  }));
+}
+
+const FAKE_READ_PREFIX = 'call_fake_read_';
+const callId = (prefix: string, i: number) => `${prefix}${i}_${crypto.randomUUID()}`;
+
+/**
+ * Scripted edit turn (G2.6). Step 1 (last message from the user): read every `edit` path and `write`/`delete` right
+ * away, all in one assistant message. Step 2 (the reads came back): `edit_file` each read file by appending a marker
+ * comment to its first non-empty line. Step 3: the default final answer. Returns null when no edit tool is offered.
+ */
+function editScript(req: ProviderRequest, text: string): FakeStep[] | null {
+  const offered = new Set(req.tools?.map((t) => t.name));
+  if (!offered.has('edit_file') && !offered.has('write_file') && !offered.has('delete_file')) return null;
+  const usage: FakeStep = { type: 'usage', usage: { promptTokens: 120, completionTokens: 48 } };
+  const last = req.messages.at(-1);
+  const call = (prefix: string, i: number, name: string, args: unknown): FakeStep => ({
+    type: 'tool_call',
+    call: { id: callId(prefix, i), name, argsJson: JSON.stringify(args) },
+  });
+
+  if (last?.role === 'user') {
+    const markers = editMarkers(text);
+    if (markers.length === 0) return null;
+    const steps: FakeStep[] = [...textDeltas("I'll propose those changes.")];
+    markers.forEach((m, i) => {
+      if (m.kind === 'edit') steps.push(call(FAKE_READ_PREFIX, i, 'read_file', { path: m.path }));
+      else if (m.kind === 'write') {
+        steps.push(
+          call('call_fake_write_', i, 'write_file', { path: m.path, content: `// created by the fake provider\n` }),
+        );
+      } else steps.push(call('call_fake_delete_', i, 'delete_file', { path: m.path }));
+    });
+    return [...steps, usage, { type: 'finish', reason: 'tool_calls' }];
+  }
+
+  // Step 2: the fake reads came back.
+  const assistantIdx = req.messages.findLastIndex((m) => m.role === 'assistant');
+  const assistant = req.messages[assistantIdx];
+  if (assistant?.role === 'assistant') {
+    const reads = assistant.toolCalls.filter((c) => c.id.startsWith(FAKE_READ_PREFIX));
+    if (reads.length > 0) {
+      const steps: FakeStep[] = [];
+      for (const [i, c] of reads.entries()) {
+        const result = req.messages.find((m) => m.role === 'tool' && m.toolCallId === c.id);
+        if (result?.role !== 'tool') continue;
+        const line = result.content
+          .split('\n')
+          .slice(1)
+          .map((l) => /^\s*\d+ \| (.*)$/.exec(l)?.[1])
+          .find((l) => l?.trim());
+        if (!line) continue;
+        const path = (JSON.parse(c.argsJson) as { path: string }).path;
+        steps.push(
+          call('call_fake_edit_', i, 'edit_file', {
+            path,
+            old_string: line,
+            new_string: `${line} // edited by the fake provider`,
+          }),
+        );
+      }
+      if (steps.length > 0)
+        return [...textDeltas('Applying the edits.'), ...steps, usage, { type: 'finish', reason: 'tool_calls' }];
+    }
+  }
+  return null;
+}
+
 /** Pause between text deltas for `[fake:slow]`, so a stream can be stopped or navigated away from. */
 const SLOW_DELTA_MS = 120;
 
@@ -89,6 +162,9 @@ const SLOW_DELTA_MS = 120;
  * - `[fake:flaky]`: the first call for that message fails with a retryable `provider_error`, later ones succeed;
  * - `[fake:read=<path>]`: the first tool call reads `<path>` instead of `README.md` (e.g. `../x` or `.env`, to
  *   exercise the sandbox through the whole stack).
+ * - `[fake:edit=<path>]`, `[fake:write=<path>]`, `[fake:delete=<path>]`: when the edit tools are offered, propose that
+ *   change (`edit` reads the file and appends a comment to its first non-empty line; `write` creates/overwrites with a
+ *   one-line comment). Several markers make one scripted turn that proposes several files.
  * Title requests (`maxTokens` set) ignore the markers.
  */
 export function createDefaultFakeScript(): FakeScript {
@@ -99,6 +175,8 @@ export function createDefaultFakeScript(): FakeScript {
       last?.role === 'user' && req.maxTokens === undefined
         ? last.content.map((p) => (p.type === 'text' ? p.text : '')).join('')
         : '';
+    const edits = req.maxTokens === undefined ? editScript(req, editText(req, text)) : null;
+    if (edits) return edits;
     const steps = defaultFakeScript(req, callIndex);
     const error = /\[fake:error=([a-z_]+)\]/.exec(text)?.[1] as ErrorCode | undefined;
     if (error) {
@@ -124,6 +202,13 @@ export function createDefaultFakeScript(): FakeScript {
     }
     return steps;
   };
+}
+
+/** The user text that started this turn (markers stay in effect while the tool loop continues). */
+function editText(req: ProviderRequest, current: string): string {
+  if (current) return current;
+  const user = req.messages.findLast((m) => m.role === 'user');
+  return user?.role === 'user' ? user.content.map((p) => (p.type === 'text' ? p.text : '')).join('') : '';
 }
 
 const sleep = (ms: number, signal: AbortSignal) =>

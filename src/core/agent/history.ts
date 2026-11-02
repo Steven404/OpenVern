@@ -3,6 +3,7 @@
 import type { AttachmentRef, Message, ToolCall, ToolMessage } from '@shared/types';
 import type { ContentPart, ProviderMessage } from '../providers/types';
 import { redactSecrets } from '../security/redact';
+import { withChangesNote } from './edit-mode';
 
 export interface HistoryOptions {
   /** The model the next request is for. */
@@ -89,7 +90,9 @@ export async function buildHistory(messages: Message[], opts: HistoryOptions): P
     if (m.role === 'user') {
       const content: ContentPart[] = [];
       for (const att of m.attachments) content.push(...(await attachmentParts(att, opts)));
-      if (m.text.length > 0 || content.length === 0) content.push({ type: 'text', text: m.text });
+      // The note about earlier proposals reaches the provider only; it is never shown in the UI (plan §4.9).
+      const text = withChangesNote(m.text, m.changesNote);
+      if (text.length > 0 || content.length === 0) content.push({ type: 'text', text });
       out.push({ role: 'user', content });
     } else if (m.role === 'assistant') {
       if (m.text.length === 0 && m.toolCalls.length === 0) continue;

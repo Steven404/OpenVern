@@ -3,6 +3,7 @@
 import { readFile, stat } from 'node:fs/promises';
 import { LIMITS } from '@shared/constants';
 import { z } from 'zod';
+import { PROPOSED_DELETED_NOTE, PROPOSED_VERSION_NOTE } from '../agent/edit-mode';
 import { redactionNote, redactSecrets } from '../security/redact';
 import { resolveInProject, type SandboxOptions } from './sandbox';
 import type { Tool } from './types';
@@ -63,7 +64,13 @@ export function createReadFileTool(opts: SandboxOptions = {}): Tool {
 
       const res = await resolveInProject(ctx.projectRoot, relPath, opts);
       if (!res.ok) return fail(res.message, summary);
-      if (!res.exists)
+
+      // Proposed edits are read through (plan G2.3): staged content replaces the disk, staged deletions hide the file.
+      const staged = ctx.changes ? await ctx.changes.read(res.rel) : null;
+      if (staged?.kind === 'deleted') {
+        return fail(`File not found: ${relPath} (${PROPOSED_DELETED_NOTE}).`, summary);
+      }
+      if (!res.exists && !staged)
         return fail(`File not found: ${relPath}. Use list_files or search to find the right path.`, summary);
 
       const start = startArg ?? 1;
@@ -71,33 +78,41 @@ export function createReadFileTool(opts: SandboxOptions = {}): Tool {
         return fail(`end_line (${endArg}) is before start_line (${start}).`, summary);
       }
 
-      let buf: Buffer;
-      try {
-        const info = await stat(res.abs);
-        if (info.isDirectory()) return fail(`${relPath} is a directory. Use list_files to see its contents.`, summary);
-        if (!info.isFile()) return fail(`${relPath} is not a regular file.`, summary);
-        if (info.size > MAX_FILE_BYTES) {
-          return fail(
-            `File too large to read (${Math.round(info.size / 1024 / 1024)} MB). Use search to find specific content.`,
-            summary,
-          );
+      let source: string;
+      if (staged?.kind === 'staged') {
+        source = staged.content;
+      } else {
+        let buf: Buffer;
+        try {
+          const info = await stat(res.abs);
+          if (info.isDirectory())
+            return fail(`${relPath} is a directory. Use list_files to see its contents.`, summary);
+          if (!info.isFile()) return fail(`${relPath} is not a regular file.`, summary);
+          if (info.size > MAX_FILE_BYTES) {
+            return fail(
+              `File too large to read (${Math.round(info.size / 1024 / 1024)} MB). Use search to find specific content.`,
+              summary,
+            );
+          }
+          buf = await readFile(res.abs, { signal: ctx.signal });
+        } catch (e) {
+          if (ctx.signal.aborted) return abortedResult(summary);
+          return fail(`Cannot read ${relPath}: ${(e as NodeJS.ErrnoException).code ?? 'unknown error'}`, summary);
         }
-        buf = await readFile(res.abs, { signal: ctx.signal });
-      } catch (e) {
-        if (ctx.signal.aborted) return abortedResult(summary);
-        return fail(`Cannot read ${relPath}: ${(e as NodeJS.ErrnoException).code ?? 'unknown error'}`, summary);
-      }
 
-      if (buf.subarray(0, BINARY_SNIFF_BYTES).includes(0)) {
-        return fail(`Binary file: ${relPath} cannot be displayed as text.`, summary);
+        if (buf.subarray(0, BINARY_SNIFF_BYTES).includes(0)) {
+          return fail(`Binary file: ${relPath} cannot be displayed as text.`, summary);
+        }
+        source = buf.toString('utf8');
       }
+      const proposedNote = staged?.kind === 'staged' ? ` ${PROPOSED_VERSION_NOTE}` : '';
 
       // Redact before slicing: line numbers stay valid (replacements keep line breaks) and no limit can cut a key in two.
-      const redacted = redactSecrets(buf.toString('utf8'), { known: ctx.knownSecrets });
+      const redacted = redactSecrets(source, { known: ctx.knownSecrets });
       const lines = redacted.text.split('\n');
       if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
       const total = lines.length;
-      if (total === 0) return succeed(`${displayPath(res.rel)} (empty file, 0 lines)`, summary);
+      if (total === 0) return succeed(`${displayPath(res.rel)} (empty file, 0 lines)${proposedNote}`, summary);
       if (start > total) {
         return fail(`start_line ${start} is past the end of the file (${total} lines).`, summary);
       }
@@ -109,7 +124,8 @@ export function createReadFileTool(opts: SandboxOptions = {}): Tool {
       let bytes = 0;
       let last = start - 1;
       let cutByBytes = false;
-      const headerFor = (lastLine: number) => `${displayPath(res.rel)} (lines ${start}-${lastLine} of ${total})`;
+      const headerFor = (lastLine: number) =>
+        `${displayPath(res.rel)} (lines ${start}-${lastLine} of ${total})${proposedNote}`;
       const byteCutNote = (lastLine: number) =>
         `... output cut at ${Math.round(LIMITS.readFileMaxBytes / 1024)} KB. Continue with start_line=${lastLine + 1}.`;
       for (let n = start; n <= lastByLines; n++) {

@@ -181,3 +181,36 @@ export async function resolveInProject(
   }
   return { ok: true, abs: real, rel, root: realRoot, exists };
 }
+
+/**
+ * Like `resolveInProject`, for a path an edit tool will write (plan G2.2). A path that doesn't exist yet is only
+ * accepted when its nearest existing ancestor is a directory that resolves inside the root (not through a symlink
+ * that leaves it) and passes the deny list. `rel` then names the path below that real ancestor.
+ */
+export async function resolveForWrite(
+  root: string,
+  relPath: string,
+  opts: SandboxOptions = {},
+): Promise<ResolveResult> {
+  const res = await resolveInProject(root, relPath, opts);
+  if (!res.ok || res.exists) return res;
+
+  // Walk up the lexical path to the nearest ancestor that exists, and resolve that one through the sandbox.
+  const missing: string[] = [];
+  let probe = res.rel;
+  for (;;) {
+    const slash = probe.lastIndexOf('/');
+    missing.unshift(probe.slice(slash + 1));
+    probe = slash === -1 ? '' : probe.slice(0, slash);
+    const anc = await resolveInProject(root, probe, opts);
+    if (!anc.ok) return anc;
+    if (!anc.exists) continue;
+    const info = await lstat(anc.abs).catch(() => null);
+    if (!info?.isDirectory()) {
+      return { ok: false, kind: 'invalid', message: `Cannot create ${res.rel}: ${anc.rel || '.'} is not a directory` };
+    }
+    const rel = [anc.rel, ...missing].filter(Boolean).join('/');
+    if (isDeniedPath(rel)) return { ok: false, kind: 'blocked', message: BLOCKED_MESSAGE };
+    return { ok: true, abs: path.join(anc.abs, ...missing), rel, root: anc.root, exists: false };
+  }
+}

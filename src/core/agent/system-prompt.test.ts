@@ -40,4 +40,15 @@ describe('buildSystemPrompt', () => {
     expect(p).toContain('src/');
     expect(p).not.toContain('list_files');
   });
+
+  it('project chat that may edit: explains the three tools and the review flow, drops the read-only rule', () => {
+    const p = buildSystemPrompt({ identity, now, project, hasTools: true, canEdit: true, tree: 'src/' });
+    for (const t of ['edit_file', 'write_file', 'delete_file']) expect(p).toContain(t);
+    expect(p).not.toMatch(/cannot modify files/);
+    expect(p).toMatch(/proposals/);
+    expect(p).toMatch(/Never say that files were written/);
+    expect(p).toMatch(/Read a file before you edit/);
+    expect(p).toMatch(/paste whole proposed files/);
+    expect(p).toMatch(/Read before you claim/);
+  });
 });

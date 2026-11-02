@@ -19,6 +19,34 @@ export interface TreeOptions {
   signal: AbortSignal;
   /** Forwarded to `walk`: real absolute directories that are never listed. */
   deniedRoots?: readonly string[];
+  /** Proposed edits (plan G2.3): created files are listed, deleted files hidden. Project-relative POSIX paths. */
+  overlay?: { created: readonly string[]; deleted: ReadonlySet<string> };
+}
+
+function compareEntries(a: WalkEntry, b: WalkEntry): number {
+  const aDir = a.kind === 'dir' ? 0 : 1;
+  const bDir = b.kind === 'dir' ? 0 : 1;
+  if (aDir !== bDir) return aDir - bDir;
+  return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+}
+
+/** Entries (files plus the directories above them) that `created` adds below `startRel` within `depth` levels. */
+function overlayEntries(startRel: string, depth: number, created: readonly string[], known: Set<string>): WalkEntry[] {
+  const prefix = startRel === '' ? '' : `${startRel}/`;
+  const out: WalkEntry[] = [];
+  for (const file of created) {
+    if (!file.startsWith(prefix)) continue;
+    const parts = file.slice(prefix.length).split('/');
+    let rel = startRel;
+    for (let i = 0; i < parts.length && i < depth; i++) {
+      const name = parts[i] as string;
+      rel = rel === '' ? name : `${rel}/${name}`;
+      if (known.has(rel)) continue;
+      known.add(rel);
+      out.push({ rel, name, kind: i === parts.length - 1 ? 'file' : 'dir', depth: i + 1 });
+    }
+  }
+  return out;
 }
 
 function parentOf(rel: string): string {
@@ -40,6 +68,7 @@ export async function buildTree(root: string, startRel: string, opts: TreeOption
     signal: opts.signal,
     deniedRoots: opts.deniedRoots,
   })) {
+    if (opts.overlay?.deleted.has(entry.rel)) continue;
     if (entries.length >= opts.maxEntries) {
       truncated = true;
       break;
@@ -47,6 +76,16 @@ export async function buildTree(root: string, startRel: string, opts: TreeOption
     entries.push(entry);
   }
   if (opts.signal.aborted) return { lines: [], shown: 0, truncated, aborted: true };
+  if (opts.overlay && opts.overlay.created.length > 0) {
+    const extra = overlayEntries(startRel, opts.depth, opts.overlay.created, new Set(entries.map((e) => e.rel)));
+    for (const e of extra) {
+      if (entries.length >= opts.maxEntries) {
+        truncated = true;
+        break;
+      }
+      entries.push(e);
+    }
+  }
 
   const children = new Map<string, WalkEntry[]>();
   for (const entry of entries) {
@@ -55,6 +94,8 @@ export async function buildTree(root: string, startRel: string, opts: TreeOption
     if (list) list.push(entry);
     else children.set(parent, [entry]);
   }
+
+  if (opts.overlay) for (const list of children.values()) list.sort(compareEntries);
 
   const lines: string[] = [];
   const render = (dir: string, indent: number): void => {

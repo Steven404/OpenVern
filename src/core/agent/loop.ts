@@ -17,6 +17,7 @@ import { type ApiErrorInfo, errorInfo } from '@shared/errors';
 import type { AgentEvent } from '@shared/events';
 import type {
   AssistantMessage,
+  ChangeSummary,
   Chat,
   ChatSummary,
   Id,
@@ -29,15 +30,17 @@ import type {
 import { CoreError, toErrorInfo } from '../errors';
 import type { Provider, ProviderMessage } from '../providers/types';
 import { redactionNote, redactSecrets } from '../security/redact';
-import type { GetProjectTools, RenderTree, Tool } from '../tools/types';
+import type { GetProjectTools, RenderTree, Tool, ToolChanges } from '../tools/types';
 import type {
   AgentService,
   AttachmentsService,
+  ChangesService,
   ChatsService,
   ModelCatalog,
   ProjectsService,
   RunTurnInput,
 } from '../types';
+import { EDIT_TOOL_NAMES } from './edit-mode';
 import { buildHistory, flattenToolCall, INTERRUPTED_OUTPUT } from './history';
 import { buildIdentity } from './identity';
 import { buildSystemPrompt } from './system-prompt';
@@ -64,6 +67,11 @@ export interface AgentServiceDeps {
   treeTimeoutMs?: number;
   /** App version for the model identity prompt (v0.2 G6). */
   version?: string;
+  /**
+   * The change-set service (v0.2). When present, project chats with a tools-capable model get the edit tools and
+   * their edits are staged here; when absent the agent is read-only.
+   */
+  changes?: ChangesService;
 }
 
 type Emit = (event: AgentEvent) => Promise<void>;
@@ -85,6 +93,29 @@ export function toChatSummary(chat: ChatSummary | Chat): ChatSummary {
     createdAt: chat.createdAt,
     updatedAt: chat.updatedAt,
   };
+}
+
+/** Wraps a `ToolChanges` to notice when a tool call staged something (the loop then emits `changes_updated`). */
+function trackStaging(inner: ToolChanges): TrackedChanges {
+  let last: { summary: ChangeSummary | null } | undefined;
+  return {
+    read: (p) => inner.read(p),
+    staged: () => inner.staged(),
+    async stage(p, content) {
+      const result = await inner.stage(p, content);
+      last = { summary: result.summary };
+      return result;
+    },
+    reset: () => {
+      last = undefined;
+    },
+    lastStage: () => last,
+  };
+}
+
+interface TrackedChanges extends ToolChanges {
+  reset(): void;
+  lastStage(): { summary: ChangeSummary | null } | undefined;
 }
 
 function interrupted(): { ok: false; output: string; summary: string } {
@@ -145,22 +176,28 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
     if (input.newUserMessage) {
       const { text, attachmentIds } = input.newUserMessage;
       const refs = attachmentIds.length > 0 ? await attachments.bindToChat(attachmentIds, chatId) : [];
+      const changesNote = chat.projectId ? await deps.changes?.takeNote(chatId) : undefined;
       const message: UserMessage = {
         id: crypto.randomUUID(),
         role: 'user',
         createdAt: now().toISOString(),
         text,
         attachments: refs,
+        ...(changesNote ? { changesNote } : {}),
       };
       await chats.appendMessage(chatId, message);
+      // Remember the pending edits as they were when this turn started, so a retry can restore them (plan §3.2).
+      if (chat.projectId) await deps.changes?.snapshot(chatId, message.id);
       state.modified = true;
       await emit({ type: 'user_message', message });
       chat = await chats.get(chatId);
     } else {
       chat = await chats.truncateAfterLastUser(chatId);
-      if (chat.messages.at(-1)?.role !== 'user') {
+      const lastUser = chat.messages.at(-1);
+      if (lastUser?.role !== 'user') {
         throw new CoreError('invalid_request', 'There is no message to retry in this chat.');
       }
+      if (chat.projectId) await deps.changes?.restore(chatId, lastUser.id);
       state.modified = true;
     }
     if (chat.model !== model) {
@@ -179,7 +216,12 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
         if (!(err instanceof CoreError && err.code === 'not_found')) throw err;
       }
     }
-    const tools: Tool[] = project && modelInfo.supportsTools ? deps.getProjectTools() : []; // S4.8
+    const canEdit = !!(project && modelInfo.supportsTools && deps.changes); // v0.2 G2.4
+    const editNames: readonly string[] = EDIT_TOOL_NAMES;
+    const tools: Tool[] =
+      project && modelInfo.supportsTools
+        ? deps.getProjectTools().filter((t) => canEdit || !editNames.includes(t.spec.name)) // S4.8
+        : [];
     let tree: string | undefined;
     let treeTimedOut = false;
     if (project) {
@@ -212,6 +254,7 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
       now: now(),
       ...(project ? { project: { name: project.name, rootPath: project.rootPath } } : {}),
       hasTools: tools.length > 0,
+      canEdit,
       ...(tree !== undefined ? { tree } : {}),
       ...(treeTimedOut ? { treeUnavailable: true } : {}),
     });
@@ -229,6 +272,11 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
     for (let step = 0; step < MAX_AGENT_STEPS; step++) {
       const messageId = crypto.randomUUID();
       await emit({ type: 'assistant_start', messageId, model });
+      // One per assistant step: edits staged by this step's tool calls are attributed to its message.
+      const stepChanges =
+        canEdit && project && deps.changes
+          ? trackStaging(deps.changes.tools({ chatId, projectRoot: project.rootPath, messageId }))
+          : undefined;
 
       let text = '';
       const toolCalls: ToolCall[] = [];
@@ -294,9 +342,12 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
       }
       const flattened: string[] = text.length > 0 ? [text] : [];
       for (const call of toolCalls) {
-        const toolMessage = await runTool(call, messageId, tools, project, signal, emit, knownSecrets);
+        stepChanges?.reset();
+        const toolMessage = await runTool(call, messageId, tools, project, signal, emit, knownSecrets, stepChanges);
         await chats.appendMessage(chatId, toolMessage);
         await emit({ type: 'tool_result', message: toolMessage });
+        const staged = stepChanges?.lastStage();
+        if (staged) await emit({ type: 'changes_updated', messageId, changes: staged.summary });
         if (toolsOffered) history.push({ role: 'tool', toolCallId: call.id, content: toolMessage.output });
         else flattened.push(flattenToolCall(call, toolMessage));
       }
@@ -342,6 +393,7 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
     signal: AbortSignal,
     emit: Emit,
     knownSecrets: readonly string[],
+    changes?: ToolChanges,
   ): Promise<ToolMessage> {
     await emit({ type: 'tool_call', messageId, toolCall: call });
     const started = now().getTime();
@@ -371,7 +423,12 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
         };
       }
       try {
-        const result = await tool.run(args, { projectRoot: project.rootPath, signal, knownSecrets });
+        const result = await tool.run(args, {
+          projectRoot: project.rootPath,
+          signal,
+          knownSecrets,
+          ...(changes ? { changes } : {}),
+        });
         // A result that arrives after a stop is replaced, so what is stored never depends on a race.
         return signal.aborted ? interrupted() : result;
       } catch {
