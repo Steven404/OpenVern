@@ -70,10 +70,11 @@ to see the logs.
 | AppImage | `~/.config/harness` (Electron's `userData`) |
 | `npm run dev:web`, `npm run dev` | `./.dev-data` |
 | `npm run preview` | `./.dev-data-preview` |
-| any, with `HARNESS_DATA_DIR` | that directory |
+| any, with `HARNESS_DATA_DIR` | that directory (its Electron profile is `<dir>/electron-profile`) |
 
 Electron's profile (Chromium state, `localStorage`, single-instance lock): `~/.config/harness` for the AppImage,
-`~/.config/harness-dev` for `npm run dev`, `~/.config/harness-preview` for `npm run preview`. `--user-data-dir=<dir>`
+`~/.config/harness-dev` for `npm run dev`, `~/.config/harness-preview` for `npm run preview`. A run with `HARNESS_DATA_DIR` gets its profile (and lock) at
+`<dir>/electron-profile` in every mode, so it never collides with the installed app. `--user-data-dir=<dir>`
 overrides it.
 
 ```

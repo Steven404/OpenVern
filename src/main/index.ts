@@ -19,6 +19,7 @@ const profile = resolveUserDataDir({
   isDev: isDev(),
   hasUserDataDirSwitch: app.commandLine.hasSwitch('user-data-dir'),
   appDataDir: app.getPath('appData'),
+  dataDirEnv: process.env.HARNESS_DATA_DIR,
 });
 if (profile) app.setPath('userData', profile);
 console.log(`[harness] profile: ${app.getPath('userData')}`);
