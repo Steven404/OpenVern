@@ -2,10 +2,12 @@ import type { Id } from '@shared/types';
 import { Fragment, useCallback, useLayoutEffect, useMemo, useRef } from 'react';
 import { Button, Spinner } from '../../components/ui';
 import { selectRun, useRunsStore } from '../../stores/runs';
+import { AppliedEditsCard, ProposedEditsCard } from '../changes';
 import { modelName } from '../composer/models';
 import { useChat, useModels, useRunDeps } from '../composer/queries';
+import { useChatChanges } from '../right-panel/queries';
 import { AssistantTurn } from './AssistantTurn';
-import { buildTurns, isWaiting, mergeMessages } from './turns';
+import { buildTurns, isWaiting, mergeMessages, turnHasMessage } from './turns';
 import { UserBubble } from './UserBubble';
 
 /** Pixels from the bottom within which the view keeps following new content. */
@@ -23,6 +25,7 @@ export function Conversation({ chatId }: ConversationProps) {
   const selectedModel = useRunsStore((s) => s.chatModels[chatId]);
   const deps = useRunDeps();
   const retryRun = useRunsStore((s) => s.retry);
+  const changes = useChatChanges(chatId).data;
 
   const chat = chatQuery.data;
   const running = run?.status === 'running';
@@ -115,6 +118,17 @@ export function Conversation({ chatId }: ConversationProps) {
           const turnError = isLast ? runError : null;
           const turnWaiting = isLast && waiting;
           const turnStopped = isLast && !!run?.stopped;
+          const pending = changes?.pending && turnHasMessage(turn, changes.pending.messageId) ? changes.pending : null;
+          const batches = changes?.applied.filter((b) => turnHasMessage(turn, b.messageId)) ?? [];
+          const cards =
+            pending || batches.length > 0 ? (
+              <>
+                {batches.map((b) => (
+                  <AppliedEditsCard key={b.id} chatId={chatId} batch={b} />
+                ))}
+                {pending && <ProposedEditsCard chatId={chatId} pending={pending} />}
+              </>
+            ) : undefined;
           const showAssistant = turn.blocks.length > 0 || !!turn.notice || turnWaiting || !!turnError || turnStopped;
           return (
             <Fragment key={turn.key}>
@@ -132,6 +146,7 @@ export function Conversation({ chatId }: ConversationProps) {
                       : undefined
                   }
                   waiting={turnWaiting}
+                  footer={cards}
                   error={turnError}
                   forceRetry={!!run?.unsent}
                   stopped={turnStopped}

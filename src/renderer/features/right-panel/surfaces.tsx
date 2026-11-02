@@ -1,10 +1,11 @@
 // Surface slot API. A "surface" is a full-height view in the right panel (Files, Terminal, Diff). The launcher and
 // tab strip are driven by this registry. G5 plugs the Diff surface in by replacing the `diff` entry's `Component`
-// (edit `DiffPlaceholder` below, or call `registerSurface` with the same id).
+// (G5: `DiffSurface`).
 
 import { LAYOUT } from '@shared/constants';
 import type { Id } from '@shared/types';
 import type { ComponentType, ReactNode } from 'react';
+import { DiffSurface } from '../changes/DiffSurface';
 import { FilesSurface } from '../files/FilesSurface';
 import { DiffIcon, FilesIcon, TerminalIcon } from './icons';
 
@@ -48,10 +49,6 @@ export interface SurfaceDefinition {
   Component?: ComponentType<SurfaceProps>;
 }
 
-function DiffPlaceholder() {
-  return <p className="m-4 text-[13px] text-text-muted">Review changes is coming soon.</p>;
-}
-
 const registry: SurfaceDefinition[] = [
   {
     id: 'files',
@@ -86,7 +83,7 @@ const registry: SurfaceDefinition[] = [
         : { enabled: false, hint: 'Available after the current chat has made edits' },
     tab: 'opened',
     width: LAYOUT.panelDiff,
-    Component: DiffPlaceholder,
+    Component: DiffSurface,
   },
 ];
 

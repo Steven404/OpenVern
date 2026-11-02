@@ -108,7 +108,7 @@ export function reduceRun(run: RunState, ev: RunEvent): RunState {
       return { ...run, messages, streamingId: ev.messageId };
     }
     case 'changes_updated':
-      // Stored and shown by the Proposed edits card (v0.2 goal G5); nothing to track in the run yet.
+      // The card reads the `chatChanges` query; `consume` invalidates it when this event arrives.
       return run;
     case 'tool_call':
       return run.runningToolIds.includes(ev.toolCall.id)
@@ -234,6 +234,7 @@ export const useRunsStore = create<RunsState>()((set, get) => {
     if (!refreshed) void deps.queryClient.invalidateQueries({ queryKey: queryKeys.chat(chatId) });
     void deps.queryClient.invalidateQueries({ queryKey: queryKeys.chats });
     void deps.queryClient.invalidateQueries({ queryKey: queryKeys.projects });
+    void deps.queryClient.invalidateQueries({ queryKey: queryKeys.chatChanges(chatId) });
 
     set((s) => {
       const run = s.runs[chatId];
@@ -270,6 +271,9 @@ export const useRunsStore = create<RunsState>()((set, get) => {
       for await (const ev of open()) {
         apply(chatId, token, ev);
         if (ev.type === 'chat_updated') patchChatSummary(deps.queryClient, ev.chat);
+        if (ev.type === 'changes_updated') {
+          void deps.queryClient.invalidateQueries({ queryKey: queryKeys.chatChanges(chatId) });
+        }
       }
       const run = get().runs[chatId];
       if (!controller.signal.aborted && run?.token === token && !run.sawDone && !run.error) {
