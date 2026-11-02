@@ -10,6 +10,7 @@ import { APP_NAME } from '@shared/constants';
 import { ERROR_DEFAULTS, type ErrorCode } from '@shared/errors';
 import { readSSE } from '@shared/sse';
 import type { ModelInfo, ToolCall, Usage } from '@shared/types';
+import { authorFromSlug, splitModelName } from './models';
 import {
   type ContentPart,
   type GetApiKey,
@@ -300,6 +301,7 @@ async function* parseStream(body: ReadableStream<Uint8Array>, signal: AbortSigna
 interface WireModel {
   id?: unknown;
   name?: unknown;
+  description?: unknown;
   context_length?: unknown;
   pricing?: { prompt?: unknown; completion?: unknown };
   architecture?: { input_modalities?: unknown; output_modalities?: unknown };
@@ -329,9 +331,12 @@ export function mapModels(data: unknown): ModelInfo[] {
       m.architecture?.output_modalities === undefined ? ['text'] : strArray(m.architecture.output_modalities);
     if (!outputs.includes('text')) continue;
     const ctx = m.context_length ?? m.top_provider?.context_length;
+    const name = typeof m.name === 'string' && m.name !== '' ? m.name : m.id;
     out.push({
       id: m.id,
-      name: typeof m.name === 'string' && m.name !== '' ? m.name : m.id,
+      name,
+      author: splitModelName(name).author ?? authorFromSlug(m.id.split('/')[0] ?? m.id),
+      ...(typeof m.description === 'string' && m.description.trim() !== '' ? { description: m.description } : {}),
       contextLength: typeof ctx === 'number' && Number.isFinite(ctx) ? ctx : null,
       supportsTools: strArray(m.supported_parameters).includes('tools'),
       supportsImages: strArray(m.architecture?.input_modalities).includes('image'),

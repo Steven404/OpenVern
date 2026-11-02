@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildSystemPrompt, formatDate } from './system-prompt';
 
 const now = new Date(2026, 9, 31, 12, 0, 0);
+const identity = 'You are OpenVern test identity.';
 const project = { name: 'demo', rootPath: '/home/me/demo' };
 
 describe('buildSystemPrompt', () => {
@@ -10,7 +11,7 @@ describe('buildSystemPrompt', () => {
   });
 
   it('loose chat: short prompt with date and Markdown, no tool talk', () => {
-    const p = buildSystemPrompt({ now, hasTools: false });
+    const p = buildSystemPrompt({ identity, now, hasTools: false });
     expect(p).toContain('OpenVern');
     expect(p).toContain('2026-10-31');
     expect(p).toContain('Markdown');
@@ -19,7 +20,7 @@ describe('buildSystemPrompt', () => {
   });
 
   it('project chat with tools: identity, project, capabilities, rules and tree', () => {
-    const p = buildSystemPrompt({ now, project, hasTools: true, tree: 'src/\n  main.ts' });
+    const p = buildSystemPrompt({ identity, now, project, hasTools: true, tree: 'src/\n  main.ts' });
     expect(p).toContain('coding assistant');
     expect(p).toContain('2026-10-31');
     expect(p).toContain('Project: demo');
@@ -33,7 +34,7 @@ describe('buildSystemPrompt', () => {
   });
 
   it('project chat without tool support: says it cannot read files but shows the tree', () => {
-    const p = buildSystemPrompt({ now, project, hasTools: false, tree: 'src/' });
+    const p = buildSystemPrompt({ identity, now, project, hasTools: false, tree: 'src/' });
     expect(p).toContain('Project: demo');
     expect(p).toContain("can't use tools");
     expect(p).toContain('src/');

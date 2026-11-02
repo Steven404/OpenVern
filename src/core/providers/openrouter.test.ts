@@ -658,6 +658,7 @@ describe('listModels', () => {
     expect(list[0]).toEqual({
       id: 'anthropic/claude-sonnet-4.5',
       name: 'Anthropic: Claude Sonnet 4.5',
+      author: 'Anthropic',
       contextLength: 1000000,
       supportsTools: true,
       supportsImages: true,
@@ -705,5 +706,19 @@ describe('listModels', () => {
     expect((await caught(make(() => new Response('<html>', { status: 200 })).provider.listModels())).code).toBe(
       'provider_error',
     );
+  });
+});
+
+describe('mapModels identity fields', () => {
+  it('maps description, author from the name, and falls back to the slug map', () => {
+    const [a, b, c] = mapModels([
+      { id: 'deepseek/x', name: 'DeepSeek: X', description: 'Good at code.' },
+      { id: 'qwen/y', name: 'y' },
+      { id: 'acme/z', name: 'z', description: '  ' },
+    ]);
+    expect(a).toMatchObject({ author: 'DeepSeek', description: 'Good at code.' });
+    expect(b?.author).toBe('Alibaba (Qwen)');
+    expect(c?.author).toBe('acme');
+    expect(c).not.toHaveProperty('description');
   });
 });

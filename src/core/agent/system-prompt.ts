@@ -1,8 +1,10 @@
 // System prompt construction (S4.9). Pure: the caller supplies the date, project and rendered tree.
 
-import { APP_NAME, LIMITS } from '@shared/constants';
+import { LIMITS } from '@shared/constants';
 
 export interface SystemPromptInput {
+  /** From `buildIdentity`: who the model is and where it runs. */
+  identity: string;
   now: Date;
   /** Present when the chat belongs to a project. */
   project?: { name: string; rootPath: string };
@@ -22,18 +24,27 @@ export function formatDate(now: Date): string {
   return `${y}-${m}-${d}`;
 }
 
-export function buildSystemPrompt({ now, project, hasTools, tree, treeUnavailable }: SystemPromptInput): string {
+export function buildSystemPrompt({
+  identity,
+  now,
+  project,
+  hasTools,
+  tree,
+  treeUnavailable,
+}: SystemPromptInput): string {
   const date = formatDate(now);
   if (!project) {
     return [
-      `You are ${APP_NAME}, a helpful AI assistant in a desktop app.`,
+      identity,
+      'You are a helpful AI assistant.',
       `Today's date is ${date}.`,
       'Answer in Markdown. Be direct and concise; use fenced code blocks (with a language) for code.',
     ].join('\n');
   }
 
   const header = [
-    `You are ${APP_NAME}, a coding assistant in a desktop app. The user is chatting with you about a local code project.`,
+    identity,
+    'You are a coding assistant. The user is chatting with you about a local code project.',
     `Today's date is ${date}.`,
     '',
     `Project: ${project.name}`,

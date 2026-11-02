@@ -39,6 +39,7 @@ import type {
   RunTurnInput,
 } from '../types';
 import { buildHistory, flattenToolCall, INTERRUPTED_OUTPUT } from './history';
+import { buildIdentity } from './identity';
 import { buildSystemPrompt } from './system-prompt';
 import { generateTitle } from './title';
 
@@ -61,6 +62,8 @@ export interface AgentServiceDeps {
   titleTimeoutMs?: number;
   /** Project tree timeout; default `LIMITS.systemPromptTreeTimeoutMs`. */
   treeTimeoutMs?: number;
+  /** App version for the model identity prompt (v0.2 G6). */
+  version?: string;
 }
 
 type Emit = (event: AgentEvent) => Promise<void>;
@@ -205,6 +208,7 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
       else tree = outcome;
     }
     const system = buildSystemPrompt({
+      identity: buildIdentity(modelInfo, deps.version ?? '0.0.0'),
       now: now(),
       ...(project ? { project: { name: project.name, rootPath: project.rootPath } } : {}),
       hasTools: tools.length > 0,

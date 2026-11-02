@@ -189,6 +189,7 @@ describe('createModelCatalog', () => {
       expect(await cat.get('x/unknown')).toEqual({
         id: 'x/unknown',
         name: 'x/unknown',
+        author: 'x',
         contextLength: null,
         supportsTools: true,
         supportsImages: false,

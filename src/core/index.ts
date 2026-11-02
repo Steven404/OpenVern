@@ -45,6 +45,7 @@ export async function createCore(deps: CoreDeps): Promise<Core> {
   const cacheFile = dataPaths(dataReal).modelsCache;
   const models = createModelCatalog({ provider, cacheFile });
   const agent = createAgentService({
+    version: deps.version,
     chats,
     attachments,
     projects,

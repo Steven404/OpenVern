@@ -69,10 +69,37 @@ async function writeCache(file: string, entry: CacheEntry): Promise<void> {
   }
 }
 
+const AUTHOR_BY_SLUG: Record<string, string> = {
+  deepseek: 'DeepSeek',
+  anthropic: 'Anthropic',
+  openai: 'OpenAI',
+  google: 'Google',
+  'meta-llama': 'Meta',
+  mistralai: 'Mistral AI',
+  qwen: 'Alibaba (Qwen)',
+  'x-ai': 'xAI',
+  moonshotai: 'Moonshot AI',
+  'z-ai': 'Zhipu AI',
+  openrouter: 'OpenRouter',
+};
+
+/** Maker for a model-id slug (the part before "/"): the known map, else the slug itself. */
+export function authorFromSlug(slug: string): string {
+  return AUTHOR_BY_SLUG[slug.toLowerCase()] ?? slug;
+}
+
+/** OpenRouter names look like "DeepSeek: DeepSeek V3.1": maker before ": ", display name after. */
+export function splitModelName(name: string): { author?: string; displayName: string } {
+  const i = name.indexOf(': ');
+  if (i <= 0) return { displayName: name };
+  return { author: name.slice(0, i), displayName: name.slice(i + 2) };
+}
+
 function fallbackModel(id: string): ModelInfo {
   return {
     id,
     name: id,
+    author: authorFromSlug(id.split('/')[0] ?? id),
     contextLength: null,
     supportsTools: true,
     supportsImages: false,
