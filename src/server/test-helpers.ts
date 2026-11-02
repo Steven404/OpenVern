@@ -13,10 +13,13 @@ import type { Provider } from '../core/providers/types';
 import { createFileSecretStore } from '../core/storage';
 import type { Core } from '../core/types';
 import { createApp } from './app';
+import { createMemoryChanges, type MemoryChanges } from './memory-changes';
 
 export interface Harness {
   app: Hono;
+  /** `core` with `changes` swapped for the in-memory fake (G1's real service isn't used by route tests). */
   core: Core;
+  changes: MemoryChanges;
   provider: FakeProvider;
   dataDir: string;
   /** A temp project folder containing `README.md`. */
@@ -43,18 +46,21 @@ export async function createHarness(opts: HarnessOptions = {}): Promise<Harness>
   await writeFile(path.join(projectDir, 'README.md'), '# Demo project\n\nHello from the README.\n');
 
   const provider = createFakeProvider({ delayMs: 0, script: opts.script });
-  const core = await createCore({
+  const real = await createCore({
     dataDir,
     secretStore: createFileSecretStore(dataDir),
     provider: opts.wrapProvider ? opts.wrapProvider(provider) : provider,
     mode: 'dev',
     version: '9.9.9',
   });
+  const changes = createMemoryChanges();
+  const core: Core = { ...real, changes };
   const app = createApp(core, { mode: 'dev', version: '9.9.9' });
 
   return {
     app,
     core,
+    changes,
     provider,
     dataDir,
     projectDir,

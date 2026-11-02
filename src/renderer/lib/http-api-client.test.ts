@@ -108,4 +108,40 @@ describe('HttpApiClient', () => {
   it('builds attachment URLs', () => {
     expect(new HttpApiClient().attachmentUrl('a 1')).toBe('/api/attachments/a%201/content');
   });
+
+  describe('v0.2 project files and changes', () => {
+    const calls = async (fn: (api: HttpApiClient) => Promise<unknown>) => {
+      const fetchMock = vi.fn(async (_u: string | URL | Request, _i?: RequestInit) => json({}));
+      await fn(new HttpApiClient('/api', fetchMock as typeof fetch));
+      const [url, init] = fetchMock.mock.calls[0] ?? [];
+      return { url, init };
+    };
+
+    it('lists and reads project files with encoded paths', async () => {
+      expect((await calls((a) => a.listProjectFiles('p 1'))).url).toBe('/api/projects/p%201/files');
+      const r = await calls((a) => a.readProjectFile('p1', 'src/a b.ts'));
+      expect(r.url).toBe('/api/projects/p1/files/content?path=src%2Fa%20b.ts');
+      expect(r.init?.method).toBe('GET');
+    });
+
+    it('attaches a project file', async () => {
+      const { url, init } = await calls((a) => a.attachProjectFile('p1', 'a.png'));
+      expect(url).toBe('/api/projects/p1/files/attach');
+      expect(init?.method).toBe('POST');
+      expect(init?.body).toBe('{"path":"a.png"}');
+    });
+
+    it('gets, applies and discards chat changes', async () => {
+      expect((await calls((a) => a.getChatChanges('c1'))).url).toBe('/api/chats/c1/changes');
+      const apply = await calls((a) =>
+        a.applyChatChanges('c1', { revision: 2, decisions: { 'a.ts': { h: 'accepted' } } }),
+      );
+      expect(apply.url).toBe('/api/chats/c1/changes/apply');
+      expect(apply.init?.method).toBe('POST');
+      expect(apply.init?.body).toBe('{"revision":2,"decisions":{"a.ts":{"h":"accepted"}}}');
+      const del = await calls((a) => a.discardChatChanges('c1'));
+      expect(del.url).toBe('/api/chats/c1/changes');
+      expect(del.init?.method).toBe('DELETE');
+    });
+  });
 });

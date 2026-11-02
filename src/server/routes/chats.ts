@@ -1,6 +1,6 @@
 // /chats* (CRUD + the two streaming routes)
 
-import { createChatBody, ROUTES, retryBody, sendMessageBody, updateChatBody } from '@shared/api';
+import { applyChangesBody, createChatBody, ROUTES, retryBody, sendMessageBody, updateChatBody } from '@shared/api';
 import { LIMITS } from '@shared/constants';
 import type { Id } from '@shared/types';
 import { Hono } from 'hono';
@@ -45,8 +45,14 @@ export function chatRoutes(core: Core): Hono {
   r.get(ROUTES.chat, async (c) => c.json(await core.chats.get(c.req.param('id'))));
 
   r.patch(ROUTES.chat, async (c) => {
+    const id = c.req.param('id');
     const body = await readJson(c, updateChatBody);
-    return c.json(await core.chats.update(c.req.param('id'), body));
+    if (body.projectId !== undefined) {
+      const chat = await core.chats.get(id);
+      if (chat.projectId !== body.projectId && (await core.changes.get(id)).pending)
+        throw new CoreError('conflict', 'Apply or discard the proposed edits first.');
+    }
+    return c.json(await core.chats.update(id, body));
   });
 
   r.delete(ROUTES.chat, async (c) => {
@@ -57,6 +63,7 @@ export function chatRoutes(core: Core): Hono {
       await waitForIdle(core, id);
     }
     await core.chats.remove(id);
+    await core.changes.removeForChat(id);
     await core.attachments.removeForChat(id);
     return c.body(null, 204);
   });
@@ -97,6 +104,48 @@ export function chatRoutes(core: Core): Hono {
       throw new CoreError('invalid_request', 'There is no message to retry in this chat.');
     const release = claim(chatId);
     return streamTurn(c, core, { chatId, model: body.model, release });
+  });
+
+  /** Apply and discard need the chat idle; the claim also keeps a new turn from starting while they run. */
+  const withIdleChat = async <T>(chatId: Id, fn: () => Promise<T>): Promise<T> => {
+    if (starting.has(chatId) || core.agent.isRunning(chatId))
+      throw new CoreError('conflict', 'Wait for the response to finish before applying or discarding edits.');
+    starting.add(chatId);
+    try {
+      return await fn();
+    } finally {
+      starting.delete(chatId);
+    }
+  };
+
+  r.get(ROUTES.chatChanges, async (c) => {
+    const id = c.req.param('id');
+    await core.chats.get(id);
+    return c.json(await core.changes.get(id));
+  });
+
+  r.delete(ROUTES.chatChanges, async (c) => {
+    const id = c.req.param('id');
+    await core.chats.get(id);
+    return c.json(await withIdleChat(id, () => core.changes.discard(id)));
+  });
+
+  r.post(ROUTES.chatChangesApply, async (c) => {
+    const id = c.req.param('id');
+    const body = await readJson(c, applyChangesBody);
+    const chat = await core.chats.get(id);
+    if (!chat.projectId) throw new CoreError('conflict', 'This chat has no project to write to.');
+    const project = await core.projects.get(chat.projectId);
+    return c.json(
+      await withIdleChat(id, () =>
+        core.changes.apply({
+          chatId: id,
+          projectRoot: project.rootPath,
+          revision: body.revision,
+          decisions: body.decisions,
+        }),
+      ),
+    );
   });
 
   return r;

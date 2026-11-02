@@ -69,8 +69,9 @@ export async function createCore(deps: CoreDeps): Promise<Core> {
     models,
     agent,
     provider,
+    // G1: the real service plugs in here (replace this call with `createChangesService({ ... })`).
     changes: createChangesService(),
-    projectFiles: createProjectFilesService(),
+    projectFiles: createProjectFilesService({ projects, deniedRoots, deniedFiles }),
     version: deps.version,
   };
 }
