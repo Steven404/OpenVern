@@ -1,4 +1,4 @@
-import { NEW_CHAT_TITLE } from '@shared/constants';
+import { LIMITS, NEW_CHAT_TITLE } from '@shared/constants';
 import type { AgentEvent } from '@shared/events';
 import { describe, expect, it } from 'vitest';
 import { ApiError } from './api-client';
@@ -143,5 +143,49 @@ describe('MockApiClient', () => {
     const api = new MockApiClient({ delayMs: 0 });
     const ref = await api.uploadAttachment(new File(['<svg/>'], 'logo.svg', { type: 'image/svg+xml' }));
     expect(ref).toMatchObject({ kind: 'text', mime: 'text/plain' });
+  });
+
+  describe('uploadAttachment decides by content, like the server', () => {
+    const PNG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+    const upload = (parts: BlobPart[], name: string, type = '') =>
+      new MockApiClient({ delayMs: 0 }).uploadAttachment(new File(parts, name, { type }));
+
+    it('rejects an image type the server cannot store (BMP) as unsupported_file', async () => {
+      const bmp = new Uint8Array([0x42, 0x4d, 0x36, 0, 0, 0, 0, 0, 0, 0, 0x36, 0, 0, 0]);
+      await expect(upload([bmp], 'pic.bmp', 'image/bmp')).rejects.toMatchObject({
+        status: 415,
+        info: { code: 'unsupported_file' },
+      });
+    });
+
+    it('detects a PNG by its magic bytes, whatever file.type says', async () => {
+      const ref = await upload([new Uint8Array([...PNG, 0, 0, 0, 13])], 'pic', '');
+      expect(ref).toMatchObject({ kind: 'image', mime: 'image/png' });
+    });
+
+    it('treats text bytes as text even when file.type claims an image', async () => {
+      const ref = await upload(['just text'], 'fake.png', 'image/png');
+      expect(ref).toMatchObject({ kind: 'text', mime: 'text/plain' });
+    });
+
+    it('rejects binary (NUL) and invalid UTF-8 content', async () => {
+      await expect(upload([new Uint8Array([0x61, 0, 0x62])], 'a.txt', 'text/plain')).rejects.toMatchObject({
+        info: { code: 'unsupported_file' },
+      });
+      await expect(upload([new Uint8Array([0xff, 0xfe, 0x41, 0x80])], 'a.txt')).rejects.toMatchObject({
+        info: { code: 'unsupported_file' },
+      });
+    });
+
+    it('uses the same text mime map and size message as the server', async () => {
+      expect(await upload(['# hi'], 'README.md')).toMatchObject({ kind: 'text', mime: 'text/markdown' });
+      await expect(upload(['a'.repeat(LIMITS.textAttachmentBytes + 1)], 'big.txt')).rejects.toMatchObject({
+        status: 413,
+        info: {
+          code: 'file_too_large',
+          message: `This file is too large. The limit for text files is ${LIMITS.textAttachmentBytes / 1024} KB.`,
+        },
+      });
+    });
   });
 });

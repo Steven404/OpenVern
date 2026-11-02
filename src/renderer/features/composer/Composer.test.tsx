@@ -42,7 +42,7 @@ async function pickModel(name: string) {
 function upload(file: File) {
   fireEvent.change(fileInput(), { target: { files: [file] } });
 }
-const png = () => new File([new Uint8Array([137, 80, 78, 71])], 'pic.png', { type: 'image/png' });
+const png = () => new File([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])], 'pic.png', { type: 'image/png' });
 const txt = () => new File(['hello'], 'notes.txt', { type: 'text/plain' });
 
 describe('send keys', () => {

@@ -1,7 +1,8 @@
 // In-memory `ApiClient` for UI work without a server (`VITE_API=mock`). Seeded with the design's sample data;
 // streams a fake turn (text → read_file → text with a code block) for any message.
 
-import { DEFAULT_MODEL, IMAGE_MIME_TYPES, LIMITS, NEW_CHAT_TITLE } from '@shared/constants';
+import { sniffAttachmentBytes } from '@shared/attachment-sniff';
+import { DEFAULT_MODEL, NEW_CHAT_TITLE } from '@shared/constants';
 import { type ErrorCode, errorInfo } from '@shared/errors';
 import type { AgentEvent } from '@shared/events';
 import { SAMPLE_MODELS } from '@shared/sample-data';
@@ -341,19 +342,20 @@ export class MockApiClient implements ApiClient {
 
   async uploadAttachment(file: File) {
     await this.pause(this.delayMs * 5);
-    const isImage = (IMAGE_MIME_TYPES as readonly string[]).includes(file.type);
-    const max = isImage ? LIMITS.imageAttachmentBytes : LIMITS.textAttachmentBytes;
-    if (file.size > max) fail('file_too_large', 413);
+    // Same content sniffing as the server (S1.7): the bytes decide, never `file.type`.
+    const sniff = sniffAttachmentBytes(file.name, new Uint8Array(await file.arrayBuffer()));
+    if (!sniff.ok) fail(sniff.code, sniff.code === 'file_too_large' ? 413 : 415, sniff.message);
     const ref: AttachmentRef = {
       id: crypto.randomUUID(),
       name: file.name,
-      mime: isImage ? file.type : 'text/plain',
+      mime: sniff.ok ? sniff.mime : 'text/plain',
       size: file.size,
-      kind: isImage ? 'image' : 'text',
+      kind: sniff.ok ? sniff.kind : 'text',
     };
     this.attachments.set(ref.id, { ref, blob: file, bound: false });
     return clone(ref);
   }
+
   async deleteAttachment(id: Id) {
     const a = this.attachments.get(id) ?? fail('not_found', 404);
     if (a.bound) fail('conflict', 409, 'This attachment is already part of a message.');
