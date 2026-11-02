@@ -134,32 +134,27 @@ export class HttpApiClient implements ApiClient {
     return `${this.baseUrl}/attachments/${enc(id)}/content`;
   }
 
-  // v0.2 stubs: G3 wires these to the routes in plan §4.3.
-  listProjectFiles(_projectId: Id): Promise<ProjectFileTree> {
-    return notImplemented('listProjectFiles');
+  listProjectFiles(projectId: Id) {
+    return this.json<ProjectFileTree>('GET', `/projects/${enc(projectId)}/files`);
   }
-  readProjectFile(_projectId: Id, _path: string): Promise<ProjectFileContent> {
-    return notImplemented('readProjectFile');
+  readProjectFile(projectId: Id, path: string) {
+    return this.json<ProjectFileContent>('GET', `/projects/${enc(projectId)}/files/content?path=${enc(path)}`);
   }
-  attachProjectFile(_projectId: Id, _path: string): Promise<AttachmentRef> {
-    return notImplemented('attachProjectFile');
+  attachProjectFile(projectId: Id, path: string) {
+    return this.json<AttachmentRef>('POST', `/projects/${enc(projectId)}/files/attach`, { path });
   }
-  getChatChanges(_chatId: Id): Promise<ChatChanges> {
-    return notImplemented('getChatChanges');
+  getChatChanges(chatId: Id) {
+    return this.json<ChatChanges>('GET', `/chats/${enc(chatId)}/changes`);
   }
-  applyChatChanges(_chatId: Id, _body: ApplyChangesBody): Promise<ApplyChangesResponse> {
-    return notImplemented('applyChatChanges');
+  applyChatChanges(chatId: Id, body: ApplyChangesBody) {
+    return this.json<ApplyChangesResponse>('POST', `/chats/${enc(chatId)}/changes/apply`, body);
   }
-  discardChatChanges(_chatId: Id): Promise<ChatChanges> {
-    return notImplemented('discardChatChanges');
+  discardChatChanges(chatId: Id) {
+    return this.json<ChatChanges>('DELETE', `/chats/${enc(chatId)}/changes`);
   }
 }
 
 const enc = encodeURIComponent;
-
-function notImplemented(what: string): never {
-  throw new Error(`HttpApiClient.${what} is not implemented yet (v0.2 goal G3).`);
-}
 
 async function toApiError(res: Response): Promise<ApiError> {
   const body: unknown = await res.json().catch(() => null);

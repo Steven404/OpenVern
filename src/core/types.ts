@@ -175,6 +175,8 @@ export interface ChangesService {
 export interface ProjectFilesService {
   tree(projectId: Id, signal?: AbortSignal): Promise<ProjectFileTree>;
   read(projectId: Id, relPath: string): Promise<ProjectFileContent>;
+  /** Raw bytes for "Attach" (images aren't text). Same sandbox as `read`; throws `file_too_large` over the image limit. */
+  readBytes(projectId: Id, relPath: string): Promise<{ name: string; bytes: Uint8Array }>;
 }
 
 export type CreateCore = (deps: CoreDeps) => Promise<Core>;
