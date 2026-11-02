@@ -1,0 +1,289 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-02T13:54:44.479Z",
+  "title": "Design System: harness",
+  "extensions": {
+    "colorMeta": {
+      "accent": {
+        "role": "primary",
+        "displayName": "Lamplight",
+        "canonical": "oklch(83.2% 0.128 77.7)",
+        "tonalRamp": ["#230000", "#421500", "#613300", "#825200", "#a77613", "#cb9740", "#f2bd68", "#ffe58f"]
+      },
+      "accent-2": {
+        "role": "secondary",
+        "displayName": "Gable Brick",
+        "canonical": "oklch(71.4% 0.128 42.7)",
+        "tonalRamp": ["#2c0000", "#4e0000", "#702200", "#93421e", "#bb6642", "#e08763", "#ffad88", "#ffd4ae"]
+      },
+      "success": {
+        "role": "tertiary",
+        "displayName": "Seafoam",
+        "canonical": "oklch(82.4% 0.072 157.1)",
+        "tonalRamp": ["#001301", "#002e15", "#174b30", "#386a4d", "#5b8d6f", "#7caf90", "#a1d6b5", "#c7fedc"]
+      },
+      "danger": {
+        "role": "tertiary",
+        "displayName": "Signal Coral",
+        "canonical": "oklch(76.9% 0.137 25.0)",
+        "tonalRamp": ["#2d0000", "#4f0001", "#721c1c", "#963d3a", "#bd615b", "#e3827b", "#ffa8a0", "#ffcfc6"]
+      },
+      "bg": {
+        "role": "neutral",
+        "displayName": "Blue Hour",
+        "canonical": "oklch(19.8% 0.041 271.6)",
+        "tonalRamp": ["#06091c", "#1d2338", "#383f56", "#555d75", "#777f99", "#98a1bc", "#bdc6e3", "#e4eeff"]
+      },
+      "sidebar": {
+        "role": "neutral",
+        "displayName": "Deep Water",
+        "canonical": "oklch(17.5% 0.036 272.2)",
+        "tonalRamp": ["#060a1a", "#1e2336", "#393f53", "#565d72", "#787f96", "#99a1b9", "#bfc6df", "#e6eeff"]
+      },
+      "code": {
+        "role": "neutral",
+        "displayName": "Night Canal",
+        "canonical": "oklch(16.5% 0.032 273.8)",
+        "tonalRamp": ["#070a18", "#1f2334", "#3a3f51", "#585d70", "#7a7f94", "#9ba1b6", "#c0c6dd", "#e7eeff"]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Dusk",
+        "canonical": "oklch(26.0% 0.062 272.4)",
+        "tonalRamp": ["#050725", "#1a2142", "#343d61", "#515b81", "#737ea6", "#94a0c9", "#b9c6f1", "#e0edff"]
+      },
+      "surface-raised": {
+        "role": "neutral",
+        "displayName": "Raised Dusk",
+        "canonical": "oklch(30.0% 0.073 272.8)",
+        "tonalRamp": ["#050529", "#192047", "#333c66", "#505b87", "#717eac", "#929fd0", "#b7c5f8", "#deecff"]
+      },
+      "bubble": {
+        "role": "neutral",
+        "displayName": "Bubble",
+        "canonical": "oklch(30.8% 0.074 272.0)",
+        "tonalRamp": ["#04052a", "#182047", "#323c67", "#4f5b88", "#707ead", "#919fd1", "#b6c5f9", "#ddecff"]
+      },
+      "tool": {
+        "role": "neutral",
+        "displayName": "Tow Path",
+        "canonical": "oklch(23.1% 0.051 272.1)",
+        "tonalRamp": ["#050820", "#1b223d", "#363e5b", "#535c7b", "#757f9f", "#96a0c2", "#bbc6e9", "#e2edff"]
+      },
+      "border-control": {
+        "role": "neutral",
+        "displayName": "Control Line",
+        "canonical": "oklch(38.5% 0.088 272.5)",
+        "tonalRamp": ["#04022f", "#171e4e", "#303b6e", "#4d5a8f", "#6e7db5", "#8f9ed9", "#b4c4ff", "#daecff"]
+      },
+      "text": {
+        "role": "neutral",
+        "displayName": "Moonlit",
+        "canonical": "oklch(95.5% 0.014 268.5)",
+        "tonalRamp": ["#090b11", "#21242b", "#3c4047", "#5a5d66", "#7d8089", "#9ea1ab", "#c3c7d1", "#eaeef8"]
+      },
+      "text-muted": {
+        "role": "neutral",
+        "displayName": "Haze",
+        "canonical": "oklch(72.5% 0.049 271.9)",
+        "tonalRamp": ["#050820", "#1c223c", "#363e5a", "#545c7a", "#767f9e", "#96a0c1", "#bcc6e8", "#e2edff"]
+      },
+      "text-faint": {
+        "role": "neutral",
+        "displayName": "Mist",
+        "canonical": "oklch(66.4% 0.055 271.6)",
+        "tonalRamp": ["#050822", "#1b223f", "#353e5d", "#525c7d", "#747fa2", "#95a0c5", "#bac6ec", "#e1edff"]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "The New chat prompt only."
+      },
+      "wordmark": {
+        "displayName": "Wordmark",
+        "purpose": "App name in the sidebar."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Chat titles and card titles."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "UI copy and controls."
+      },
+      "message": {
+        "displayName": "Message",
+        "purpose": "Conversation prose."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Uppercase mono section labels, key hints, counts."
+      },
+      "code": {
+        "displayName": "Code",
+        "purpose": "Code blocks and diffs."
+      }
+    },
+    "shadows": [
+      {
+        "name": "floating-composer",
+        "value": "0 24px 64px -32px rgba(0,0,0,0.6)",
+        "purpose": "New chat composer, the one hero surface."
+      },
+      {
+        "name": "segment-lift",
+        "value": "0 1px 2px rgba(0,0,0,0.35)",
+        "purpose": "Selected option in a segmented control."
+      }
+    ],
+    "motion": [
+      {
+        "name": "state-transition",
+        "value": "0.15s ease",
+        "purpose": "Background, border and colour changes on buttons, links and rows."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "sidebar-overlay",
+        "value": "760px"
+      },
+      {
+        "name": "min-window",
+        "value": "800px"
+      }
+    ],
+    "backdrop": {
+      "value": "radial-gradient(90% 55% at 62% -12%, rgb(98 126 214 / 0.22), transparent 62%), linear-gradient(180deg, #121a38 0%, #0f1428 38%, #0d1224 100%)",
+      "purpose": "App shell background: dusk glow over the ground."
+    },
+    "alternateThemes": [
+      {
+        "name": "Late Workshop",
+        "selector": "[data-theme=\"late-workshop\"]",
+        "source": "src/renderer/styles/tokens.css"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one forward action per view (Send, Apply).",
+      "html": "<button class=\"ds-btn-primary\">Apply 3</button>",
+      "css": ".ds-btn-primary{font-family:'Figtree Variable','Figtree',system-ui,sans-serif;display:inline-flex;align-items:center;gap:8px;min-height:40px;padding:0 16px;border-radius:10px;font-size:14px;font-weight:500;cursor:pointer;transition:background-color .15s ease,border-color .15s ease,color .15s ease;border:1px solid transparent;background:#f6bd60;color:#0f1428;} .ds-btn-primary:hover{filter:brightness(1.1)} .ds-btn-primary:focus-visible{outline:2px solid #f6bd60;outline-offset:2px}"
+    },
+    {
+      "name": "Outline Button",
+      "kind": "button",
+      "refersTo": "button-outline",
+      "description": "Default secondary action.",
+      "html": "<button class=\"ds-btn-outline\">Accept all</button>",
+      "css": ".ds-btn-outline{font-family:'Figtree Variable','Figtree',system-ui,sans-serif;display:inline-flex;align-items:center;gap:8px;min-height:40px;padding:0 16px;border-radius:10px;font-size:14px;font-weight:500;cursor:pointer;transition:background-color .15s ease,border-color .15s ease,color .15s ease;border:1px solid #343f72;background:#222a52;color:#ecf0fa;} .ds-btn-outline:hover{background:#2c3666;border-color:#46528c} .ds-btn-outline:focus-visible{outline:2px solid #f6bd60;outline-offset:2px}"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Quiet tertiary action.",
+      "html": "<button class=\"ds-btn-ghost\">Reject all</button>",
+      "css": ".ds-btn-ghost{font-family:'Figtree Variable','Figtree',system-ui,sans-serif;display:inline-flex;align-items:center;gap:8px;min-height:40px;padding:0 16px;border-radius:10px;font-size:14px;font-weight:500;cursor:pointer;transition:background-color .15s ease,border-color .15s ease,color .15s ease;border:1px solid transparent;background:transparent;color:#c3cbe3;} .ds-btn-ghost:hover{background:rgb(200 215 255 / 0.07);color:#ecf0fa} .ds-btn-ghost:focus-visible{outline:2px solid #f6bd60;outline-offset:2px}"
+    },
+    {
+      "name": "Text Field",
+      "kind": "input",
+      "refersTo": "text-field",
+      "description": "Labelled single-line input.",
+      "html": "<label class=\"ds-field\"><span>OpenRouter key</span><input placeholder=\"sk-or-…\"></label>",
+      "css": ".ds-field{font-family:'Figtree Variable','Figtree',system-ui,sans-serif;display:flex;flex-direction:column;gap:6px;width:280px}.ds-field span{font-size:13px;font-weight:500;color:#c3cbe3}.ds-field input{height:44px;border-radius:12px;border:1px solid #343f72;background:#1a2142;color:#ecf0fa;padding:0 14px;font:inherit;font-size:14.5px;transition:border-color .15s ease}.ds-field input::placeholder{color:#8792b6}.ds-field input:hover{border-color:#46528c}.ds-field input:focus{border-color:#5a68a8;outline:2px solid #f6bd60;outline-offset:2px}"
+    },
+    {
+      "name": "Project Chip",
+      "kind": "chip",
+      "refersTo": "",
+      "description": "Pill selector in the composer.",
+      "html": "<button class=\"ds-chip\"><svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#e07a5f\" stroke-width=\"1.8\" stroke-linejoin=\"round\"><path d=\"M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2h8.5A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z\"/></svg>No project</button>",
+      "css": ".ds-chip{font-family:'Figtree Variable','Figtree',system-ui,sans-serif;display:inline-flex;align-items:center;gap:6px;min-height:32px;padding:0 10px;border:1px solid #343f72;border-radius:999px;background:transparent;color:#c3cbe3;font-size:13px;cursor:pointer;transition:background-color .15s ease,border-color .15s ease,color .15s ease}.ds-chip:hover{background:#232c55;border-color:#46528c;color:#ecf0fa}.ds-chip:focus-visible{outline:2px solid #f6bd60;outline-offset:2px}"
+    },
+    {
+      "name": "Tool Row",
+      "kind": "card",
+      "refersTo": "tool-row",
+      "description": "A completed tool call inside an assistant reply.",
+      "html": "<div class=\"ds-tool\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#b8d4a0\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M5 12l5 5L20 7\"/></svg><code>read_file</code><span class=\"p\">src/agent/loop.ts</span><span class=\"t\">0.2s</span></div>",
+      "css": ".ds-tool{font-family:'Figtree Variable','Figtree',system-ui,sans-serif;display:flex;align-items:center;gap:10px;width:360px;padding:10px 14px;border:1px solid #29325c;border-radius:12px;background:#151b35;font-size:13.5px;color:#c3cbe3}.ds-tool code,.ds-tool .t{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px}.ds-tool .p{flex:1;color:#9ba5c6}.ds-tool .t{font-size:11.5px;color:#8792b6}"
+    },
+    {
+      "name": "Composer",
+      "kind": "custom",
+      "refersTo": "composer",
+      "description": "Message input with attach, model picker and send.",
+      "html": "<form class=\"ds-composer\"><textarea rows=\"2\" placeholder=\"Reply…\"></textarea><div class=\"row\"><span class=\"sp\"></span><button type=\"button\" class=\"send\" aria-label=\"Send\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 19V5M5 12l7-7 7 7\"/></svg></button></div></form>",
+      "css": ".ds-composer{font-family:'Figtree Variable','Figtree',system-ui,sans-serif;width:420px;display:flex;flex-direction:column;gap:8px;padding:14px 14px 10px 18px;border:1px solid #343f72;border-radius:18px;background:#1a2142;transition:border-color .15s ease}.ds-composer:focus-within{border-color:#5a68a8}.ds-composer textarea{resize:none;border:0;outline:0;background:transparent;color:#ecf0fa;font:inherit;font-size:15px}.ds-composer textarea::placeholder{color:#8792b6}.ds-composer .row{display:flex}.ds-composer .sp{flex:1}.ds-composer .send{width:38px;height:38px;display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:12px;background:#f6bd60;color:#0f1428;cursor:pointer}.ds-composer .send:focus-visible{outline:2px solid #f6bd60;outline-offset:2px}"
+    },
+    {
+      "name": "Sidebar Nav",
+      "kind": "nav",
+      "refersTo": "sidebar-chat-current",
+      "description": "Project with nested chats; current chat marked.",
+      "html": "<nav class=\"ds-nav\"><div class=\"h\">Projects</div><a href=\"#\" class=\"cur\">Agent loop and tool calls</a><a href=\"#\">Streaming replies over SSE</a></nav>",
+      "css": ".ds-nav{font-family:'Figtree Variable','Figtree',system-ui,sans-serif;width:240px;padding:12px;background:#0b0f20;display:flex;flex-direction:column;gap:1px}.ds-nav .h{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;font-weight:500;letter-spacing:.12em;text-transform:uppercase;color:#9ba5c6;padding:0 8px 8px}.ds-nav a{display:block;padding:7px 10px;border-radius:8px;font-size:13.5px;color:#a9b2cf;text-decoration:none;transition:background-color .15s ease}.ds-nav a:hover{background:rgb(200 215 255 / 0.05)}.ds-nav a.cur{background:rgb(200 215 255 / 0.08);color:#ecf0fa;box-shadow:inset 2px 0 0 #f6bd60}.ds-nav a:focus-visible{outline:2px solid #f6bd60;outline-offset:2px}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Blue Hour",
+    "overview": "The few minutes after sunset when the sky turns deep indigo and the windows along a canal light up. The ground is a cool night blue that stays calm for hours of reading; surfaces step up in small dusk-blue increments; and one warm lamplight accent glows where the next action is, the way a lit window draws the eye across dark water. Gable brick, the colour of the canal houses, is the quiet second voice.\n\nThe window carries a faint dusk glow at the top (the `--backdrop`), the only gradient in the system. Everything else is flat colour, 1px lines and type. Density is calm, not sparse: a 272px sidebar, a centred 760px conversation column and 32px between turns. The interface shows its work (tool calls, files read, proposed edits) as small legible rows, because the product's stance is visible over magical.\n\nBlue hour is the default theme. The original warm theme, **Late Workshop**, is kept intact as an alternate (see Colors) for a future theme setting.",
+    "keyCharacteristics": [
+      "Cool indigo ground with tonal surface steps, not shadows; one faint dusk glow at the top of the window.",
+      "One warm lamplight accent for the primary action and focus; gable brick for project folders and code keywords.",
+      "Display voice in Bricolage Grotesque, reading voice in Figtree, machine voice in JetBrains Mono.",
+      "Soft corners (8–18px), 1px cool borders, ghost controls by default.",
+      "Self-hosted fonts; no runtime requests to font CDNs."
+    ],
+    "rules": [
+      {
+        "name": "The One Glow Rule",
+        "body": "Lamplight marks at most one primary action per view, plus focus. If two things are amber, one of them is wrong.",
+        "section": "colors"
+      },
+      {
+        "name": "The Night Not Gray Rule",
+        "body": "Every neutral carries the indigo tint. A pure gray (`#888`, `#1e1e1e`) never enters the palette.",
+        "section": "colors"
+      },
+      {
+        "name": "The Same Names Rule",
+        "body": "Themes change values, never token names. A new screen that works in Blue hour works in Late Workshop without edits.",
+        "section": "colors"
+      },
+      {
+        "name": "The Mono Means Machine Rule",
+        "body": "JetBrains Mono is for code, paths, tool names, timings, counts and key hints. Never for ordinary prose or headings.",
+        "section": "typography"
+      },
+      {
+        "name": "The Tone Not Shadow Rule",
+        "body": "If a surface sits in the page flow, separate it with a surface step or a border, never a shadow.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do route every colour through a token from `src/renderer/styles/tokens.css`; themes depend on it.",
+      "Do keep Lamplight to one primary action per view, plus focus.",
+      "Do show tool calls and proposed edits as visible rows or cards in the conversation.",
+      "Do use 1px cool borders and surface steps for separation.",
+      "Do keep text at 4.5:1 or better; `text-faint` is the floor for meta text on the ground.",
+      "Do add any new colour to both themes in `tokens.css`."
+    ],
+    "donts": [
+      "Don't introduce pure grays; neutrals stay indigo-tinted.",
+      "Don't put shadows on in-flow surfaces.",
+      "Don't use mono for prose or headings.",
+      "Don't load fonts from a CDN in the app; use the `@fontsource-variable` packages.",
+      "Don't add a second filled accent button beside the primary.",
+      "Don't add gradients beyond the backdrop glow."
+    ]
+  }
+}
