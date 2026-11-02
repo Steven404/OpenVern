@@ -52,7 +52,7 @@ describe('Chat options (D9)', () => {
     await waitFor(() => expect(update).toHaveBeenCalledWith(chat.id, { title: 'A better title' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect((await screen.findByRole('heading', { level: 1 })).textContent).toBe('A better title');
-    await waitFor(() => expect(document.title).toBe('A better title — harness'));
+    await waitFor(() => expect(document.title).toBe('A better title — OpenVern'));
     await waitFor(() => expect(document.activeElement).toBe(trigger));
   });
 
@@ -111,7 +111,7 @@ describe('Chat options (D9)', () => {
     await waitFor(() => expect(location()).toBe('/new'));
     expect(await screen.findByRole('heading', { level: 1, name: /What are we building/ })).toBeTruthy();
     await waitFor(() => expect(screen.queryByRole('link', { name: chat.title })).toBeNull());
-    expect(document.title).toBe('harness');
+    expect(document.title).toBe('OpenVern');
   });
 
   it('Delete: Cancel keeps the chat', async () => {

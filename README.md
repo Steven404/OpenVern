@@ -1,6 +1,6 @@
-# harness
+# OpenVern
 
-A desktop AI harness: chat with LLMs about your local code projects. V0 talks to [OpenRouter](https://openrouter.ai)
+A desktop app to chat with LLMs about your local code projects. V0 talks to [OpenRouter](https://openrouter.ai)
 only, lets the model **read** a project (list, read and search files) through tool calls, and runs both in a browser
 (dev) and as a Linux AppImage. It cannot modify files or run commands.
 
@@ -35,7 +35,7 @@ node node_modules/electron/install.js
 | `npm run dev:web` | API server on `http://127.0.0.1:8787/api` plus the renderer in your browser at `http://localhost:5173` (Vite proxies `/api`). Data in `./.dev-data`. |
 | `npm run dev` | The same API server plus an Electron window on the Vite dev server (DevTools, hot reload). Data in `./.dev-data`. |
 | `npm run dev:server` | API server only (`tsx watch`). |
-| `npm run preview` | Builds, then runs Electron on the **production wiring** (`app://harness/`, backend inside the main process). Data in `./.dev-data-preview`. |
+| `npm run preview` | Builds, then runs Electron on the **production wiring** (`app://openvern/`, backend inside the main process). Data in `./.dev-data-preview`. |
 
 Ports 8787 (API) and 5173 (Vite, strict) are fixed; stop other dev servers first.
 
@@ -43,39 +43,45 @@ Environment variables:
 
 | Variable | Effect |
 |---|---|
-| `HARNESS_FAKE_PROVIDER=1` | The dev server (and the production wiring, so also `preview` and the AppImage) uses a scripted fake provider instead of OpenRouter: any key starting with `sk-or-` is accepted, no network, no cost. Replies read `README.md` with a `read_file` call, then answer with a code block. Test markers in a message: `[fake:slow]` (slow stream, to try Stop), `[fake:error=<code>]` (the call fails with that error code, e.g. `invalid_api_key`, `provider_error`) `[fake:flaky]` (fails once, succeeds on Retry) and `[fake:read=<path>]` (the first tool call reads that path, e.g. `.env`, to see the sandbox refuse it). |
-| `HARNESS_DATA_DIR=<dir>` | Overrides the data directory in every mode. |
+| `OPENVERN_FAKE_PROVIDER=1` | The dev server (and the production wiring, so also `preview` and the AppImage) uses a scripted fake provider instead of OpenRouter: any key starting with `sk-or-` is accepted, no network, no cost. Replies read `README.md` with a `read_file` call, then answer with a code block. Test markers in a message: `[fake:slow]` (slow stream, to try Stop), `[fake:error=<code>]` (the call fails with that error code, e.g. `invalid_api_key`, `provider_error`) `[fake:flaky]` (fails once, succeeds on Retry) and `[fake:read=<path>]` (the first tool call reads that path, e.g. `.env`, to see the sandbox refuse it). |
+| `OPENVERN_DATA_DIR=<dir>` | Overrides the data directory in every mode. |
 | `VITE_API=mock` | The renderer uses an in-memory mock API (seeded sample data, fake streaming); no server needed. E.g. `VITE_API=mock npm run dev:web`. |
 
-Typical keyless session: `HARNESS_FAKE_PROVIDER=1 npm run dev:web`, open Settings, paste any `sk-or-…` key.
+Typical keyless session: `OPENVERN_FAKE_PROVIDER=1 npm run dev:web`, open Settings, paste any `sk-or-…` key.
 
 ## Build and install
 
 ```bash
 npm run build           # main, preload and renderer into out/ (the renderer bundle is minified)
-npm run dist            # build + package release/harness-<version>-x86_64.AppImage
+npm run dist            # build + package release/OpenVern-<version>-x86_64.AppImage
 scripts/install-local.sh              # install the newest AppImage for your user
 scripts/install-local.sh --uninstall  # remove what it installed
 ```
 
-`install-local.sh` copies the AppImage to `~/.local/bin/harness.AppImage`, the icon to
-`~/.local/share/icons/hicolor/512x512/apps/harness.png` and writes `~/.local/share/applications/harness.desktop`
-(then refreshes the desktop database if the tool exists). It is idempotent. Run `harness.AppImage` from a terminal
+`install-local.sh` copies the AppImage to `~/.local/bin/openvern.AppImage`, the icon to
+`~/.local/share/icons/hicolor/512x512/apps/openvern.png` and writes `~/.local/share/applications/openvern.desktop`
+(then refreshes the desktop database if the tool exists). It also removes the `harness.*` files a 0.1 install left behind (on install and on `--uninstall`). It is idempotent. Run `openvern.AppImage` from a terminal
 to see the logs.
 
 ## Data
 
 | Mode | Data directory |
 |---|---|
-| AppImage | `~/.config/harness` (Electron's `userData`) |
+| AppImage | `~/.config/openvern` (Electron's `userData`) |
 | `npm run dev:web`, `npm run dev` | `./.dev-data` |
 | `npm run preview` | `./.dev-data-preview` |
-| any, with `HARNESS_DATA_DIR` | that directory (its Electron profile is `<dir>/electron-profile`) |
+| any, with `OPENVERN_DATA_DIR` | that directory (its Electron profile is `<dir>/electron-profile`) |
 
-Electron's profile (Chromium state, `localStorage`, single-instance lock): `~/.config/harness` for the AppImage,
-`~/.config/harness-dev` for `npm run dev`, `~/.config/harness-preview` for `npm run preview`. A run with `HARNESS_DATA_DIR` gets its profile (and lock) at
+Electron's profile (Chromium state, `localStorage`, single-instance lock): `~/.config/openvern` for the AppImage,
+`~/.config/openvern-dev` for `npm run dev`, `~/.config/openvern-preview` for `npm run preview`. A run with `OPENVERN_DATA_DIR` gets its profile (and lock) at
 `<dir>/electron-profile` in every mode, so it never collides with the installed app. `--user-data-dir=<dir>`
 overrides it.
+
+**Upgrading from 0.1:** the app used to be called harness and kept its data in `~/.config/harness`. On the first start
+of the packaged app, when `~/.config/openvern` has no `settings.json`, `projects.json` or chats, OpenVern **copies**
+`settings.json`, `secrets.json`, `projects.json`, `chats/`, `attachments/` and `cache/` over and writes a
+`migrated-from-harness` marker. The old directory is left alone. If the saved OpenRouter key no longer decrypts
+(the keyring entry may follow the app name), Settings asks for it again.
 
 ```
 <dataDir>/
@@ -110,7 +116,7 @@ that mode's Electron profile (see above).
 
 Every change must pass `npm run typecheck && npm run lint && npm test`.
 
-The e2e scripts (`scripts/e2e/`) use temporary data and Electron profile directories (never `~/.config/harness`), start
+The e2e scripts (`scripts/e2e/`) use temporary data and Electron profile directories (never `~/.config/openvern`), start
 and stop every process they need, and clean up on exit. Useful switches: `E2E_KEEP=1` keeps the scratch directory
 (screenshots, logs, the fixtures), `E2E_OUT_DIR=<dir>` chooses it, `E2E_SECTIONS=A2,A11` runs only those sections
 (A2 stores the key most others need), `E2E_SKIP_BUILD=1` reuses `out/`, and `E2E_SHOTS=1` also takes screenshots of
@@ -144,7 +150,7 @@ src/shared/     contracts shared by everything: types, errors, API schemas, stre
 src/core/       storage, provider adapters, project tools, agent loop (no Electron imports)
 src/server/     Hono app (/api) and the standalone dev server
 src/main/       Electron main process (prod backend, protocol handler, safeStorage)
-src/preload/    Electron preload (window.harness bridge)
+src/preload/    Electron preload (window.openvern bridge)
 src/renderer/   React UI
 scripts/        install-local.sh, e2e/ (end-to-end tests and screenshots), spikes/, try-openrouter.ts
 ```

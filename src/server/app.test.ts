@@ -267,7 +267,7 @@ describe('attachments', () => {
     });
     const res = await h.app.request('/api/attachments', {
       method: 'POST',
-      headers: { 'x-harness-client': '1', 'content-type': 'multipart/form-data; boundary=x' },
+      headers: { 'x-openvern-client': '1', 'content-type': 'multipart/form-data; boundary=x' },
       body,
       duplex: 'half',
     });

@@ -2,7 +2,7 @@
 // Wire format: one SSE frame per event, `data: <JSON AgentEvent>\n\n` (no `event:` field).
 
 import type { ApiErrorInfo } from './errors';
-import type { AssistantMessage, ChatSummary, Id, ToolCall, ToolMessage, UserMessage } from './types';
+import type { AssistantMessage, ChangeSummary, ChatSummary, Id, ToolCall, ToolMessage, UserMessage } from './types';
 
 export type AgentEvent =
   | { type: 'user_message'; message: UserMessage } // persisted user message (first event of /messages)
@@ -10,6 +10,7 @@ export type AgentEvent =
   | { type: 'text_delta'; messageId: Id; delta: string }
   | { type: 'tool_call'; messageId: Id; toolCall: ToolCall } // tool is now running
   | { type: 'tool_result'; message: ToolMessage }
+  | { type: 'changes_updated'; messageId: Id; changes: ChangeSummary | null } // after a tool_result that staged edits; null: nothing pending any more
   | { type: 'assistant_end'; message: AssistantMessage } // final persisted form of that assistant message
   | { type: 'chat_updated'; chat: ChatSummary } // title, model or updatedAt changed
   | { type: 'error'; error: ApiErrorInfo } // run-level error; the run then ends

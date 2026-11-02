@@ -10,7 +10,7 @@ import type { StorageLogger } from './json-file';
 
 const dirs: string[] = [];
 
-export async function makeTempDir(prefix = 'harness-test-'): Promise<string> {
+export async function makeTempDir(prefix = 'openvern-test-'): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   dirs.push(dir);
   return dir;

@@ -4,7 +4,7 @@
 
 import type { ThemeRegistration } from 'shiki/core';
 
-export const SHIKI_THEME_NAME = 'harness';
+export const SHIKI_THEME_NAME = 'openvern';
 
 const FALLBACKS = {
   code: '#0a0d1c',
@@ -25,7 +25,7 @@ function token(name: TokenName): string {
   return value || FALLBACKS[name];
 }
 
-export function createHarnessTheme(): ThemeRegistration {
+export function createOpenVernTheme(): ThemeRegistration {
   const fg = token('text-code');
   const keyword = token('accent-2');
   const string = token('success');

@@ -3,7 +3,7 @@
 import { BrowserWindow, dialog, ipcMain, type OpenDialogOptions } from 'electron';
 import { isAppUrl } from './origin';
 
-export const IPC_PICK_DIRECTORY = 'harness:pick-directory';
+export const IPC_PICK_DIRECTORY = 'openvern:pick-directory';
 
 export function registerIpc(): void {
   ipcMain.handle(IPC_PICK_DIRECTORY, async (event): Promise<string | null> => {

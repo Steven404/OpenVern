@@ -14,7 +14,7 @@ function isDeniedName(name: string): boolean {
   const n = name.toLowerCase();
   if (n === '.git') return true;
   if (n === '.env') return true;
-  // Another harness instance's data dir (dev builds use `.dev-data`) and the key file every data dir holds.
+  // Another openvern instance's data dir (dev builds use `.dev-data`) and the key file every data dir holds.
   if (n === '.dev-data' || n.startsWith('.dev-data-')) return true;
   if (n === 'secrets.json') return true;
   if (n.startsWith('.env.') && !SAFE_ENV_NAMES.has(n)) return true;
@@ -42,12 +42,12 @@ async function isFile(p: string): Promise<boolean> {
 }
 
 /**
- * True when `dirAbs` looks like a harness data dir (see `dataPaths`): it has `chats/index.json` AND at least one of
+ * True when `dirAbs` looks like a openvern data dir (see `dataPaths`): it has `chats/index.json` AND at least one of
  * `projects.json`, `settings.json`, `secrets.json`. `chats/index.json` is written on the first chat, and a chat needs a
  * project, so every dir that holds conversations has both; a fresh dir (nothing sensitive yet) has neither. A
  * bare `chats/` folder in an ordinary repo has no such sibling file. Costs one `lstat` for ordinary directories.
  */
-export async function isHarnessDataDir(dirAbs: string): Promise<boolean> {
+export async function isOpenVernDataDir(dirAbs: string): Promise<boolean> {
   if (!(await isFile(path.join(dirAbs, 'chats', 'index.json')))) return false;
   for (const f of ['projects.json', 'settings.json', 'secrets.json']) {
     if (await isFile(path.join(dirAbs, f))) return true;
@@ -55,14 +55,14 @@ export async function isHarnessDataDir(dirAbs: string): Promise<boolean> {
   return false;
 }
 
-/** True when `dirAbs` or any directory between `realRoot` (inclusive) and it is a harness data dir. */
-export async function isInsideHarnessDataDir(realRoot: string, dirAbs: string): Promise<boolean> {
+/** True when `dirAbs` or any directory between `realRoot` (inclusive) and it is a openvern data dir. */
+export async function isInsideOpenVernDataDir(realRoot: string, dirAbs: string): Promise<boolean> {
   const parts = path.relative(realRoot, dirAbs).split(path.sep).filter(Boolean);
   let cur = realRoot;
-  if (await isHarnessDataDir(cur)) return true;
+  if (await isOpenVernDataDir(cur)) return true;
   for (const part of parts) {
     cur = path.join(cur, part);
-    if (await isHarnessDataDir(cur)) return true;
+    if (await isOpenVernDataDir(cur)) return true;
   }
   return false;
 }
@@ -170,7 +170,7 @@ export async function resolveInProject(
     return { ok: false, kind: 'blocked', message: BLOCKED_MESSAGE };
   }
   // The real path (or a directory above it) may be a data dir of any name; ancestors only, to keep the cost bounded.
-  if (await isInsideHarnessDataDir(realRoot, exists ? real : path.dirname(real))) {
+  if (await isInsideOpenVernDataDir(realRoot, exists ? real : path.dirname(real))) {
     return { ok: false, kind: 'blocked', message: BLOCKED_MESSAGE };
   }
   if (exists && opts.deniedFiles?.length) {

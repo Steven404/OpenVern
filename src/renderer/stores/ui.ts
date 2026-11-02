@@ -5,8 +5,8 @@ import type { Id } from '@shared/types';
 import { create } from 'zustand';
 
 export const STORAGE_KEYS = {
-  sidebarCollapsed: 'harness.sidebarCollapsed',
-  expandedProjects: 'harness.expandedProjects',
+  sidebarCollapsed: 'openvern.sidebarCollapsed',
+  expandedProjects: 'openvern.expandedProjects',
 } as const;
 
 function readStorage(key: string): string | null {
@@ -80,7 +80,7 @@ export interface UiState {
   openNewProject(): void;
   closeNewProject(): void;
 
-  /** Desktop sidebar collapse (D2). Persisted in `localStorage` (`harness.sidebarCollapsed`). */
+  /** Desktop sidebar collapse (D2). Persisted in `localStorage` (`openvern.sidebarCollapsed`). */
   sidebarCollapsed: boolean;
   setSidebarCollapsed(collapsed: boolean): void;
   toggleSidebarCollapsed(): void;
@@ -88,7 +88,7 @@ export interface UiState {
   sidebarOverlayOpen: boolean;
   setSidebarOverlayOpen(open: boolean): void;
 
-  /** Expanded project rows in the sidebar (D5), by project id. Persisted (`harness.expandedProjects`). */
+  /** Expanded project rows in the sidebar (D5), by project id. Persisted (`openvern.expandedProjects`). */
   expandedProjects: Record<Id, true>;
   toggleProject(id: Id): void;
   expandProject(id: Id): void;

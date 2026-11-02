@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# End-to-end run against the built Electron app (prod wiring: app://harness/, backend in the main process, fake
+# End-to-end run against the built Electron app (prod wiring: app://openvern/, backend in the main process, fake
 # provider), driven over CDP. Opens a real window, so it needs a display. Uses temp data / userData dirs only, never
-# ~/.config/harness. Builds first unless E2E_SKIP_BUILD=1.
+# ~/.config/openvern. Builds first unless E2E_SKIP_BUILD=1.
 #   scripts/e2e/run-electron.sh
 #   E2E_SHOTS=1 …    also take the S9.3 screenshots (E2E_SKIP_SMOKE=1: only those)
 #   E2E_KEEP=1 …     keep the scratch dir (screenshots, logs)
@@ -25,7 +25,7 @@ e2e_init
 CDP="$(free_port)"
 
 start_app() {
-  HARNESS_FAKE_PROVIDER=1 HARNESS_DATA_DIR="$DATA" start_bg electron "$ELECTRON" . \
+  OPENVERN_FAKE_PROVIDER=1 OPENVERN_DATA_DIR="$DATA" start_bg electron "$ELECTRON" . \
     --remote-debugging-port="$CDP" --user-data-dir="$OUT/userdata"
   APP_PGID=$LAST_PGID
   wait_for "Electron window" 40 bash -c "curl -sf http://127.0.0.1:$CDP/json | grep -q '\"url\": \"app://'"
@@ -33,7 +33,7 @@ start_app() {
 
 start_app || { cat "$OUT/electron.log"; exit 1; }
 
-export E2E_MODE=electron E2E_BASE="app://harness/" E2E_OUT="$OUT" CDP_PORT="$CDP" E2E_DATA_DIR="$DATA"
+export E2E_MODE=electron E2E_BASE="app://openvern/" E2E_OUT="$OUT" CDP_PORT="$CDP" E2E_DATA_DIR="$DATA"
 
 SMOKE=$([ "${E2E_SKIP_SMOKE:-0}" = 1 ] && echo 0 || echo 1)
 

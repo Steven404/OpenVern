@@ -1,15 +1,18 @@
 // The renderer's only way to talk to the backend (plan §4.9).
 
-import type { HealthResponse } from '@shared/api';
+import type { ApplyChangesBody, ApplyChangesResponse, HealthResponse } from '@shared/api';
 import type { ApiErrorInfo } from '@shared/errors';
 import type { AgentEvent } from '@shared/events';
 import type {
   AttachmentRef,
   Chat,
+  ChatChanges,
   ChatSummary,
   Id,
   ModelInfo,
   Project,
+  ProjectFileContent,
+  ProjectFileTree,
   ProjectListItem,
   PublicSettings,
 } from '@shared/types';
@@ -39,6 +42,13 @@ export interface ApiClient {
   uploadAttachment(file: File): Promise<AttachmentRef>;
   deleteAttachment(id: Id): Promise<void>;
   attachmentUrl(id: Id): string;
+  // v0.2 (plan §4.8)
+  listProjectFiles(projectId: Id): Promise<ProjectFileTree>;
+  readProjectFile(projectId: Id, path: string): Promise<ProjectFileContent>;
+  attachProjectFile(projectId: Id, path: string): Promise<AttachmentRef>;
+  getChatChanges(chatId: Id): Promise<ChatChanges>;
+  applyChatChanges(chatId: Id, body: ApplyChangesBody): Promise<ApplyChangesResponse>;
+  discardChatChanges(chatId: Id): Promise<ChatChanges>;
 }
 
 /** Thrown by every method on a non-2xx response or a network failure. */
@@ -53,13 +63,13 @@ export class ApiError extends Error {
 }
 
 /** Platform bridge: set by preload in Electron, `undefined` in the browser. */
-export interface HarnessBridge {
+export interface OpenVernBridge {
   isElectron: true;
   pickDirectory(): Promise<string | null>;
 }
 
 declare global {
   interface Window {
-    harness?: HarnessBridge;
+    openvern?: OpenVernBridge;
   }
 }

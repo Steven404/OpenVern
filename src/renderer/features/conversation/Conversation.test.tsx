@@ -108,7 +108,7 @@ describe('turn grouping', () => {
     expect(screen.getAllByTestId('user-bubble')).toHaveLength(1);
     const turn = turns[0] as HTMLElement;
     expect(within(turn).getAllByTestId('tool-row')).toHaveLength(1);
-    expect(within(turn).getAllByText('harness')).toHaveLength(1);
+    expect(within(turn).getAllByText('OpenVern')).toHaveLength(1);
     expect(within(turn).getByText(/That shape is right/)).toBeTruthy();
     expect(within(turn).getByText(/Two guards are worth adding/)).toBeTruthy();
     // tool row sits between the two texts

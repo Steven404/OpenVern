@@ -3,24 +3,32 @@
 import { realpath } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { APP_SLUG } from '@shared/constants';
 import { createAgentService } from './agent';
+import { createChangesService } from './changes';
+import { createProjectFilesService } from './project-files';
 import { createModelCatalog } from './providers/models';
 import { createOpenRouterProvider } from './providers/openrouter';
-import { createStorage, dataPaths, expandHome } from './storage';
+import { createStorage, dataPaths, expandHome, LEGACY_SLUG } from './storage';
 import { getProjectTools, renderTree } from './tools';
 import type { Core, CoreDeps } from './types';
 
 /**
- * Default production data dir(s), denied to the tools whichever instance is running: `$XDG_CONFIG_HOME/harness`, else
- * `~/.config/harness`. Realpath when it exists, the lexical path otherwise.
+ * Default production data dir(s), denied to the tools whichever instance is running: `$XDG_CONFIG_HOME/openvern`, else
+ * `~/.config/openvern`, plus the legacy 0.1 dir `…/harness` (it still holds the old chats and key). Realpath when it exists, the lexical path otherwise.
  */
 export async function defaultDataDirRoots(
   env: NodeJS.ProcessEnv = process.env,
   home: string = os.homedir(),
 ): Promise<string[]> {
   const xdg = env.XDG_CONFIG_HOME?.trim();
-  const dir = path.resolve(xdg ? xdg : path.join(home, '.config'), 'harness');
-  return [await realpath(dir).catch(() => dir)];
+  const base = path.resolve(xdg ? xdg : path.join(home, '.config'));
+  return Promise.all(
+    [APP_SLUG, LEGACY_SLUG].map((slug) => {
+      const dir = path.join(base, slug);
+      return realpath(dir).catch(() => dir);
+    }),
+  );
 }
 
 export async function createCore(deps: CoreDeps): Promise<Core> {
@@ -52,7 +60,18 @@ export async function createCore(deps: CoreDeps): Promise<Core> {
 
   await attachments.cleanupOrphans();
 
-  return { settings, projects, chats, attachments, models, agent, provider };
+  return {
+    settings,
+    projects,
+    chats,
+    attachments,
+    models,
+    agent,
+    provider,
+    changes: createChangesService(),
+    projectFiles: createProjectFilesService(),
+    version: deps.version,
+  };
 }
 
 export type * from './types';

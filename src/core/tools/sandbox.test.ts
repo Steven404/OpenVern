@@ -138,7 +138,7 @@ describe('deniedRoots (S1-M1)', () => {
   let proj: string;
   let data: string;
   beforeAll(async () => {
-    base = await realpath(await mkdtemp(path.join(tmpdir(), 'harness-b2-')));
+    base = await realpath(await mkdtemp(path.join(tmpdir(), 'openvern-b2-')));
     proj = path.join(base, 'proj');
     data = path.join(proj, '.dev-data');
     await mkdir(path.join(data, 'chats'), { recursive: true });

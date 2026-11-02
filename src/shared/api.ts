@@ -1,8 +1,9 @@
 // HTTP API: route paths and zod request bodies (plan §4.3).
-// All routes are under `/api`, JSON unless noted, and require `X-Harness-Client: 1`.
+// All routes are under `/api`, JSON unless noted, and require `X-OpenVern-Client: 1`.
 
 import { z } from 'zod';
 import { LIMITS } from './constants';
+import type { AppliedBatch, ChatChanges } from './types';
 
 export const API_PREFIX = '/api';
 
@@ -21,6 +22,11 @@ export const ROUTES = {
   attachments: '/attachments',
   attachment: '/attachments/:id',
   attachmentContent: '/attachments/:id/content',
+  projectFiles: '/projects/:id/files',
+  projectFileContent: '/projects/:id/files/content',
+  projectFileAttach: '/projects/:id/files/attach',
+  chatChanges: '/chats/:id/changes',
+  chatChangesApply: '/chats/:id/changes/apply',
 } as const;
 
 export interface HealthResponse {
@@ -58,6 +64,18 @@ export const sendMessageBody = z
   });
 /** `POST /chats/:id/retry` → `text/event-stream` of `AgentEvent` */
 export const retryBody = z.object({ model: modelId });
+/** `POST /projects/:id/files/attach` → `AttachmentRef` */
+export const attachProjectFileBody = z.object({ path: z.string().min(1) });
+/** `POST /chats/:id/changes/apply` */
+export const applyChangesBody = z.object({
+  revision: z.number().int().nonnegative(),
+  /** path → hunk id → decision. Hunks not listed are undecided and left out. */
+  decisions: z.record(z.string(), z.record(z.string(), z.enum(['accepted', 'rejected']))),
+});
+export interface ApplyChangesResponse {
+  batch: AppliedBatch;
+  changes: ChatChanges;
+}
 
 export type SetOpenRouterKeyBody = z.infer<typeof setOpenRouterKeyBody>;
 export type UpdateSettingsBody = z.infer<typeof updateSettingsBody>;
@@ -67,3 +85,5 @@ export type CreateChatBody = z.infer<typeof createChatBody>;
 export type UpdateChatBody = z.infer<typeof updateChatBody>;
 export type SendMessageBody = z.infer<typeof sendMessageBody>;
 export type RetryBody = z.infer<typeof retryBody>;
+export type AttachProjectFileBody = z.infer<typeof attachProjectFileBody>;
+export type ApplyChangesBody = z.infer<typeof applyChangesBody>;

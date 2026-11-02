@@ -1,7 +1,9 @@
 // App-wide constants (plan §4.5).
 
-export const APP_NAME = 'harness';
-export const APP_ID = 'dev.stefanos.harness';
+export const APP_NAME = 'OpenVern';
+/** Lower-case form for paths, the protocol host, storage keys and env vars. */
+export const APP_SLUG = 'openvern';
+export const APP_ID = 'dev.stefanos.openvern';
 /** Picked from openrouter.ai/models on 2026-10-31: current Claude Sonnet with tools + image input. */
 export const DEFAULT_MODEL = 'anthropic/claude-sonnet-5.5';
 export const NEW_CHAT_TITLE = 'New chat';
@@ -21,6 +23,28 @@ export const LIMITS = {
   systemPromptTreeTimeoutMs: 2500,
   /** `.gitignore` files above this size are skipped by the walker (S3-M1). */
   gitignoreMaxBytes: 256 * 1024,
+  /** v0.2 proposed edits (plan §4.5). */
+  writeFileMaxBytes: 256 * 1024,
+  pendingFilesPerChat: 50,
+  /** Diff excerpt in an edit tool's output. */
+  editResultDiffLines: 40,
+  fileTreeMaxEntries: 20_000,
+  viewerMaxBytes: 1024 * 1024,
+  diffMaxLinesPerFile: 5_000,
+} as const;
+
+export const LAYOUT = {
+  sidebar: 272,
+  conversationMin: 420,
+  panelMin: 380,
+  panelFiles: 380,
+  panelViewer: 560,
+  panelDiff: 600,
+  panelDiffSplit: 800,
+  /** Below this panel width Split is disabled. */
+  splitMin: 640,
+  windowMinWidth: 1080,
+  windowMinHeight: 720,
 } as const;
 
 export const IMAGE_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'] as const;
@@ -44,7 +68,7 @@ export const TEXT_ACCEPT = ['text/*', ...TEXT_EXTENSIONS.map((e) => `.${e}`)].jo
 export const IMAGE_ACCEPT = IMAGE_MIME_TYPES.join(',');
 
 /** Header every `/api` request must carry (plan §3.3). */
-export const CLIENT_HEADER = 'X-Harness-Client';
+export const CLIENT_HEADER = 'X-OpenVern-Client';
 export const CLIENT_HEADER_VALUE = '1';
 
 /** Shown under the first assistant message of a turn when the project tree timed out. */

@@ -21,7 +21,7 @@ export async function write(root: string, rel: string, content: string | Buffer)
 }
 
 export async function createFixture(): Promise<Fixture> {
-  const base = await realpath(await mkdtemp(path.join(tmpdir(), 'harness-tools-')));
+  const base = await realpath(await mkdtemp(path.join(tmpdir(), 'openvern-tools-')));
   const root = path.join(base, 'proj');
   const outside = path.join(base, 'outside');
   await mkdir(root);

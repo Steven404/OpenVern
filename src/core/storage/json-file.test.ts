@@ -105,20 +105,20 @@ describe('paths', () => {
     expect(expandHome('/abs/~')).toBe('/abs/~');
   });
 
-  it('resolveDataDir: HARNESS_DATA_DIR wins over the argument', async () => {
+  it('resolveDataDir: OPENVERN_DATA_DIR wins over the argument', async () => {
     const base = await makeTempDir();
     const fromEnv = path.join(base, 'env');
-    const prev = process.env.HARNESS_DATA_DIR;
+    const prev = process.env.OPENVERN_DATA_DIR;
     try {
-      process.env.HARNESS_DATA_DIR = fromEnv;
+      process.env.OPENVERN_DATA_DIR = fromEnv;
       expect(await resolveDataDir(path.join(base, 'arg'))).toBe(fromEnv);
       expect((await fs.stat(dataPaths(fromEnv).chatsDir)).isDirectory()).toBe(true);
-      delete process.env.HARNESS_DATA_DIR;
+      delete process.env.OPENVERN_DATA_DIR;
       expect(await resolveDataDir(path.join(base, 'arg'))).toBe(path.join(base, 'arg'));
       await expect(resolveDataDir()).rejects.toThrow();
     } finally {
-      if (prev === undefined) delete process.env.HARNESS_DATA_DIR;
-      else process.env.HARNESS_DATA_DIR = prev;
+      if (prev === undefined) delete process.env.OPENVERN_DATA_DIR;
+      else process.env.OPENVERN_DATA_DIR = prev;
     }
   });
 });

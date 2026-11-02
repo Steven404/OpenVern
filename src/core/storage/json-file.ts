@@ -11,7 +11,7 @@ export interface StorageLogger {
   warn(message: string): void;
 }
 
-export const consoleLogger: StorageLogger = { warn: (m) => console.warn(`[harness:storage] ${m}`) };
+export const consoleLogger: StorageLogger = { warn: (m) => console.warn(`[openvern:storage] ${m}`) };
 
 export function isNotFound(err: unknown): boolean {
   return typeof err === 'object' && err !== null && (err as NodeJS.ErrnoException).code === 'ENOENT';

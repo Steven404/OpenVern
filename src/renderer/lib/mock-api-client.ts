@@ -1,6 +1,7 @@
 // In-memory `ApiClient` for UI work without a server (`VITE_API=mock`). Seeded with the design's sample data;
 // streams a fake turn (text → read_file → text with a code block) for any message.
 
+import type { ApplyChangesBody, ApplyChangesResponse } from '@shared/api';
 import { sniffAttachmentBytes } from '@shared/attachment-sniff';
 import { DEFAULT_MODEL, NEW_CHAT_TITLE } from '@shared/constants';
 import { type ErrorCode, errorInfo } from '@shared/errors';
@@ -10,11 +11,15 @@ import type {
   AssistantMessage,
   AttachmentRef,
   Chat,
+  ChatChanges,
   ChatSummary,
+  FileChange,
   Id,
   Message,
   ModelInfo,
   Project,
+  ProjectFileContent,
+  ProjectFileTree,
   ProjectListItem,
   PublicSettings,
   ToolCall,
@@ -22,6 +27,7 @@ import type {
   UserMessage,
 } from '@shared/types';
 import { type ApiClient, ApiError } from './api-client';
+import { acceptedOnly, sampleFileContent, sampleFileTree, sampleProposal, summarize } from './mock-changes';
 
 export interface MockApiClientOptions {
   /** Pause between streamed events, in ms. Default 30; use 0 in tests. */
@@ -71,6 +77,8 @@ export class MockApiClient implements ApiClient {
   private chats: Chat[] = [];
   private attachments = new Map<Id, StoredAttachment>();
   private running = new Set<Id>();
+  private changes = new Map<Id, { revision: number; messageId: Id; files: FileChange[] } | null>();
+  private applied = new Map<Id, ChatChanges['applied']>();
 
   constructor(opts: MockApiClientOptions = {}) {
     this.delayMs = opts.delayMs ?? 30;
@@ -187,6 +195,8 @@ export class MockApiClient implements ApiClient {
   async deleteChat(id: Id) {
     const c = this.chat(id);
     this.chats = this.chats.filter((x) => x !== c);
+    this.changes.delete(id);
+    this.applied.delete(id);
     for (const m of c.messages) if (m.role === 'user') for (const a of m.attachments) this.dropAttachment(a.id);
   }
 
@@ -236,15 +246,34 @@ export class MockApiClient implements ApiClient {
       }
 
       const useTools = chat.projectId !== null && (info?.supportsTools ?? true);
-      const steps: { text: string; toolCalls: ToolCall[] }[] = useTools
+      const edit = useTools && input?.text.includes('[mock:edit]') === true;
+      const steps: { text: string; toolCalls: ToolCall[]; stages?: boolean }[] = edit
         ? [
             {
-              text: "I'll start by reading the README.",
-              toolCalls: [{ id: `call_${crypto.randomUUID()}`, name: 'read_file', argsJson: '{"path":"README.md"}' }],
+              text: "I'll propose those edits.",
+              stages: true,
+              toolCalls: sampleProposal().map((f) => ({
+                id: `call_${crypto.randomUUID()}`,
+                name: f.kind === 'create' ? 'write_file' : 'edit_file',
+                argsJson: JSON.stringify({ path: f.path }),
+              })),
             },
-            { text: `Here is the core of the loop:\n\n${SAMPLE_CODE}\n\nAdd a step limit early.`, toolCalls: [] },
+            { text: 'The edits are proposed. Review them and apply the ones you want.', toolCalls: [] },
           ]
-        : [{ text: `Here is the core of an agent loop:\n\n${SAMPLE_CODE}\n\nAdd a step limit early.`, toolCalls: [] }];
+        : useTools
+          ? [
+              {
+                text: "I'll start by reading the README.",
+                toolCalls: [{ id: `call_${crypto.randomUUID()}`, name: 'read_file', argsJson: '{"path":"README.md"}' }],
+              },
+              { text: `Here is the core of the loop:\n\n${SAMPLE_CODE}\n\nAdd a step limit early.`, toolCalls: [] },
+            ]
+          : [
+              {
+                text: `Here is the core of an agent loop:\n\n${SAMPLE_CODE}\n\nAdd a step limit early.`,
+                toolCalls: [],
+              },
+            ];
 
       const stopRun = (): never => {
         chat.updatedAt = now();
@@ -308,6 +337,7 @@ export class MockApiClient implements ApiClient {
             }
             stopRun();
           }
+          const staged = step.stages ? sampleProposal().slice(0, i + 1) : null;
           const tool: ToolMessage = {
             id: crypto.randomUUID(),
             role: 'tool',
@@ -315,12 +345,19 @@ export class MockApiClient implements ApiClient {
             toolCallId: call.id,
             name: call.name,
             ok: true,
-            output: 'File: README.md (3 lines, showing 1-3)\n1\t# harness\n2\t\n3\tA desktop AI harness.',
-            summary: 'README.md',
+            output: staged
+              ? `Proposed ${staged[i]?.path}. Proposed, not written yet.`
+              : 'File: README.md (3 lines, showing 1-3)\n1\t# OpenVern\n2\t\n3\tA desktop AI app.',
+            summary: staged ? (staged[i]?.path ?? '') : 'README.md',
             durationMs: this.delayMs * 8,
           };
           chat.messages.push(tool);
           yield { type: 'tool_result', message: clone(tool) };
+          if (staged) {
+            const revision = (this.changes.get(chatId)?.revision ?? 0) + 1;
+            this.changes.set(chatId, { revision, messageId: msg.id, files: staged });
+            yield { type: 'changes_updated', messageId: msg.id, changes: summarize(staged, revision, msg.id) };
+          }
         }
       }
 
@@ -373,6 +410,79 @@ export class MockApiClient implements ApiClient {
     this.attachments.delete(id);
   }
 
+  // ── project files and proposed edits (v0.2) ───────────────────────────────
+
+  async listProjectFiles(projectId: Id): Promise<ProjectFileTree> {
+    await this.pause(this.delayMs);
+    this.project(projectId);
+    return sampleFileTree();
+  }
+
+  async readProjectFile(projectId: Id, path: string): Promise<ProjectFileContent> {
+    await this.pause(this.delayMs);
+    this.project(projectId);
+    return sampleFileContent(path) ?? fail('not_found', 404, 'That file does not exist.');
+  }
+
+  async attachProjectFile(projectId: Id, path: string): Promise<AttachmentRef> {
+    const file = await this.readProjectFile(projectId, path);
+    if (file.content === null) return fail('unsupported_file', 415);
+    const name = path.split('/').pop() ?? path;
+    const ref: AttachmentRef = { id: crypto.randomUUID(), name, mime: 'text/plain', size: file.size, kind: 'text' };
+    this.attachments.set(ref.id, { ref, blob: new Blob([file.content], { type: 'text/plain' }), bound: false });
+    return clone(ref);
+  }
+
+  async getChatChanges(chatId: Id): Promise<ChatChanges> {
+    this.chat(chatId);
+    return this.chatChanges(chatId);
+  }
+
+  async applyChatChanges(chatId: Id, body: ApplyChangesBody): Promise<ApplyChangesResponse> {
+    this.chat(chatId);
+    if (this.running.has(chatId)) fail('conflict', 409, 'Wait for the reply to finish first.');
+    const pending = this.changes.get(chatId) ?? null;
+    if (!pending || pending.revision !== body.revision) fail('changes_stale', 409);
+    const { written, rejectedHunks, skippedHunks } = acceptedOnly(pending?.files ?? [], body.decisions);
+    const batch = {
+      id: crypto.randomUUID(),
+      appliedAt: now(),
+      messageId: pending?.messageId ?? '',
+      written,
+      rejectedHunks,
+      skippedHunks,
+      conflicts: [],
+    };
+    this.applied.set(chatId, [...(this.applied.get(chatId) ?? []), batch]);
+    this.changes.set(chatId, null);
+    return { batch: clone(batch), changes: this.chatChanges(chatId) };
+  }
+
+  async discardChatChanges(chatId: Id): Promise<ChatChanges> {
+    this.chat(chatId);
+    if (this.running.has(chatId)) fail('conflict', 409, 'Wait for the reply to finish first.');
+    this.changes.set(chatId, null);
+    return this.chatChanges(chatId);
+  }
+
+  private project(id: Id): Project {
+    return this.projects.find((p) => p.id === id) ?? fail('not_found', 404);
+  }
+
+  private chatChanges(chatId: Id): ChatChanges {
+    const p = this.changes.get(chatId) ?? null;
+    return clone({
+      pending: p && {
+        revision: p.revision,
+        messageId: p.messageId,
+        files: p.files,
+        totalAdd: p.files.reduce((n, f) => n + f.add, 0),
+        totalDel: p.files.reduce((n, f) => n + f.del, 0),
+      },
+      applied: this.applied.get(chatId) ?? [],
+    });
+  }
+
   // ── helpers ───────────────────────────────────────────────────────────────
 
   private pause(ms: number, signal?: AbortSignal) {
@@ -398,10 +508,10 @@ export class MockApiClient implements ApiClient {
       rootPath,
       createdAt: minutesAgo(60 * 24 * 7),
     });
-    const harness = project('stefanos-ai-harness', '/home/you/code/stefanos-ai-harness');
+    const openvern = project('stefanos-ai-openvern', '/home/you/code/stefanos-ai-openvern');
     const notes = project('Offline Notes App', '/home/you/code/offline-notes');
     const site = project('Portfolio site', '/home/you/code/portfolio');
-    this.projects = [harness, notes, site];
+    this.projects = [openvern, notes, site];
 
     let age = 0;
     const chat = (projectId: Id, title: string, messages: Message[] = []): Chat => {
@@ -459,9 +569,9 @@ export class MockApiClient implements ApiClient {
     ];
 
     this.chats = [
-      chat(harness.id, 'Agent loop and tool calls', turn),
-      chat(harness.id, 'Streaming replies over SSE'),
-      chat(harness.id, 'Settings: what goes in v1'),
+      chat(openvern.id, 'Agent loop and tool calls', turn),
+      chat(openvern.id, 'Streaming replies over SSE'),
+      chat(openvern.id, 'Settings: what goes in v1'),
       chat(notes.id, 'Sync conflict strategy'),
       chat(notes.id, 'SQLite schema review'),
       chat(site.id, 'Theme toggle transition'),

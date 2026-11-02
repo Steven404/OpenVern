@@ -11,7 +11,7 @@ RC=0
 
 # The scratch dir (fixtures, screenshots, logs, data dirs). Kept when something failed or E2E_KEEP=1.
 e2e_init() {
-  OUT="${E2E_OUT_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/harness-e2e-XXXXXX")}"
+  OUT="${E2E_OUT_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/openvern-e2e-XXXXXX")}"
   mkdir -p "$OUT"
   DATA="$OUT/data"
   mkdir -p "$DATA"
@@ -80,4 +80,4 @@ wait_for() { # wait_for <label> <seconds> <cmd…>
   return 1
 }
 
-api_up() { curl -sf -H 'X-Harness-Client: 1' http://127.0.0.1:8787/api/health; }
+api_up() { curl -sf -H 'X-OpenVern-Client: 1' http://127.0.0.1:8787/api/health; }

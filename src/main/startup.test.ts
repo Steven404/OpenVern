@@ -9,17 +9,17 @@ const appDataDir = '/home/u/.config';
 const base = { isPackaged: false, isDev: false, hasUserDataDirSwitch: false, appDataDir };
 
 describe('resolveUserDataDir (S8-N3)', () => {
-  it('keeps the default profile when packaged', () => {
-    expect(resolveUserDataDir({ ...base, isPackaged: true })).toBeNull();
+  it('uses ~/.config/openvern when packaged (not the productName)', () => {
+    expect(resolveUserDataDir({ ...base, isPackaged: true })).toBe(path.join(appDataDir, 'openvern'));
     expect(resolveUserDataDir({ ...base, isPackaged: true, hasUserDataDirSwitch: true })).toBeNull();
   });
 
-  it('uses harness-dev for unpackaged dev', () => {
-    expect(resolveUserDataDir({ ...base, isDev: true })).toBe(path.join(appDataDir, 'harness-dev'));
+  it('uses openvern-dev for unpackaged dev', () => {
+    expect(resolveUserDataDir({ ...base, isDev: true })).toBe(path.join(appDataDir, 'openvern-dev'));
   });
 
-  it('uses harness-preview for unpackaged non-dev (preview / bare electron .)', () => {
-    expect(resolveUserDataDir(base)).toBe(path.join(appDataDir, 'harness-preview'));
+  it('uses openvern-preview for unpackaged non-dev (preview / bare electron .)', () => {
+    expect(resolveUserDataDir(base)).toBe(path.join(appDataDir, 'openvern-preview'));
   });
 
   it('leaves an explicit --user-data-dir alone', () => {
@@ -28,14 +28,14 @@ describe('resolveUserDataDir (S8-N3)', () => {
   });
 });
 
-describe('resolveUserDataDir with HARNESS_DATA_DIR (S8-N3 follow-up)', () => {
+describe('resolveUserDataDir with OPENVERN_DATA_DIR (S8-N3 follow-up)', () => {
   const dir = '/tmp/test';
   const want = path.join(dir, 'electron-profile');
 
-  it('packaged + env -> <dir>/electron-profile; packaged without env -> null', () => {
+  it('packaged + env -> <dir>/electron-profile; packaged without env -> openvern profile', () => {
     expect(resolveUserDataDir({ ...base, isPackaged: true, dataDirEnv: dir })).toBe(want);
-    expect(resolveUserDataDir({ ...base, isPackaged: true })).toBeNull();
-    expect(resolveUserDataDir({ ...base, isPackaged: true, dataDirEnv: '  ' })).toBeNull();
+    expect(resolveUserDataDir({ ...base, isPackaged: true })).toBe(path.join(appDataDir, 'openvern'));
+    expect(resolveUserDataDir({ ...base, isPackaged: true, dataDirEnv: '  ' })).toBe(path.join(appDataDir, 'openvern'));
   });
 
   it('dev and preview + env -> <dir>/electron-profile', () => {

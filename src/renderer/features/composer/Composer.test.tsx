@@ -391,7 +391,7 @@ describe('notices (S7.14)', () => {
   it('shows the reply placeholder and the hint', async () => {
     const { api, chat } = await setup();
     renderWithProviders(<ReplyComposer chat={chat} />, { api });
-    expect(textarea().placeholder).toBe('Reply to harness…');
+    expect(textarea().placeholder).toBe('Reply to OpenVern…');
     expect(textarea().rows).toBe(2);
     expect(screen.getByText('Enter to send · Shift + Enter for a new line')).toBeTruthy();
     void DEFAULT_MODEL;

@@ -108,7 +108,7 @@ const shot = (name) => page.screenshot(join(OUT, `${PHASE}-${name}.png`));
 const api = (path, method = 'GET', body) =>
   ev(`fetch('/api${path}', {
     method: ${JSON.stringify(method)},
-    headers: { 'X-Harness-Client': '1', 'Content-Type': 'application/json' },
+    headers: { 'X-OpenVern-Client': '1', 'Content-Type': 'application/json' },
     body: ${body === undefined ? 'undefined' : JSON.stringify(JSON.stringify(body))},
   }).then(async (r) => ({ status: r.status, body: r.status === 204 ? null : await r.json() }))`);
 
@@ -871,8 +871,8 @@ async function mainPhase() {
     'collapsed',
   );
   await sleep(500);
-  state.sidebarCollapsed = await ev(`localStorage.getItem('harness.sidebarCollapsed')`);
-  state.expandedProjects = await ev(`localStorage.getItem('harness.expandedProjects')`);
+  state.sidebarCollapsed = await ev(`localStorage.getItem('openvern.sidebarCollapsed')`);
+  state.expandedProjects = await ev(`localStorage.getItem('openvern.expandedProjects')`);
   if (state.sidebarCollapsed !== '1') throw new Error(`sidebar state not saved: ${state.sidebarCollapsed}`);
 
   // Snapshot for the persistence phase.
@@ -899,8 +899,8 @@ async function persistPhase() {
     check('A15 sidebar still collapsed after restart', await ev(`!document.querySelector('aside')`));
     check(
       'A15 sidebar/project UI state in localStorage after restart',
-      (await ev(`localStorage.getItem('harness.sidebarCollapsed')`)) === saved.sidebarCollapsed &&
-        (await ev(`localStorage.getItem('harness.expandedProjects')`)) === saved.expandedProjects,
+      (await ev(`localStorage.getItem('openvern.sidebarCollapsed')`)) === saved.sidebarCollapsed &&
+        (await ev(`localStorage.getItem('openvern.expandedProjects')`)) === saved.expandedProjects,
       `${saved.sidebarCollapsed} ${saved.expandedProjects}`,
     );
     await click(`document.querySelector('button[aria-label="Open sidebar"]')`, 'Open sidebar');

@@ -1,5 +1,5 @@
 // FakeProvider: scripted `ProviderEvent` sequences with small delays. No key, no network, no cost.
-// Used by `HARNESS_FAKE_PROVIDER=1` and by tests.
+// Used by `OPENVERN_FAKE_PROVIDER=1` and by tests.
 
 import type { ErrorCode } from '@shared/errors';
 import { SAMPLE_MODELS } from '@shared/sample-data';

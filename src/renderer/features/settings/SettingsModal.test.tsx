@@ -7,7 +7,7 @@ import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const KEY = 'sk-or-v1-0123456789abcdefWXYZ';
-const HARNESS_DOWN = "Couldn't reach the harness server.";
+const SERVER_DOWN = "Couldn't reach the OpenVern server.";
 const dump = (qc: QueryClient) =>
   JSON.stringify(
     qc
@@ -82,12 +82,12 @@ describe('SettingsModal: no key configured', () => {
     expect(await within(dialog).findByText("Couldn't reach OpenRouter. Check your connection.")).toBeTruthy();
   });
 
-  it("save: shows the client's own network message (harness server down)", async () => {
+  it("save: shows the client's own network message (OpenVern server down)", async () => {
     const { dialog, client } = await openSettings({ keyConfigured: false });
-    vi.spyOn(client, 'setOpenRouterKey').mockRejectedValue(new ApiError(errorInfo('network_error', HARNESS_DOWN)));
+    vi.spyOn(client, 'setOpenRouterKey').mockRejectedValue(new ApiError(errorInfo('network_error', SERVER_DOWN)));
     fireEvent.change(await within(dialog).findByLabelText('API key'), { target: { value: KEY } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
-    expect(await within(dialog).findByText(HARNESS_DOWN)).toBeTruthy();
+    expect(await within(dialog).findByText(SERVER_DOWN)).toBeTruthy();
     expect(within(dialog).queryByText(/Couldn't reach OpenRouter/)).toBeNull();
   });
 
@@ -166,12 +166,12 @@ describe('SettingsModal: key configured', () => {
 
   it('Remove failure shows the error inside the confirm and keeps it open', async () => {
     const { dialog, client } = await openSettings();
-    vi.spyOn(client, 'removeOpenRouterKey').mockRejectedValue(new ApiError(errorInfo('network_error', HARNESS_DOWN)));
+    vi.spyOn(client, 'removeOpenRouterKey').mockRejectedValue(new ApiError(errorInfo('network_error', SERVER_DOWN)));
     fireEvent.click(await within(dialog).findByRole('button', { name: 'Remove key' }));
     const confirm = await screen.findByRole('dialog', { name: 'Remove API key?' });
     fireEvent.click(within(confirm).getByRole('button', { name: 'Remove key' }));
     const alert = await within(confirm).findByRole('alert');
-    expect(alert.textContent).toBe(HARNESS_DOWN);
+    expect(alert.textContent).toBe(SERVER_DOWN);
     expect(confirm.isConnected).toBe(true);
     expect(within(dialog).queryByRole('alert')).toBeNull();
 

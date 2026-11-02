@@ -25,7 +25,7 @@ const { ev, waitFor, click, key, type, byText, viewport } = page;
 const api = (path, method = 'GET', body) =>
   ev(`fetch('/api${path}', {
     method: ${JSON.stringify(method)},
-    headers: { 'X-Harness-Client': '1', 'Content-Type': 'application/json' },
+    headers: { 'X-OpenVern-Client': '1', 'Content-Type': 'application/json' },
     body: ${body === undefined ? 'undefined' : JSON.stringify(JSON.stringify(body))},
   }).then(async (r) => ({ status: r.status, body: r.status === 204 ? null : await r.json() }))`);
 

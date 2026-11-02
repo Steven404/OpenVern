@@ -2,7 +2,7 @@
 // per language, so none of it lands in the main chunk. Unknown languages render as plain mono text.
 
 import type { HighlighterCore, ThemedToken } from 'shiki/core';
-import { createHarnessTheme, SHIKI_THEME_NAME } from '../../styles/shiki-theme';
+import { createOpenVernTheme, SHIKI_THEME_NAME } from '../../styles/shiki-theme';
 
 type LangModule = Promise<{ default: Parameters<HighlighterCore['loadLanguage']>[0] }>;
 
@@ -88,7 +88,7 @@ function getHighlighter(): Promise<HighlighterCore> {
       import('shiki/engine/javascript'),
     ]);
     return createHighlighterCore({
-      themes: [createHarnessTheme()],
+      themes: [createOpenVernTheme()],
       langs: [],
       engine: createJavaScriptRegexEngine(),
     });

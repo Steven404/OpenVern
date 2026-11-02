@@ -31,7 +31,7 @@ CDP="$(free_port)"
 BASE="http://localhost:5173/"
 
 start_api() {
-  HARNESS_FAKE_PROVIDER=1 HARNESS_DATA_DIR="$DATA" start_bg api npx tsx --tsconfig tsconfig.node.json src/server/dev.ts
+  OPENVERN_FAKE_PROVIDER=1 OPENVERN_DATA_DIR="$DATA" start_bg api npx tsx --tsconfig tsconfig.node.json src/server/dev.ts
   API_PGID=$LAST_PGID
   wait_for "API server" 40 api_up
 }

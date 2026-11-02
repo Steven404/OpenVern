@@ -1,4 +1,4 @@
-import { API_PREFIX, type HealthResponse } from '@shared/api';
+import { API_PREFIX, type ApplyChangesBody, type ApplyChangesResponse, type HealthResponse } from '@shared/api';
 import { CLIENT_HEADER, CLIENT_HEADER_VALUE } from '@shared/constants';
 import { errorInfo, isApiErrorBody } from '@shared/errors';
 import type { AgentEvent } from '@shared/events';
@@ -6,16 +6,19 @@ import { readSSE } from '@shared/sse';
 import type {
   AttachmentRef,
   Chat,
+  ChatChanges,
   ChatSummary,
   Id,
   ModelInfo,
   Project,
+  ProjectFileContent,
+  ProjectFileTree,
   ProjectListItem,
   PublicSettings,
 } from '@shared/types';
 import { type ApiClient, ApiError } from './api-client';
 
-const SERVER_UNREACHABLE = "Couldn't reach the harness server.";
+const SERVER_UNREACHABLE = "Couldn't reach the OpenVern server.";
 
 function isAbort(err: unknown): boolean {
   return err instanceof DOMException && err.name === 'AbortError';
@@ -130,9 +133,33 @@ export class HttpApiClient implements ApiClient {
   attachmentUrl(id: Id) {
     return `${this.baseUrl}/attachments/${enc(id)}/content`;
   }
+
+  // v0.2 stubs: G3 wires these to the routes in plan §4.3.
+  listProjectFiles(_projectId: Id): Promise<ProjectFileTree> {
+    return notImplemented('listProjectFiles');
+  }
+  readProjectFile(_projectId: Id, _path: string): Promise<ProjectFileContent> {
+    return notImplemented('readProjectFile');
+  }
+  attachProjectFile(_projectId: Id, _path: string): Promise<AttachmentRef> {
+    return notImplemented('attachProjectFile');
+  }
+  getChatChanges(_chatId: Id): Promise<ChatChanges> {
+    return notImplemented('getChatChanges');
+  }
+  applyChatChanges(_chatId: Id, _body: ApplyChangesBody): Promise<ApplyChangesResponse> {
+    return notImplemented('applyChatChanges');
+  }
+  discardChatChanges(_chatId: Id): Promise<ChatChanges> {
+    return notImplemented('discardChatChanges');
+  }
 }
 
 const enc = encodeURIComponent;
+
+function notImplemented(what: string): never {
+  throw new Error(`HttpApiClient.${what} is not implemented yet (v0.2 goal G3).`);
+}
 
 async function toApiError(res: Response): Promise<ApiError> {
   const body: unknown = await res.json().catch(() => null);

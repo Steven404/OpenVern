@@ -32,7 +32,7 @@ describe('ProjectsService', () => {
 
   it('expands ~ (against $HOME)', async () => {
     const { storage } = await makeStorage();
-    const home = await makeTempDir('harness-home-');
+    const home = await makeTempDir('openvern-home-');
     await fs.mkdir(path.join(home, 'code'));
     const prevHome = process.env.HOME;
     process.env.HOME = home;

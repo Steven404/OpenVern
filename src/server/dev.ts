@@ -1,5 +1,5 @@
 // Standalone dev API server on 127.0.0.1:8787 (plan §3.2, S5.7).
-// `HARNESS_DATA_DIR` overrides `./.dev-data`; `HARNESS_FAKE_PROVIDER=1` swaps OpenRouter for `FakeProvider`.
+// `OPENVERN_DATA_DIR` overrides `./.dev-data`; `OPENVERN_FAKE_PROVIDER=1` swaps OpenRouter for `FakeProvider`.
 
 import { serve } from '@hono/node-server';
 import pkg from '../../package.json' with { type: 'json' };
@@ -12,12 +12,13 @@ const HOST = '127.0.0.1';
 const PORT = 8787;
 
 const dataDir = await resolveDataDir('./.dev-data');
-const fake = process.env.HARNESS_FAKE_PROVIDER === '1';
+const fake = process.env.OPENVERN_FAKE_PROVIDER === '1';
 const core = await createCore({
   dataDir,
   secretStore: createFileSecretStore(dataDir),
   provider: fake ? createFakeProvider() : undefined,
   mode: 'dev',
+  version: pkg.version,
 });
 const app = createApp(core, { mode: 'dev', version: pkg.version });
 
@@ -32,6 +33,6 @@ async function fetchWithLog(request: Request): Promise<Response> {
 
 serve({ fetch: fetchWithLog, hostname: HOST, port: PORT }, (info) => {
   console.log(
-    `harness dev API on http://${info.address}:${info.port}/api (data: ${dataDir}, provider: ${fake ? 'fake' : 'openrouter'})`,
+    `OpenVern dev API on http://${info.address}:${info.port}/api (data: ${dataDir}, provider: ${fake ? 'fake' : 'openrouter'})`,
   );
 });

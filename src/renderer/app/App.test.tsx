@@ -16,9 +16,9 @@ describe('App shell and routing', () => {
   it('shows the sidebar and the New chat screen at #/new, with New chat marked current', async () => {
     renderApp({ route: '/new' });
     expect(await screen.findByRole('heading', { level: 1, name: /What are we building/ })).toBeTruthy();
-    expect(screen.getByText('harness')).toBeTruthy();
+    expect(screen.getByText('OpenVern')).toBeTruthy();
     expect(screen.getByRole('button', { name: /New chat/ }).getAttribute('aria-current')).toBe('page');
-    expect(document.title).toBe('harness');
+    expect(document.title).toBe('OpenVern');
   });
 
   it('redirects unknown routes to #/new', async () => {
@@ -31,8 +31,8 @@ describe('App shell and routing', () => {
     const { client, chat } = await seeded();
     renderApp({ client, route: `/chat/${chat.id}` });
     expect(await screen.findByRole('region', { name: 'Conversation' })).toBeTruthy();
-    expect(await screen.findByPlaceholderText('Reply to harness…')).toBeTruthy();
-    await waitFor(() => expect(document.title).toBe(`${chat.title} — harness`));
+    expect(await screen.findByPlaceholderText('Reply to OpenVern…')).toBeTruthy();
+    await waitFor(() => expect(document.title).toBe(`${chat.title} — OpenVern`));
     expect(screen.getByRole('heading', { level: 1, name: chat.title })).toBeTruthy();
   });
 
@@ -69,12 +69,12 @@ describe('sidebar collapse (D2) and responsive (D19)', () => {
     renderApp();
     fireEvent.click(await screen.findByRole('button', { name: 'Collapse sidebar' }));
     expect(screen.queryByRole('complementary')).toBeNull();
-    expect(window.localStorage.getItem('harness.sidebarCollapsed')).toBe('1');
+    expect(window.localStorage.getItem('openvern.sidebarCollapsed')).toBe('1');
     const open = screen.getByRole('button', { name: 'Open sidebar' });
     await waitFor(() => expect(document.activeElement).toBe(open));
     fireEvent.click(open);
     expect(await screen.findByRole('complementary')).toBeTruthy();
-    expect(window.localStorage.getItem('harness.sidebarCollapsed')).toBe('0');
+    expect(window.localStorage.getItem('openvern.sidebarCollapsed')).toBe('0');
     await waitFor(() => expect(document.activeElement?.getAttribute('aria-label')).toBe('Collapse sidebar'));
   });
 

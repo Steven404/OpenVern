@@ -27,7 +27,7 @@ export class SafeStorageSecretStore implements SecretStore {
     private readonly safeStorage: SafeStorageLike,
     opts: { logger?: StorageLogger } = {},
   ) {
-    this.logger = opts.logger ?? { warn: (m) => console.warn(`[harness:secrets] ${m}`) };
+    this.logger = opts.logger ?? { warn: (m) => console.warn(`[openvern:secrets] ${m}`) };
     this.file = new JsonFile(filePath, secretsFileSchema, { mode: 0o600, logger: this.logger });
   }
 
@@ -112,8 +112,8 @@ export function createSecretStore(
   dataDir: string,
   safeStorage: SafeStorageLike,
   logger: { info(m: string): void; warn(m: string): void } = {
-    info: (m) => console.log(`[harness:secrets] ${m}`),
-    warn: (m) => console.warn(`[harness:secrets] ${m}`),
+    info: (m) => console.log(`[openvern:secrets] ${m}`),
+    warn: (m) => console.warn(`[openvern:secrets] ${m}`),
   },
 ): SecretStore {
   const backend = safeStorage.getSelectedStorageBackend?.();

@@ -19,7 +19,7 @@ let ctx: ToolContext;
 let tools: Tool[];
 
 beforeAll(async () => {
-  base = await realpath(await mkdtemp(path.join(tmpdir(), 'harness-b2-')));
+  base = await realpath(await mkdtemp(path.join(tmpdir(), 'openvern-b2-')));
   proj = path.join(base, 'proj');
   data = path.join(proj, '.dev-data');
   await mkdir(path.join(data, 'chats'), { recursive: true });
@@ -82,8 +82,8 @@ describe('data dir inside a project (S1-M1)', () => {
   });
 });
 
-// S1-M1 follow-up: other harness data dirs (dev, prod, custom) are denied by name, file name and layout marker.
-describe('other harness data dirs', () => {
+// S1-M1 follow-up: other OpenVern data dirs (dev, prod, custom) are denied by name, file name and layout marker.
+describe('other OpenVern data dirs', () => {
   let b2: string;
   let p2: string;
   let t2: Tool[];
@@ -96,7 +96,7 @@ describe('other harness data dirs', () => {
   };
 
   beforeAll(async () => {
-    b2 = await realpath(await mkdtemp(path.join(tmpdir(), 'harness-b2b-')));
+    b2 = await realpath(await mkdtemp(path.join(tmpdir(), 'openvern-b2b-')));
     p2 = path.join(b2, 'proj');
     await mkdir(path.join(p2, '.dev-data', 'chats'), { recursive: true });
     await mkdir(path.join(p2, '.DEV-DATA-two'), { recursive: true });
@@ -187,22 +187,28 @@ describe('other harness data dirs', () => {
 });
 
 describe('default production data dir', () => {
-  it('honours XDG_CONFIG_HOME, else ~/.config/harness; realpaths when present, lexical when absent', async () => {
-    const base2 = await realpath(await mkdtemp(path.join(tmpdir(), 'harness-xdg-')));
+  it('honours XDG_CONFIG_HOME, else ~/.config/openvern (and the legacy harness dir); realpaths when present, lexical when absent', async () => {
+    const base2 = await realpath(await mkdtemp(path.join(tmpdir(), 'openvern-xdg-')));
     try {
       const xdg = path.join(base2, 'xdg');
-      expect(await defaultDataDirRoots({ XDG_CONFIG_HOME: xdg }, base2)).toEqual([path.join(xdg, 'harness')]);
-      expect(await defaultDataDirRoots({}, base2)).toEqual([path.join(base2, '.config', 'harness')]);
-      await mkdir(path.join(base2, 'real', 'harness'), { recursive: true });
+      expect(await defaultDataDirRoots({ XDG_CONFIG_HOME: xdg }, base2)).toEqual([
+        path.join(xdg, 'openvern'),
+        path.join(xdg, 'harness'),
+      ]);
+      expect(await defaultDataDirRoots({}, base2)).toEqual([
+        path.join(base2, '.config', 'openvern'),
+        path.join(base2, '.config', 'harness'),
+      ]);
+      await mkdir(path.join(base2, 'real', 'openvern'), { recursive: true });
       await symlink(path.join(base2, 'real'), xdg);
       const [d] = await defaultDataDirRoots({ XDG_CONFIG_HOME: xdg }, base2);
-      expect(d).toBe(path.join(base2, 'real', 'harness'));
+      expect(d).toBe(path.join(base2, 'real', 'openvern'));
       // through the tools: a "~" project cannot reach it, even via the symlink
       await writeFile(path.join(d as string, 'x.txt'), 'PRODSECRET');
       const tools2 = getProjectTools({ deniedRoots: [d as string] });
       const read = tools2.find((t) => t.spec.name === 'read_file');
       const ctx2 = { projectRoot: base2, signal: new AbortController().signal };
-      for (const p of ['xdg/harness/x.txt', 'real/harness/x.txt']) {
+      for (const p of ['xdg/openvern/x.txt', 'real/openvern/x.txt']) {
         const r = await read?.run({ path: p }, ctx2);
         expect(r?.ok, p).toBe(false);
         expect(r?.output).toContain(BLOCKED_MESSAGE);

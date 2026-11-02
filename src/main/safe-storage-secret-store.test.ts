@@ -21,7 +21,7 @@ function fakeSafeStorage(over: Partial<SafeStorageLike> = {}): SafeStorageLike {
 
 const dirs: string[] = [];
 async function tmp(): Promise<string> {
-  const d = await fs.mkdtemp(path.join(os.tmpdir(), 'harness-secrets-'));
+  const d = await fs.mkdtemp(path.join(os.tmpdir(), 'openvern-secrets-'));
   dirs.push(d);
   return d;
 }

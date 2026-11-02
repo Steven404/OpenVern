@@ -107,6 +107,9 @@ export function reduceRun(run: RunState, ev: RunEvent): RunState {
           ];
       return { ...run, messages, streamingId: ev.messageId };
     }
+    case 'changes_updated':
+      // Stored and shown by the Proposed edits card (v0.2 goal G5); nothing to track in the run yet.
+      return run;
     case 'tool_call':
       return run.runningToolIds.includes(ev.toolCall.id)
         ? run

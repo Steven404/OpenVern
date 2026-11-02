@@ -41,7 +41,7 @@ export function createApp(core: Core, opts: AppOptions): Hono {
     }
     const info = toErrorInfo(err);
     // Never leak details of unexpected failures to the client; log them server-side (no request bodies, no keys).
-    if (info.code === 'internal') console.error('[harness] unhandled error:', err instanceof Error ? err.stack : err);
+    if (info.code === 'internal') console.error('[openvern] unhandled error:', err instanceof Error ? err.stack : err);
     return c.json({ error: info }, ERROR_STATUS[info.code] as ContentfulStatusCode);
   });
 

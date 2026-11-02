@@ -1,6 +1,6 @@
-// The origin the app's own pages are served from. Dev: the Vite dev server; prod: the `app://harness` protocol.
+// The origin the app's own pages are served from. Dev: the Vite dev server; prod: the `app://openvern` protocol.
 
-export const PROD_ORIGIN = 'app://harness';
+export const PROD_ORIGIN = 'app://openvern';
 
 /** `scheme://host[:port]` of a URL, or `null` if it does not parse. (`URL.origin` is opaque for custom schemes.) */
 export function originOf(url: string): string | null {

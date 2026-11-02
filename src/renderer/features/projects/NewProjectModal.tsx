@@ -37,7 +37,7 @@ function NewProjectForm() {
   const close = useUiStore((s) => s.closeNewProject);
   const expandProject = useUiStore((s) => s.expandProject);
   const formId = useId();
-  const isElectron = window.harness?.isElectron === true;
+  const isElectron = window.openvern?.isElectron === true;
 
   const [path, setPath] = useState('');
   const [name, setName] = useState('');
@@ -60,7 +60,7 @@ function NewProjectForm() {
   };
 
   const browse = async () => {
-    const picked = await window.harness?.pickDirectory();
+    const picked = await window.openvern?.pickDirectory();
     if (picked) changePath(picked);
   };
 

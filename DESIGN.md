@@ -1,5 +1,5 @@
 ---
-name: harness
+name: OpenVern
 description: Lamplight on canal water: a cool indigo desktop workspace for chatting with LLMs about local code.
 colors:
   accent: "#f6bd60"
@@ -152,7 +152,7 @@ components:
     padding: "7px 10px"
 ---
 
-# Design System: harness
+# Design System: OpenVern
 
 ## Overview
 

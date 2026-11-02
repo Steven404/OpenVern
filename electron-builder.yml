@@ -1,7 +1,7 @@
 # Linux AppImage (x86_64) packaging (plan S8.9). Run via `npm run dist` (builds `out/` first).
-appId: dev.stefanos.harness
-productName: harness
-executableName: harness
+appId: dev.stefanos.openvern
+productName: OpenVern
+executableName: openvern
 copyright: Copyright (c) Stefanos Michelakis
 asar: true
 
@@ -31,6 +31,6 @@ linux:
   executableArgs: []
   desktop:
     entry:
-      StartupWMClass: harness
+      StartupWMClass: openvern
 
-artifactName: harness-${version}-x86_64.${ext}
+artifactName: OpenVern-${version}-x86_64.${ext}

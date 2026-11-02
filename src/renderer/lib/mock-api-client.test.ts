@@ -35,7 +35,7 @@ describe('MockApiClient', () => {
     expect(projects.map((p) => [p.name, p.chatCount])).toEqual([
       ['Offline Notes App', 2],
       ['Portfolio site', 1],
-      ['stefanos-ai-harness', 3],
+      ['stefanos-ai-openvern', 3],
     ]);
     const chats = await api.listChats();
     expect(chats).toHaveLength(6);
@@ -186,6 +186,84 @@ describe('MockApiClient', () => {
           message: `This file is too large. The limit for text files is ${LIMITS.textAttachmentBytes / 1024} KB.`,
         },
       });
+    });
+  });
+
+  describe('v0.2 contracts', () => {
+    it('lists a sorted project file tree and reads a file', async () => {
+      const api = new MockApiClient({ delayMs: 0 });
+      const [project] = await api.listProjects();
+      const tree = await api.listProjectFiles(project?.id ?? '');
+      expect(tree.truncated).toBe(false);
+      expect(tree.entries[0]).toEqual({ path: 'build', type: 'dir' });
+      expect(tree.entries.at(-1)?.type).toBe('file');
+      const file = await api.readProjectFile(project?.id ?? '', 'README.md');
+      expect(file).toMatchObject({ path: 'README.md', binary: false, truncated: false });
+      expect(file.content).toContain('OpenVern');
+      expect((await api.readProjectFile(project?.id ?? '', 'build/icon.png')).binary).toBe(true);
+      await expect(api.readProjectFile(project?.id ?? '', 'nope.txt')).rejects.toBeInstanceOf(ApiError);
+      const ref = await api.attachProjectFile(project?.id ?? '', 'README.md');
+      expect(ref).toMatchObject({ name: 'README.md', kind: 'text' });
+    });
+
+    it('stages the design sample on [mock:edit], then applies only accepted hunks', async () => {
+      const api = new MockApiClient({ delayMs: 0 });
+      const [project] = await api.listProjects();
+      const chat = await api.createChat({ projectId: project?.id ?? null, model: 'anthropic/claude-sonnet-5.5' });
+      expect(await api.getChatChanges(chat.id)).toEqual({ pending: null, applied: [] });
+
+      const events = await collect(
+        api.sendMessage(
+          chat.id,
+          { text: 'add write_file [mock:edit]', attachmentIds: [], model: chat.model },
+          new AbortController().signal,
+        ),
+      );
+      const updates = events.filter((e) => e.type === 'changes_updated');
+      expect(updates).toHaveLength(3);
+      const last = updates.at(-1);
+      expect(last?.type === 'changes_updated' && last.changes?.files.map((f) => f.path)).toEqual([
+        'src/core/tools/write-file.ts',
+        'src/core/tools/index.ts',
+        'src/shared/constants.ts',
+      ]);
+      // grammar: every changes_updated directly follows a tool_result
+      for (const [i, e] of events.entries()) {
+        if (e.type === 'changes_updated') expect(events[i - 1]?.type).toBe('tool_result');
+      }
+
+      const { pending } = await api.getChatChanges(chat.id);
+      expect(pending?.files.map((f) => f.kind)).toEqual(['create', 'modify', 'modify']);
+      expect(pending?.files.reduce((n, f) => n + f.hunks.length, 0)).toBe(4);
+      const constants = pending?.files.find((f) => f.path === 'src/shared/constants.ts');
+      const c1 = constants?.hunks[0]?.id ?? '';
+
+      await expect(api.applyChatChanges(chat.id, { revision: 0, decisions: {} })).rejects.toMatchObject({
+        info: { code: 'changes_stale' },
+      });
+      const res = await api.applyChatChanges(chat.id, {
+        revision: pending?.revision ?? 0,
+        decisions: { 'src/shared/constants.ts': { [c1]: 'accepted' } },
+      });
+      expect(res.batch.written.map((f) => f.path)).toEqual(['src/shared/constants.ts']);
+      expect(res.batch.skippedHunks).toBe(3);
+      expect(res.changes.pending).toBeNull();
+      expect(res.changes.applied).toHaveLength(1);
+    });
+
+    it('discards pending changes', async () => {
+      const api = new MockApiClient({ delayMs: 0 });
+      const [project] = await api.listProjects();
+      const chat = await api.createChat({ projectId: project?.id ?? null, model: 'anthropic/claude-sonnet-5.5' });
+      await collect(
+        api.sendMessage(
+          chat.id,
+          { text: '[mock:edit]', attachmentIds: [], model: chat.model },
+          new AbortController().signal,
+        ),
+      );
+      expect((await api.getChatChanges(chat.id)).pending).not.toBeNull();
+      expect(await api.discardChatChanges(chat.id)).toEqual({ pending: null, applied: [] });
     });
   });
 });

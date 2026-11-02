@@ -1,4 +1,4 @@
-// The `app://harness/` origin in prod (plan §3.2/§3.3, S8.3): `/api/*` → the Hono app, everything else → the built
+// The `app://openvern/` origin in prod (plan §3.2/§3.3, S8.3): `/api/*` → the Hono app, everything else → the built
 // renderer files. Streaming works through `protocol.handle` (S8.1, plan §10): the `Response` is returned untouched.
 
 import { API_PREFIX } from '@shared/api';

@@ -8,7 +8,7 @@ beforeEach(resetUi);
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
-  window.harness = undefined;
+  window.openvern = undefined;
 });
 
 async function openModal(opts: Parameters<typeof renderApp>[0] = {}) {
@@ -90,7 +90,7 @@ describe('NewProjectModal in the browser', () => {
 describe('NewProjectModal in Electron', () => {
   it('shows a read-only path and a Browse… button backed by pickDirectory()', async () => {
     const pickDirectory = vi.fn().mockResolvedValue('/home/you/code/picked-folder');
-    window.harness = { isElectron: true, pickDirectory };
+    window.openvern = { isElectron: true, pickDirectory };
     const { dialog, client } = await openModal();
     const create = vi.spyOn(client, 'createProject');
     const folder = within(dialog).getByLabelText('Folder') as HTMLInputElement;
@@ -105,10 +105,10 @@ describe('NewProjectModal in Electron', () => {
   });
 
   it('keeps the field unchanged when the picker is cancelled', async () => {
-    window.harness = { isElectron: true, pickDirectory: vi.fn().mockResolvedValue(null) };
+    window.openvern = { isElectron: true, pickDirectory: vi.fn().mockResolvedValue(null) };
     const { dialog } = await openModal();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Browse…' }));
-    await waitFor(() => expect(window.harness?.pickDirectory).toHaveBeenCalled());
+    await waitFor(() => expect(window.openvern?.pickDirectory).toHaveBeenCalled());
     expect((within(dialog).getByLabelText('Folder') as HTMLInputElement).value).toBe('');
   });
 });

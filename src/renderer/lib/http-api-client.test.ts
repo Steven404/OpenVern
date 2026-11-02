@@ -17,7 +17,7 @@ describe('HttpApiClient', () => {
     expect(url).toBe('/api/projects');
     expect(init?.method).toBe('POST');
     const headers = new Headers(init?.headers);
-    expect(headers.get('X-Harness-Client')).toBe('1');
+    expect(headers.get('X-OpenVern-Client')).toBe('1');
     expect(headers.get('Content-Type')).toBe('application/json');
     expect(init?.body).toBe('{"rootPath":"/x"}');
   });

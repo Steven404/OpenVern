@@ -1,5 +1,5 @@
 // Benchmark for the plan's S3 acceptance (~10k files: list_files depth 2 and a literal search each < 2 s).
-// Skipped by default; run with:  HARNESS_BENCH=1 npx vitest run src/core/tools/bench.test.ts
+// Skipped by default; run with:  OPENVERN_BENCH=1 npx vitest run src/core/tools/bench.test.ts
 
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -7,7 +7,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { getProjectTools } from './index';
 
-const enabled = process.env.HARNESS_BENCH === '1';
+const enabled = process.env.OPENVERN_BENCH === '1';
 
 describe.skipIf(!enabled)('benchmark: ~10k file project', () => {
   let root: string;
@@ -19,7 +19,7 @@ describe.skipIf(!enabled)('benchmark: ~10k file project', () => {
   };
 
   beforeAll(async () => {
-    root = await mkdtemp(path.join(tmpdir(), 'harness-bench-'));
+    root = await mkdtemp(path.join(tmpdir(), 'openvern-bench-'));
     await writeFile(path.join(root, '.gitignore'), '*.log\ntmp/\n');
     const body = Array.from(
       { length: 40 },

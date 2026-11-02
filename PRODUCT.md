@@ -14,7 +14,7 @@ The author first: a developer chatting with LLMs about their own local code proj
 
 ## Product Purpose
 
-OpenVern is a desktop AI harness: chat with an LLM about a local code project, with the model able to look at the project through tool calls (list, read and search files). Success is a tool the author prefers to use daily for thinking through their own code, and that another developer could install and trust.
+OpenVern is a desktop AI app: chat with an LLM about a local code project, with the model able to look at the project through tool calls (list, read and search files). Success is a tool the author prefers to use daily for thinking through their own code, and that another developer could install and trust.
 
 ## Positioning
 
@@ -39,7 +39,7 @@ OpenVern is a desktop AI harness: chat with an LLM about a local code project, w
 
 ## Brand Commitments
 
-- The name is **OpenVern**, held in one constant (`APP_NAME`). The code still says `harness` until the v0.2 rename lands.
+- The name is **OpenVern**, held in one constant (`APP_NAME`; `APP_SLUG` is the lower-case form for paths and identifiers). Version 0.1 was called harness; its data is copied over on first start.
 - Fonts are self-hosted in the app (no Google Fonts requests at runtime).
 
 ## Evidence on Hand

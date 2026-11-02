@@ -15,10 +15,10 @@ const raw = (path: string, headers: Record<string, string> = {}, init: RequestIn
   h.app.request(path, { ...init, headers });
 // `app.request('app://…')` would be rewritten to `http://localhost/app://…`; pass a real Request instead.
 const viaProtocol = (path: string, headers: Record<string, string> = {}) =>
-  h.app.fetch(new Request(`app://harness${path}`, { headers }));
-const CLIENT = { 'X-Harness-Client': '1' };
+  h.app.fetch(new Request(`app://openvern${path}`, { headers }));
+const CLIENT = { 'X-OpenVern-Client': '1' };
 
-describe('X-Harness-Client', () => {
+describe('X-OpenVern-Client', () => {
   it('rejects requests without the header (403)', async () => {
     const res = await raw('/api/health');
     expect(res.status).toBe(403);
@@ -26,7 +26,7 @@ describe('X-Harness-Client', () => {
   });
 
   it('rejects a wrong value', async () => {
-    expect((await raw('/api/health', { 'X-Harness-Client': '0' })).status).toBe(403);
+    expect((await raw('/api/health', { 'X-OpenVern-Client': '0' })).status).toBe(403);
   });
 
   it('also guards unknown /api paths', async () => {
@@ -58,11 +58,11 @@ describe('Host', () => {
     expect((await viaProtocol('/api/health', CLIENT)).status).toBe(200);
   });
 
-  it('allows app://harness with a Host: harness header', async () => {
-    expect((await viaProtocol('/api/health', { ...CLIENT, Host: 'harness' })).status).toBe(200);
+  it('allows app://openvern with a Host: openvern header', async () => {
+    expect((await viaProtocol('/api/health', { ...CLIENT, Host: 'openvern' })).status).toBe(200);
   });
 
-  it.each(['localhost', 'evil.com'])('rejects app://harness with Host %s', async (host) => {
+  it.each(['localhost', 'evil.com'])('rejects app://openvern with Host %s', async (host) => {
     expect((await viaProtocol('/api/health', { ...CLIENT, Host: host })).status).toBe(403);
   });
 
@@ -70,21 +70,21 @@ describe('Host', () => {
     expect((await h.app.fetch(new Request('app://evil/api/health', { headers: CLIENT }))).status).toBe(403);
   });
 
-  // S5-N1: `harness` is only the app:// host; over http(s) it would let a rebound `http://harness:8787` page in.
+  // S5-N1: `openvern` is only the app:// host; over http(s) it would let a rebound `http://openvern:8787` page in.
   it.each([
-    ['http://harness:8787/api/health', 'harness:8787'],
-    ['http://harness/api/health', 'harness'],
-    ['https://harness/api/health', 'harness'],
-    ['http://localhost/api/health', 'harness'],
-    ['http://localhost/api/health', 'harness:8787'],
-    ['http://harness:8787/api/health', 'localhost:8787'],
-  ])('rejects %s with Host %s (harness over http)', async (url, host) => {
+    ['http://openvern:8787/api/health', 'openvern:8787'],
+    ['http://openvern/api/health', 'openvern'],
+    ['https://openvern/api/health', 'openvern'],
+    ['http://localhost/api/health', 'openvern'],
+    ['http://localhost/api/health', 'openvern:8787'],
+    ['http://openvern:8787/api/health', 'localhost:8787'],
+  ])('rejects %s with Host %s (openvern over http)', async (url, host) => {
     expect((await raw(url, { ...CLIENT, Host: host })).status).toBe(403);
   });
 });
 
 describe('Origin and CORS', () => {
-  it.each(['http://localhost:5173', 'http://127.0.0.1:5173', 'app://harness'])('allows Origin %s', async (origin) => {
+  it.each(['http://localhost:5173', 'http://127.0.0.1:5173', 'app://openvern'])('allows Origin %s', async (origin) => {
     expect((await raw('/api/health', { ...CLIENT, Origin: origin })).status).toBe(200);
   });
 
@@ -104,7 +104,7 @@ describe('Origin and CORS', () => {
       {
         Origin: 'https://evil.com',
         'Access-Control-Request-Method': 'POST',
-        'Access-Control-Request-Headers': 'x-harness-client',
+        'Access-Control-Request-Headers': 'x-openvern-client',
       },
       { method: 'OPTIONS' },
     );

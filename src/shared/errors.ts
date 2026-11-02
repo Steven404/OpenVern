@@ -18,7 +18,8 @@ export type ErrorCode =
   | 'unsupported_file'
   | 'file_too_large'
   | 'path_invalid'
-  | 'max_steps_reached';
+  | 'max_steps_reached'
+  | 'changes_stale';
 
 export interface ApiErrorInfo {
   code: ErrorCode;
@@ -36,7 +37,7 @@ export const ERROR_DEFAULTS: Record<ErrorCode, { message: string; retryable: boo
   invalid_request: { message: 'The request was not valid.', retryable: false },
   not_found: { message: 'Not found.', retryable: false },
   conflict: { message: 'That conflicts with something that already exists.', retryable: false },
-  internal: { message: 'Something went wrong inside harness.', retryable: true },
+  internal: { message: 'Something went wrong inside OpenVern.', retryable: true },
   no_api_key: { message: 'Add your OpenRouter API key in Settings to start chatting.', retryable: false },
   invalid_api_key: { message: 'OpenRouter rejected this key.', retryable: false },
   insufficient_credits: { message: 'Your OpenRouter account is out of credits.', retryable: false },
@@ -61,6 +62,10 @@ export const ERROR_DEFAULTS: Record<ErrorCode, { message: string; retryable: boo
     message: 'Stopped after too many steps in one turn. Reply to let it continue.',
     retryable: true,
   },
+  changes_stale: {
+    message: 'The proposed edits changed while you were reviewing. Review them again.',
+    retryable: false,
+  },
 };
 
 /** HTTP status the server uses for each code. */
@@ -83,6 +88,7 @@ export const ERROR_STATUS: Record<ErrorCode, number> = {
   file_too_large: 413,
   path_invalid: 400,
   max_steps_reached: 400,
+  changes_stale: 409,
 };
 
 export function errorInfo(code: ErrorCode, message?: string): ApiErrorInfo {

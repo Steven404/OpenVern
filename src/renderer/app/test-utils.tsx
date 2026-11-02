@@ -58,7 +58,7 @@ export function openMenu(trigger: HTMLElement): void {
   fireEvent.keyDown(trigger, { key: 'Enter' });
 }
 
-/** The seed's newest chat plus its project (the design's "stefanos-ai-harness" data). */
+/** The seed's newest chat plus its project (the design's "stefanos-ai-openvern" data). */
 export async function seededClient() {
   const client = new MockApiClient({ delayMs: 0 });
   const projects = await client.listProjects();

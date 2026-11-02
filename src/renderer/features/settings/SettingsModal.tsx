@@ -12,7 +12,7 @@ export const OPENROUTER_KEYS_URL = 'https://openrouter.ai/keys';
 
 /**
  * Inline error copy for a failed "save key" or "remove key" call. Shows the error's own message (the server and
- * client already use the plan's copy), so a local "harness server" failure is not blamed on OpenRouter.
+ * client already use the plan's copy), so a local "openvern server" failure is not blamed on OpenRouter.
  */
 export function keyErrorMessage(error: unknown): string {
   return error instanceof ApiError ? error.info.message : 'Something went wrong. Try again.';
@@ -28,7 +28,7 @@ export function SettingsModal() {
       {open ? (
         <DialogContent
           title="Settings"
-          description="Connect harness to a model provider."
+          description="Connect OpenVern to a model provider."
           width={480}
           returnFocusRef={modalReturnFocus}
         >
@@ -132,7 +132,7 @@ function ConnectedState({ keyHint, onReplace }: { keyHint: string | null; onRepl
           setConfirmOpen(next);
         }}
         title="Remove API key?"
-        description="harness can't chat until you add a key again."
+        description="OpenVern can't chat until you add a key again."
         confirmLabel="Remove key"
         danger
         loading={remove.isPending}

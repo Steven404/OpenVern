@@ -35,6 +35,8 @@ export interface UserMessage {
   createdAt: IsoDate;
   text: string;
   attachments: AttachmentRef[];
+  /** Provider-only: what happened to proposed edits since the previous turn. Never shown in the UI. */
+  changesNote?: string;
 }
 
 export interface AssistantMessage {
@@ -92,9 +94,94 @@ export interface ModelInfo {
   supportsImages: boolean; // architecture.input_modalities includes "image"
   promptPricePerMTok: number | null;
   completionPricePerMTok: number | null;
+  /** OpenRouter's model description. Optional so 0.1 model caches still load. */
+  description?: string;
+  /** Display name of the maker, e.g. "DeepSeek". */
+  author?: string;
 }
 
 export interface PublicSettings {
   openRouter: { configured: boolean; keyHint: string | null };
   lastModel: string | null;
+}
+
+// ── v0.2: proposed edits (plan §4.1) ──────────────────────────────────────────────────────────
+
+export type ChangeKind = 'create' | 'modify' | 'delete';
+export type HunkDecision = 'accepted' | 'rejected';
+
+export interface DiffHunk {
+  /** `${oldStart}:${8-char hash of lines}`. Stable while that file's proposal is unchanged. */
+  id: string;
+  oldStart: number; // 1-based; 0 for a new file
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  /** Nearest enclosing declaration above the hunk (best effort), '' when none. The label after the range. */
+  header: string;
+  /** Unified lines, each prefixed with ' ', '+' or '-'. */
+  lines: string[];
+}
+
+export interface FileChange {
+  path: string; // project-relative, forward slashes
+  kind: ChangeKind;
+  add: number;
+  del: number;
+  hunks: DiffHunk[];
+  /** True when the diff has more than LIMITS.diffMaxLinesPerFile lines; `hunks` is then empty. */
+  tooLarge?: boolean;
+}
+
+export interface PendingChanges {
+  /** Bumps whenever the proposal changes. Apply must echo it. */
+  revision: number;
+  /** The assistant message that last changed the proposal. The card sits under its turn. */
+  messageId: Id;
+  files: FileChange[]; // sorted by path
+  totalAdd: number;
+  totalDel: number;
+}
+
+export type ApplyConflictReason = 'changed_on_disk' | 'deleted_on_disk' | 'exists_on_disk' | 'blocked';
+
+export interface AppliedBatch {
+  id: Id;
+  appliedAt: IsoDate;
+  messageId: Id; // PendingChanges.messageId at apply time
+  written: FileChange[]; // only the accepted hunks, as written
+  rejectedHunks: number;
+  skippedHunks: number; // undecided at apply time
+  conflicts: { path: string; reason: ApplyConflictReason }[];
+}
+
+export interface ChatChanges {
+  pending: PendingChanges | null;
+  applied: AppliedBatch[]; // oldest first
+}
+
+/** The light form used by stream events and the card (no hunks). */
+export interface ChangeSummary {
+  revision: number;
+  messageId: Id;
+  files: { path: string; kind: ChangeKind; add: number; del: number }[];
+  totalAdd: number;
+  totalDel: number;
+}
+
+export interface ProjectFileEntry {
+  path: string; // project-relative, forward slashes
+  type: 'file' | 'dir';
+}
+export interface ProjectFileTree {
+  entries: ProjectFileEntry[]; // sorted: dirs first, then case-insensitive name, depth-first
+  truncated: boolean;
+}
+export interface ProjectFileContent {
+  path: string;
+  size: number;
+  totalLines: number;
+  content: string | null; // null when binary
+  binary: boolean;
+  truncated: boolean; // over LIMITS.viewerMaxBytes: content is the first part
 }

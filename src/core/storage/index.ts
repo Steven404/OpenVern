@@ -3,7 +3,7 @@
 //   const storage = await createStorage({ dataDir, secretStore: createFileSecretStore(dataDir) });
 //   storage.settings / .projects / .chats / .attachments
 //
-// `dataDir` is used as given (made absolute, `~` expanded). Use `resolveDataDir()` first if `HARNESS_DATA_DIR`
+// `dataDir` is used as given (made absolute, `~` expanded). Use `resolveDataDir()` first if `OPENVERN_DATA_DIR`
 // should override it. Callers should run `storage.attachments.cleanupOrphans()` once at startup.
 
 import { realpath } from 'node:fs/promises';
@@ -71,6 +71,7 @@ export function createFileSecretStore(dataDir: string, opts: { logger?: StorageL
 export { type AttachmentsServiceOptions, createAttachmentsService, sniffAttachment } from './attachments';
 export { type ChatsServiceOptions, createChatsService } from './chats';
 export { JsonFile, type StorageLogger, writeFileAtomic } from './json-file';
+export { LEGACY_SLUG, MIGRATION_MARKER, type MigrationResult, migrateLegacyDataDir } from './migrate';
 export { DATA_DIR_ENV, type DataPaths, dataPaths, ensureDataDir, expandHome, resolveDataDir } from './paths';
 export { createProjectsService, type ProjectsServiceOptions } from './projects';
 export { FileSecretStore } from './secrets';

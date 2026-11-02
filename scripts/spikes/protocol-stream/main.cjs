@@ -36,9 +36,9 @@ async function readAll(url, init) {
   }
   return { status: res.status, headersAt, chunks: out };
 }
-async function abortTest(url = 'app://harness/abort-stream') {
+async function abortTest(url = 'app://openvern/abort-stream') {
   const ctrl = new AbortController();
-  const res = await fetch(url, { signal: ctrl.signal, method: 'POST', headers: { 'X-Harness-Client': '1' }, body: '{}' });
+  const res = await fetch(url, { signal: ctrl.signal, method: 'POST', headers: { 'X-OpenVern-Client': '1' }, body: '{}' });
   const reader = res.body.getReader();
   const t0 = performance.now();
   let n = 0;
@@ -51,11 +51,11 @@ async function abortTest(url = 'app://harness/abort-stream') {
 }
 (async () => {
   try {
-    log({ kind: 'GET stream', ...(await readAll('app://harness/stream')) });
-    log({ kind: 'POST stream', ...(await readAll('app://harness/stream', { method: 'POST', headers: { 'X-Harness-Client': '1', 'content-type': 'application/json' }, body: '{"a":1}' })) });
+    log({ kind: 'GET stream', ...(await readAll('app://openvern/stream')) });
+    log({ kind: 'POST stream', ...(await readAll('app://openvern/stream', { method: 'POST', headers: { 'X-OpenVern-Client': '1', 'content-type': 'application/json' }, body: '{"a":1}' })) });
     log({ kind: 'abort', ...(await abortTest()) });
     await new Promise((r) => setTimeout(r, 1200)); // let main observe the cancel
-    log({ kind: 'hono-abort', ...(await abortTest('app://harness/hono-stream')) });
+    log({ kind: 'hono-abort', ...(await abortTest('app://openvern/hono-stream')) });
     await new Promise((r) => setTimeout(r, 1200));
     log({ kind: 'finished' });
   } catch (e) { log({ kind: 'error', message: String(e) }); }
@@ -171,5 +171,5 @@ app.whenReady().then(async () => {
       console.log(`PAGE ${JSON.stringify(data)}`);
     }
   });
-  await win.loadURL('app://harness/');
+  await win.loadURL('app://openvern/');
 });

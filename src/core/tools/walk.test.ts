@@ -16,7 +16,7 @@ let evil: string;
 const fifos: string[] = [];
 
 beforeAll(async () => {
-  base = await realpath(await mkdtemp(path.join(tmpdir(), 'harness-walk-')));
+  base = await realpath(await mkdtemp(path.join(tmpdir(), 'openvern-walk-')));
   root = path.join(base, 'proj');
   await mkdir(root);
   await mkdir(path.join(base, 'outside'));

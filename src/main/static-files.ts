@@ -1,4 +1,4 @@
-// Serves the built renderer (`out/renderer/`) for the `app://harness/` origin (plan §3.3, S8.3).
+// Serves the built renderer (`out/renderer/`) for the `app://openvern/` origin (plan §3.3, S8.3).
 // Pure Node + Web APIs (no Electron import) so it is unit-testable.
 
 import { promises as fs } from 'node:fs';

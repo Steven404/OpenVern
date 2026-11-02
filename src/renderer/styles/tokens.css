@@ -45,9 +45,28 @@
   --font-sans: "Figtree Variable", "Figtree", system-ui, sans-serif;
   --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
 
+  /* v0.2 diff surface (plan §5.3). */
+  --color-diff-add-bg: rgb(159 212 179 / 0.09);
+  --color-diff-add-num-bg: rgb(159 212 179 / 0.1);
+  --color-diff-add-num: #8fc2a4;
+  --color-diff-add-sign: #9fd4b3;
+  --color-diff-add-text: #e8f4ee;
+  --color-diff-del-bg: rgb(229 134 95 / 0.11);
+  --color-diff-del-num-bg: rgb(229 134 95 / 0.12);
+  --color-diff-del-num: #d89a84;
+  --color-diff-del-sign: #f09a7c;
+  --color-diff-del-text: #f6e4dc;
+  --color-diff-text: #bcc4dc;
+  --color-diff-range: #a9b8f0;
+  --color-segment-on: #283160;
+
   --width-sidebar: 272px;
   --width-conversation: 760px;
   --width-new-chat: 720px;
+  --width-panel-files: 380px;
+  --width-panel-viewer: 560px;
+  --width-panel-diff: 600px;
+  --width-panel-diff-split: 800px;
   --height-header: 64px;
 }
 

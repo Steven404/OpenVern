@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 /** Environment variable that overrides the data dir in every mode (plan §3.2). */
-export const DATA_DIR_ENV = 'HARNESS_DATA_DIR';
+export const DATA_DIR_ENV = 'OPENVERN_DATA_DIR';
 
 export interface DataPaths {
   root: string;
@@ -64,7 +64,7 @@ export async function ensureDataDir(root: string): Promise<DataPaths> {
 }
 
 /**
- * Picks the data dir (`HARNESS_DATA_DIR` wins, then `dataDir`; one of them is required), expands `~`,
+ * Picks the data dir (`OPENVERN_DATA_DIR` wins, then `dataDir`; one of them is required), expands `~`,
  * makes it absolute and creates the tree of plan §3.5. Returns the absolute path.
  */
 export async function resolveDataDir(dataDir?: string): Promise<string> {

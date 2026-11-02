@@ -21,7 +21,7 @@ export interface Harness {
   dataDir: string;
   /** A temp project folder containing `README.md`. */
   projectDir: string;
-  /** `app.request` with `X-Harness-Client: 1`; objects are sent as JSON. */
+  /** `app.request` with `X-OpenVern-Client: 1`; objects are sent as JSON. */
   call(
     path: string,
     init?: Omit<RequestInit, 'body'> & { json?: unknown; body?: RequestInit['body'] },
@@ -36,7 +36,7 @@ export interface HarnessOptions {
 }
 
 export async function createHarness(opts: HarnessOptions = {}): Promise<Harness> {
-  const root = await mkdtemp(path.join(tmpdir(), 'harness-server-'));
+  const root = await mkdtemp(path.join(tmpdir(), 'openvern-server-'));
   const dataDir = path.join(root, 'data');
   const projectDir = path.join(root, 'project');
   await mkdir(projectDir, { recursive: true });
@@ -48,6 +48,7 @@ export async function createHarness(opts: HarnessOptions = {}): Promise<Harness>
     secretStore: createFileSecretStore(dataDir),
     provider: opts.wrapProvider ? opts.wrapProvider(provider) : provider,
     mode: 'dev',
+    version: '9.9.9',
   });
   const app = createApp(core, { mode: 'dev', version: '9.9.9' });
 

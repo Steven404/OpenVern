@@ -52,7 +52,7 @@ let clock: number;
 const now = () => clock;
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'harness-models-'));
+  dir = await mkdtemp(join(tmpdir(), 'openvern-models-'));
   cacheFile = join(dir, 'cache', 'models.json'); // directory does not exist yet
   clock = Date.parse('2026-10-31T12:00:00Z');
 });

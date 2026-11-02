@@ -7,7 +7,7 @@ import { CSP, mimeFor, resolveInside, serveRenderer } from './static-files';
 let root: string;
 
 beforeAll(async () => {
-  const base = await mkdtemp(path.join(os.tmpdir(), 'harness-static-'));
+  const base = await mkdtemp(path.join(os.tmpdir(), 'openvern-static-'));
   root = path.join(base, 'renderer');
   await mkdir(path.join(root, 'assets'), { recursive: true });
   await writeFile(path.join(root, 'index.html'), '<!doctype html><div id="root"></div>');
@@ -20,7 +20,7 @@ afterAll(async () => {
   await rm(path.dirname(root), { recursive: true, force: true });
 });
 
-const get = (p: string, method = 'GET') => serveRenderer(new Request(`app://harness${p}`, { method }), root);
+const get = (p: string, method = 'GET') => serveRenderer(new Request(`app://openvern${p}`, { method }), root);
 
 describe('serveRenderer', () => {
   it('serves index.html with the CSP at / and falls back to it for SPA routes', async () => {

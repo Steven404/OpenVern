@@ -284,7 +284,7 @@ describe('POST /api/chats/:id/retry', () => {
   });
 });
 
-/** Swaps the harness for one with a custom script (cleaning up the previous one first). */
+/** Swaps the test openvern for one with a custom script (cleaning up the previous one first). */
 async function replaceHarness(script: FakeScript): Promise<Harness> {
   await h.cleanup();
   return createHarness({ script });

@@ -2,20 +2,26 @@
 // Service signatures were locked by the V0 orchestrator before wave 2 so S1/S2/S4/S5 build against the
 // same shapes. Errors: services throw `CoreError` (./errors.ts); providers throw `ProviderError`.
 
+import type { ApplyChangesResponse } from '@shared/api';
 import type { AgentEvent } from '@shared/events';
 import type {
   AttachmentRef,
   Chat,
+  ChatChanges,
   ChatSummary,
+  HunkDecision,
   Id,
   IsoDate,
   Message,
   ModelInfo,
   Project,
+  ProjectFileContent,
+  ProjectFileTree,
   ProjectListItem,
   PublicSettings,
 } from '@shared/types';
 import type { Provider } from './providers/types';
+import type { ToolChanges } from './tools/types';
 
 export interface SecretStore {
   get(name: string): Promise<string | null>;
@@ -28,6 +34,8 @@ export interface CoreDeps {
   secretStore: SecretStore;
   provider?: Provider; // default: OpenRouter
   mode: 'dev' | 'prod';
+  /** The app version (`pkg.version` in dev, `app.getVersion()` in Electron). */
+  version: string;
 }
 
 // ── S1 ──────────────────────────────────────────────────────────────────────────────────────────
@@ -137,6 +145,36 @@ export interface Core {
   models: ModelCatalog; // S2
   agent: AgentService; // S4
   provider: Provider; // S5 (needed by PUT /settings/openrouter-key → validateKey)
+  changes: ChangesService; // v0.2 G1
+  projectFiles: ProjectFilesService; // v0.2 G3
+  version: string;
+}
+
+// ── v0.2 (plan §4.7) ─────────────────────────────────────────────────────────────────────────────
+
+export interface ChangesService {
+  get(chatId: Id): Promise<ChatChanges>;
+  /** One per assistant step: stages are attributed to `messageId`. */
+  tools(input: { chatId: Id; projectRoot: string; messageId: Id }): ToolChanges;
+  /** At a new user message: remember the pending set so a retry of this turn can restore it. */
+  snapshot(chatId: Id, userMessageId: Id): Promise<void>;
+  /** Retry: restore the snapshot taken for this user message. Never touches disk. */
+  restore(chatId: Id, userMessageId: Id): Promise<void>;
+  /** The text for the next user message's `changesNote`; marks those events as reported. */
+  takeNote(chatId: Id): Promise<string | undefined>;
+  apply(input: {
+    chatId: Id;
+    projectRoot: string;
+    revision: number;
+    decisions: Record<string, Record<string, HunkDecision>>;
+  }): Promise<ApplyChangesResponse>;
+  discard(chatId: Id): Promise<ChatChanges>;
+  removeForChat(chatId: Id): Promise<void>;
+}
+
+export interface ProjectFilesService {
+  tree(projectId: Id, signal?: AbortSignal): Promise<ProjectFileTree>;
+  read(projectId: Id, relPath: string): Promise<ProjectFileContent>;
 }
 
 export type CreateCore = (deps: CoreDeps) => Promise<Core>;

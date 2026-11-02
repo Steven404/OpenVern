@@ -27,7 +27,7 @@ export interface ProjectMenuProps {
 function removeDescription(project: ProjectListItem): string {
   const n = project.chatCount;
   const moved = n === 0 ? '' : n === 1 ? ' Its chat moves to Chats.' : ` Its ${n} chats move to Chats.`;
-  return `Remove "${project.name}" from harness?${moved} Files on disk are not touched.`;
+  return `Remove "${project.name}" from OpenVern?${moved} Files on disk are not touched.`;
 }
 
 /** S6.4: the sidebar project row's "…" button — New chat here · Rename · Remove. Position it from the row. */

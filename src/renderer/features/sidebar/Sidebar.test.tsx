@@ -22,7 +22,7 @@ describe('Sidebar projects (D5, D6)', () => {
     renderApp({ client });
     const row = await projectButton(project.name);
     expect(row.getAttribute('aria-expanded')).toBe('false');
-    expect(row.textContent).toContain('3'); // stefanos-ai-harness has three chats in the seed
+    expect(row.textContent).toContain('3'); // stefanos-ai-openvern has three chats in the seed
     expect(projects).toHaveLength(3);
     expect(screen.queryByRole('link', { name: 'Agent loop and tool calls' })).toBeNull();
   });
@@ -179,7 +179,7 @@ describe('Project row "…" menu (S6.4)', () => {
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Remove' }));
     const dialog = await screen.findByRole('dialog', { name: 'Remove project?' });
     expect(dialog.textContent).toContain(
-      `Remove "${project.name}" from harness? Its 3 chats move to Chats. Files on disk are not touched.`,
+      `Remove "${project.name}" from OpenVern? Its 3 chats move to Chats. Files on disk are not touched.`,
     );
     expect(remove).not.toHaveBeenCalled();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }));

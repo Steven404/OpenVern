@@ -11,7 +11,7 @@ describe('buildSystemPrompt', () => {
 
   it('loose chat: short prompt with date and Markdown, no tool talk', () => {
     const p = buildSystemPrompt({ now, hasTools: false });
-    expect(p).toContain('harness');
+    expect(p).toContain('OpenVern');
     expect(p).toContain('2026-10-31');
     expect(p).toContain('Markdown');
     expect(p).not.toContain('read_file');
