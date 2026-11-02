@@ -68,7 +68,7 @@ export async function createCore(deps: CoreDeps): Promise<Core> {
     models,
     agent,
     provider,
-    changes: createChangesService(),
+    changes: createChangesService({ dataDir: dataReal, sandbox: { deniedRoots, deniedFiles } }),
     projectFiles: createProjectFilesService(),
     version: deps.version,
   };

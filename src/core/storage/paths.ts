@@ -14,10 +14,12 @@ export interface DataPaths {
   projects: string;
   chatsDir: string;
   chatsIndex: string;
+  changesDir: string;
   attachmentsDir: string;
   cacheDir: string;
   modelsCache: string;
   chatFile(id: string): string;
+  changesFile(id: string): string;
   attachmentBin(id: string): string;
   attachmentMeta(id: string): string;
 }
@@ -32,6 +34,7 @@ export function expandHome(p: string): string {
 /** Lays out every well-known path under an (already absolute) data dir. Does not touch the disk. */
 export function dataPaths(root: string): DataPaths {
   const chatsDir = path.join(root, 'chats');
+  const changesDir = path.join(root, 'changes');
   const attachmentsDir = path.join(root, 'attachments');
   const cacheDir = path.join(root, 'cache');
   return {
@@ -41,10 +44,12 @@ export function dataPaths(root: string): DataPaths {
     projects: path.join(root, 'projects.json'),
     chatsDir,
     chatsIndex: path.join(chatsDir, 'index.json'),
+    changesDir,
     attachmentsDir,
     cacheDir,
     modelsCache: path.join(cacheDir, 'models.json'),
     chatFile: (id) => path.join(chatsDir, `${id}.json`),
+    changesFile: (id) => path.join(changesDir, `${id}.json`),
     attachmentBin: (id) => path.join(attachmentsDir, `${id}.bin`),
     attachmentMeta: (id) => path.join(attachmentsDir, `${id}.json`),
   };
@@ -57,6 +62,7 @@ export async function ensureDataDir(root: string): Promise<DataPaths> {
   await fs.mkdir(abs, { recursive: true, mode: 0o700 });
   await Promise.all([
     fs.mkdir(paths.chatsDir, { recursive: true }),
+    fs.mkdir(paths.changesDir, { recursive: true }),
     fs.mkdir(paths.attachmentsDir, { recursive: true }),
     fs.mkdir(paths.cacheDir, { recursive: true }),
   ]);
