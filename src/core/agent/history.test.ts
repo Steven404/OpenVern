@@ -40,6 +40,12 @@ const opts = (over: Partial<Parameters<typeof buildHistory>[1]> = {}) => ({
 });
 
 describe('buildHistory', () => {
+  it('never sends the UI-only notice to the provider', async () => {
+    const out = await buildHistory([user('q'), assistant({ text: 'a', notice: 'Some notice' })], opts());
+    expect(JSON.stringify(out)).not.toContain('Some notice');
+    expect(out[1]).not.toHaveProperty('notice');
+  });
+
   it('maps user, assistant and tool messages in order', async () => {
     const call = { id: 'c1', name: 'read_file', argsJson: '{}' };
     const messages: Message[] = [

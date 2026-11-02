@@ -35,6 +35,8 @@ export interface Turn {
   blocks: Block[];
   /** Model of the first assistant message (header tooltip). */
   model: string | null;
+  /** UI-only note from the first assistant message that has one. */
+  notice?: string;
 }
 
 export interface TurnOptions {
@@ -73,6 +75,7 @@ export function buildTurns(messages: Message[], { active, streamingId, runningTo
         turns.push(current);
       }
       current.model ??= m.model || null;
+      if (m.notice && !current.notice) current.notice = m.notice;
       const streaming = m.id === streamingId;
       if (m.text || streaming || m.status !== 'complete') {
         current.blocks.push({

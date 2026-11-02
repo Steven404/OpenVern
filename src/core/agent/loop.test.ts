@@ -1,4 +1,4 @@
-import { MAX_AGENT_STEPS, NEW_CHAT_TITLE } from '@shared/constants';
+import { LIMITS, MAX_AGENT_STEPS, NEW_CHAT_TITLE, TREE_UNAVAILABLE_NOTICE } from '@shared/constants';
 import type { AgentEvent } from '@shared/events';
 import type { AssistantMessage, ToolMessage, UserMessage } from '@shared/types';
 import { describe, expect, it } from 'vitest';
@@ -358,6 +358,62 @@ describe('history when tools are no longer offered', () => {
     await h.chats.detachProject(PROJECT.id);
     await h.run(second);
     check(h);
+  });
+});
+
+describe('project tree timeout', () => {
+  const never = () => new Promise<string>(() => {});
+
+  it('continues without the tree after the timeout, tells the model, and sets the notice on the first message', async () => {
+    const h = await createHarness({
+      treeTimeoutMs: 20,
+      renderTree: never,
+      script: scriptFromTurns([callTools([['c1', 'read_file', '{"path":"a"}']]), reply('Done.'), TITLE_TURN]),
+    });
+    const events = await h.run();
+    expect(h.provider.calls[0]?.system).toContain("couldn't be read in time");
+    expect(h.provider.calls[0]?.system).not.toContain('Top of the project tree');
+    const ends = find(events, 'assistant_end').map((e) => e.message);
+    expect(ends[0]?.notice).toBe(TREE_UNAVAILABLE_NOTICE);
+    expect(ends[1]?.notice).toBeUndefined();
+    expect(h.messages().find((m) => m.role === 'assistant')).toMatchObject({ notice: TREE_UNAVAILABLE_NOTICE });
+    expect(find(events, 'error')).toHaveLength(0);
+    // the notice is UI-only
+    expect(JSON.stringify(h.provider.calls[1]?.messages)).not.toContain('replied without');
+  });
+
+  it('has a 2.5 s default timeout', () => {
+    expect(LIMITS.systemPromptTreeTimeoutMs).toBe(2500);
+  });
+
+  it('a tree that resolves in time sets no notice', async () => {
+    const h = await createHarness({ script: scriptFromTurns([reply('Hi'), TITLE_TURN]) });
+    await h.run();
+    expect(h.messages().find((m) => m.role === 'assistant')).not.toHaveProperty('notice');
+    expect(h.provider.calls[0]?.system).not.toContain("couldn't be read in time");
+  });
+
+  it('Stop during a hung tree ends the turn as stopped without calling the model, and releases the chat', async () => {
+    let treeCalls = 0;
+    const h = await createHarness({
+      treeTimeoutMs: 60_000,
+      renderTree: () => (treeCalls++ === 0 ? never() : Promise.resolve('src/')),
+      script: scriptFromTurns([reply('Hi'), TITLE_TURN, reply('Again'), TITLE_TURN]),
+    });
+    const controller = new AbortController();
+    const events: AgentEvent[] = [];
+    const run = h.run({ signal: controller.signal, emit: (e) => void events.push(e) });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(h.agent.isRunning(h.chatId)).toBe(true);
+    controller.abort();
+    await run;
+    expect(h.provider.calls).toHaveLength(0);
+    expect(find(events, 'assistant_end')[0]?.message).toMatchObject({ status: 'stopped', text: '' });
+    expect(find(events, 'error')).toHaveLength(0);
+    expect(events.at(-1)?.type).toBe('done');
+    expect(h.agent.isRunning(h.chatId)).toBe(false);
+    const next = await h.run();
+    expect(find(next, 'error').filter((e) => e.error.code === 'conflict')).toHaveLength(0);
   });
 });
 

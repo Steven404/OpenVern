@@ -12,7 +12,7 @@
 //   `ok:false` "Interrupted" ToolMessage (with `tool_call` + `tool_result` events), so the stored chat is self-consistent.
 //   `history.ts` still synthesises "Interrupted" results for legacy/dangling calls.
 
-import { LIMITS, MAX_AGENT_STEPS, NEW_CHAT_TITLE } from '@shared/constants';
+import { LIMITS, MAX_AGENT_STEPS, NEW_CHAT_TITLE, TREE_UNAVAILABLE_NOTICE } from '@shared/constants';
 import { type ApiErrorInfo, errorInfo } from '@shared/errors';
 import type { AgentEvent } from '@shared/events';
 import type {
@@ -53,6 +53,8 @@ export interface AgentServiceDeps {
   now?: () => Date;
   /** Title request timeout; default 10 s. */
   titleTimeoutMs?: number;
+  /** Project tree timeout; default `LIMITS.systemPromptTreeTimeoutMs`. */
+  treeTimeoutMs?: number;
 }
 
 type Emit = (event: AgentEvent) => Promise<void>;
@@ -170,18 +172,38 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
     }
     const tools: Tool[] = project && modelInfo.supportsTools ? deps.getProjectTools() : []; // S4.8
     let tree: string | undefined;
+    let treeTimedOut = false;
     if (project) {
-      try {
-        tree = await deps.renderTree(project.rootPath, { depth: 2, maxEntries: LIMITS.systemPromptTreeEntries });
-      } catch {
-        tree = undefined; // the prompt is fine without it
+      // A hung filesystem call can't be cancelled, so the wait itself is raced against the timeout and Stop.
+      const treeSignal = AbortSignal.any([
+        signal,
+        AbortSignal.timeout(deps.treeTimeoutMs ?? LIMITS.systemPromptTreeTimeoutMs),
+      ]);
+      const gaveUp = new Promise<'gave_up'>((resolve) => {
+        if (treeSignal.aborted) resolve('gave_up');
+        else treeSignal.addEventListener('abort', () => resolve('gave_up'), { once: true });
+      });
+      const built = deps
+        .renderTree(project.rootPath, {
+          depth: 2,
+          maxEntries: LIMITS.systemPromptTreeEntries,
+          signal: treeSignal,
+        })
+        .catch(() => undefined); // the prompt is fine without it
+      const outcome = await Promise.race([built, gaveUp]);
+      if (signal.aborted) {
+        await stopBeforeModel(chatId, model, emit, state);
+        return;
       }
+      if (treeSignal.aborted || outcome === 'gave_up') treeTimedOut = true;
+      else tree = outcome;
     }
     const system = buildSystemPrompt({
       now: now(),
       ...(project ? { project: { name: project.name, rootPath: project.rootPath } } : {}),
       hasTools: tools.length > 0,
       ...(tree !== undefined ? { tree } : {}),
+      ...(treeTimedOut ? { treeUnavailable: true } : {}),
     });
     const toolSpecs = tools.map((t) => t.spec);
     const history: ProviderMessage[] = await buildHistory(chat.messages, {
@@ -234,6 +256,7 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
         ...(failure?.status === 'error' ? { error: failure.error } : {}),
         ...(usage ? { usage } : {}),
         ...(providerMeta !== undefined ? { providerMeta } : {}),
+        ...(step === 0 && treeTimedOut ? { notice: TREE_UNAVAILABLE_NOTICE } : {}),
       };
       await chats.appendMessage(chatId, assistant);
       state.modified = true;
@@ -278,6 +301,24 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
     }
 
     await emit({ type: 'error', error: errorInfo('max_steps_reached') });
+  }
+
+  /** Stop before any model call: records the same empty `stopped` assistant message a stop at stream start does. */
+  async function stopBeforeModel(chatId: Id, model: string, emit: Emit, state: RunState): Promise<void> {
+    const messageId = crypto.randomUUID();
+    await emit({ type: 'assistant_start', messageId, model });
+    const assistant: AssistantMessage = {
+      id: messageId,
+      role: 'assistant',
+      createdAt: now().toISOString(),
+      model,
+      text: '',
+      toolCalls: [],
+      status: 'stopped',
+    };
+    await chats.appendMessage(chatId, assistant);
+    state.modified = true;
+    await emit({ type: 'assistant_end', message: assistant });
   }
 
   /** Runs one tool call (emitting `tool_call` first). Never throws. */

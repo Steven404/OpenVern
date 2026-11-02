@@ -17,6 +17,8 @@ export const LIMITS = {
   searchMaxMatches: 200,
   searchMaxFileBytes: 1024 * 1024,
   systemPromptTreeEntries: 100,
+  /** Building the project tree for the system prompt gives up after this long; the turn continues without it. */
+  systemPromptTreeTimeoutMs: 2500,
   /** `.gitignore` files above this size are skipped by the walker (S3-M1). */
   gitignoreMaxBytes: 256 * 1024,
 } as const;
@@ -44,3 +46,6 @@ export const IMAGE_ACCEPT = IMAGE_MIME_TYPES.join(',');
 /** Header every `/api` request must carry (plan §3.3). */
 export const CLIENT_HEADER = 'X-Harness-Client';
 export const CLIENT_HEADER_VALUE = '1';
+
+/** Shown under the first assistant message of a turn when the project tree timed out. */
+export const TREE_UNAVAILABLE_NOTICE = "Couldn't read the project folder in time; replied without its file structure.";
