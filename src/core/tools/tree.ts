@@ -75,12 +75,13 @@ export function truncationNote(shown: number): string {
 /** Tree of the project for the system prompt (plan S3.8). Never throws. */
 export async function renderTree(
   root: string,
-  opts: { depth: number; maxEntries: number; deniedRoots?: readonly string[] },
+  opts: { depth: number; maxEntries: number; deniedRoots?: readonly string[]; signal?: AbortSignal },
 ): Promise<string> {
   try {
     const realRoot = await realpath(root);
     if (isWithinAny(opts.deniedRoots, realRoot)) return '(empty)';
-    const tree = await buildTree(realRoot, '', { ...opts, signal: new AbortController().signal });
+    const tree = await buildTree(realRoot, '', { ...opts, signal: opts.signal ?? new AbortController().signal });
+    if (tree.aborted) return '(aborted)';
     if (tree.lines.length === 0) return '(empty)';
     return tree.truncated ? [...tree.lines, truncationNote(tree.shown)].join('\n') : tree.lines.join('\n');
   } catch {

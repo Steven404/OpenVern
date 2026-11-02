@@ -264,6 +264,7 @@ export interface HarnessOptions {
   project?: boolean;
   chatModel?: string;
   titleTimeoutMs?: number;
+  treeTimeoutMs?: number;
   renderTree?: AgentServiceDeps['renderTree'];
   /** Reuse a provider (e.g. for custom delay). */
   provider?: FakeProvider;
@@ -309,11 +310,12 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     renderTree:
       opts.renderTree ??
       (async (root, o) => {
-        renderTreeCalls.push({ root, opts: o });
+        renderTreeCalls.push({ root, opts: { depth: o.depth, maxEntries: o.maxEntries } });
         return 'src/\n  index.ts\nREADME.md';
       }),
     now,
     ...(opts.titleTimeoutMs !== undefined ? { titleTimeoutMs: opts.titleTimeoutMs } : {}),
+    ...(opts.treeTimeoutMs !== undefined ? { treeTimeoutMs: opts.treeTimeoutMs } : {}),
   });
 
   return {

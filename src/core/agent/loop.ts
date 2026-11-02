@@ -12,7 +12,7 @@
 //   `ok:false` "Interrupted" ToolMessage (with `tool_call` + `tool_result` events), so the stored chat is self-consistent.
 //   `history.ts` still synthesises "Interrupted" results for legacy/dangling calls.
 
-import { LIMITS, MAX_AGENT_STEPS, NEW_CHAT_TITLE } from '@shared/constants';
+import { LIMITS, MAX_AGENT_STEPS, NEW_CHAT_TITLE, TREE_UNAVAILABLE_NOTICE } from '@shared/constants';
 import { type ApiErrorInfo, errorInfo } from '@shared/errors';
 import type { AgentEvent } from '@shared/events';
 import type {
@@ -37,7 +37,7 @@ import type {
   ProjectsService,
   RunTurnInput,
 } from '../types';
-import { buildHistory, INTERRUPTED_OUTPUT } from './history';
+import { buildHistory, flattenToolCall, INTERRUPTED_OUTPUT } from './history';
 import { buildSystemPrompt } from './system-prompt';
 import { generateTitle } from './title';
 
@@ -53,6 +53,8 @@ export interface AgentServiceDeps {
   now?: () => Date;
   /** Title request timeout; default 10 s. */
   titleTimeoutMs?: number;
+  /** Project tree timeout; default `LIMITS.systemPromptTreeTimeoutMs`. */
+  treeTimeoutMs?: number;
 }
 
 type Emit = (event: AgentEvent) => Promise<void>;
@@ -170,18 +172,38 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
     }
     const tools: Tool[] = project && modelInfo.supportsTools ? deps.getProjectTools() : []; // S4.8
     let tree: string | undefined;
+    let treeTimedOut = false;
     if (project) {
-      try {
-        tree = await deps.renderTree(project.rootPath, { depth: 2, maxEntries: LIMITS.systemPromptTreeEntries });
-      } catch {
-        tree = undefined; // the prompt is fine without it
+      // A hung filesystem call can't be cancelled, so the wait itself is raced against the timeout and Stop.
+      const treeSignal = AbortSignal.any([
+        signal,
+        AbortSignal.timeout(deps.treeTimeoutMs ?? LIMITS.systemPromptTreeTimeoutMs),
+      ]);
+      const gaveUp = new Promise<'gave_up'>((resolve) => {
+        if (treeSignal.aborted) resolve('gave_up');
+        else treeSignal.addEventListener('abort', () => resolve('gave_up'), { once: true });
+      });
+      const built = deps
+        .renderTree(project.rootPath, {
+          depth: 2,
+          maxEntries: LIMITS.systemPromptTreeEntries,
+          signal: treeSignal,
+        })
+        .catch(() => undefined); // the prompt is fine without it
+      const outcome = await Promise.race([built, gaveUp]);
+      if (signal.aborted) {
+        await stopBeforeModel(chatId, model, emit, state);
+        return;
       }
+      if (treeSignal.aborted || outcome === 'gave_up') treeTimedOut = true;
+      else tree = outcome;
     }
     const system = buildSystemPrompt({
       now: now(),
       ...(project ? { project: { name: project.name, rootPath: project.rootPath } } : {}),
       hasTools: tools.length > 0,
       ...(tree !== undefined ? { tree } : {}),
+      ...(treeTimedOut ? { treeUnavailable: true } : {}),
     });
     const toolSpecs = tools.map((t) => t.spec);
     const history: ProviderMessage[] = await buildHistory(chat.messages, {
@@ -234,6 +256,7 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
         ...(failure?.status === 'error' ? { error: failure.error } : {}),
         ...(usage ? { usage } : {}),
         ...(providerMeta !== undefined ? { providerMeta } : {}),
+        ...(step === 0 && treeTimedOut ? { notice: TREE_UNAVAILABLE_NOTICE } : {}),
       };
       await chats.appendMessage(chatId, assistant);
       state.modified = true;
@@ -248,22 +271,54 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
         return;
       }
 
-      history.push({
-        role: 'assistant',
-        text,
-        toolCalls,
-        ...(providerMeta !== undefined ? { providerMeta } : {}),
-      });
+      const toolsOffered = toolSpecs.length > 0;
+      if (toolsOffered) {
+        history.push({
+          role: 'assistant',
+          text,
+          toolCalls,
+          ...(providerMeta !== undefined ? { providerMeta } : {}),
+        });
+      }
+      const flattened: string[] = text.length > 0 ? [text] : [];
       for (const call of toolCalls) {
         const toolMessage = await runTool(call, messageId, tools, project, signal, emit);
         await chats.appendMessage(chatId, toolMessage);
         await emit({ type: 'tool_result', message: toolMessage });
-        history.push({ role: 'tool', toolCallId: call.id, content: toolMessage.output });
+        if (toolsOffered) history.push({ role: 'tool', toolCallId: call.id, content: toolMessage.output });
+        else flattened.push(flattenToolCall(call, toolMessage));
+      }
+      if (!toolsOffered) {
+        // No tool definitions were sent, so providers would reject tool content: replay it as plain text, as buildHistory does.
+        const merged = flattened.join('\n\n');
+        const prev = history.at(-1);
+        if (prev?.role === 'assistant') {
+          prev.text = `${prev.text}\n\n${merged}`;
+          delete prev.providerMeta;
+        } else history.push({ role: 'assistant', text: merged, toolCalls: [] });
       }
       if (signal.aborted) return; // S4.5: stopped during/after the tools; results above are all persisted
     }
 
     await emit({ type: 'error', error: errorInfo('max_steps_reached') });
+  }
+
+  /** Stop before any model call: records the same empty `stopped` assistant message a stop at stream start does. */
+  async function stopBeforeModel(chatId: Id, model: string, emit: Emit, state: RunState): Promise<void> {
+    const messageId = crypto.randomUUID();
+    await emit({ type: 'assistant_start', messageId, model });
+    const assistant: AssistantMessage = {
+      id: messageId,
+      role: 'assistant',
+      createdAt: now().toISOString(),
+      model,
+      text: '',
+      toolCalls: [],
+      status: 'stopped',
+    };
+    await chats.appendMessage(chatId, assistant);
+    state.modified = true;
+    await emit({ type: 'assistant_end', message: assistant });
   }
 
   /** Runs one tool call (emitting `tool_call` first). Never throws. */

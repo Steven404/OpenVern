@@ -1,3 +1,4 @@
+import { TREE_UNAVAILABLE_NOTICE } from '@shared/constants';
 import { errorInfo } from '@shared/errors';
 import type { AssistantMessage, Chat, Message, ToolMessage, UserMessage } from '@shared/types';
 import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
@@ -114,6 +115,18 @@ describe('turn grouping', () => {
     const html = turn.innerHTML;
     expect(html.indexOf('That shape is right')).toBeLessThan(html.indexOf('data-testid="tool-row"'));
     expect(html.indexOf('data-testid="tool-row"')).toBeLessThan(html.indexOf('Two guards'));
+  });
+
+  it('shows a persisted notice as a status line under the assistant turn', async () => {
+    const { api, chat } = await seededChat();
+    const full: Chat = {
+      ...chat,
+      messages: [user('u1', 'q'), assistant('a1', 'the answer', { notice: TREE_UNAVAILABLE_NOTICE })],
+    };
+    renderWithProviders(<Conversation chatId={chat.id} />, { api, chats: [full] });
+    expect(await screen.findByText('the answer')).toBeTruthy();
+    const notice = screen.getByRole('status');
+    expect(notice.textContent).toBe(TREE_UNAVAILABLE_NOTICE);
   });
 
   it('shows "Stopped" on stopped messages and offers Retry on the last turn', async () => {

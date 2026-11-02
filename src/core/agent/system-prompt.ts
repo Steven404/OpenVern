@@ -10,6 +10,8 @@ export interface SystemPromptInput {
   hasTools: boolean;
   /** Output of `renderTree`; used in every project prompt. */
   tree?: string;
+  /** The tree could not be read in time; tell the model instead of showing one. */
+  treeUnavailable?: boolean;
 }
 
 /** Local calendar date as `YYYY-MM-DD`. */
@@ -20,7 +22,7 @@ export function formatDate(now: Date): string {
   return `${y}-${m}-${d}`;
 }
 
-export function buildSystemPrompt({ now, project, hasTools, tree }: SystemPromptInput): string {
+export function buildSystemPrompt({ now, project, hasTools, tree, treeUnavailable }: SystemPromptInput): string {
   const date = formatDate(now);
   if (!project) {
     return [
@@ -47,7 +49,9 @@ export function buildSystemPrompt({ now, project, hasTools, tree }: SystemPrompt
           tree.trimEnd(),
           '```',
         ]
-      : [];
+      : treeUnavailable
+        ? ['', "The project's file tree couldn't be read in time, so it is not shown here."]
+        : [];
 
   if (!hasTools) {
     return [

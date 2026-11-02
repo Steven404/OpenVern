@@ -440,6 +440,12 @@ describe('renderTree', () => {
     expect(tree).toContain('truncated: showing the first 5 entries');
   });
 
+  it('returns promptly with nothing listed when the signal is already aborted', async () => {
+    const tree = await renderTree(fx.root, { depth: 2, maxEntries: 500, signal: AbortSignal.abort() });
+    expect(tree).not.toContain('src/');
+    expect(tree).not.toContain('README.md');
+  });
+
   it('does not throw for a missing root', async () => {
     expect(await renderTree(path.join(fx.root, 'nope'), { depth: 2, maxEntries: 10 })).toMatch(/not readable/);
   });

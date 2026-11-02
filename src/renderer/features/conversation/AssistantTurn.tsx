@@ -1,5 +1,6 @@
 import { APP_NAME } from '@shared/constants';
 import type { ApiErrorInfo } from '@shared/errors';
+import { Info } from 'lucide-react';
 import { memo } from 'react';
 import { Button } from '../../components/ui';
 import { ErrorCard } from './ErrorCard';
@@ -9,6 +10,8 @@ import type { Block, TextBlock } from './turns';
 
 export interface AssistantTurnProps {
   blocks: Block[];
+  /** Small muted note under the header (e.g. the project tree timed out). */
+  notice?: string;
   /** Tooltip on the header (model name). */
   modelLabel?: string;
   /** "Thinking…" before the first token (and between tool calls and the next reply). */
@@ -26,6 +29,7 @@ export interface AssistantTurnProps {
 /** D11: avatar header + one article per turn, texts and tool rows in order. */
 export const AssistantTurn = memo(function AssistantTurn({
   blocks,
+  notice,
   modelLabel,
   waiting = false,
   error,
@@ -61,6 +65,13 @@ export const AssistantTurn = memo(function AssistantTurn({
         </span>
         <span className="text-[14px] font-semibold text-text">{APP_NAME}</span>
       </div>
+
+      {notice && (
+        <p role="status" className="m-0 flex items-start gap-1.5 text-[13px] leading-snug text-text-muted">
+          <Info aria-hidden="true" size={14} className="mt-[3px] shrink-0" />
+          <span>{notice}</span>
+        </p>
+      )}
 
       {blocks.map((b) =>
         b.kind === 'tool' ? (

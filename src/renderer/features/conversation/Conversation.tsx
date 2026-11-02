@@ -115,13 +115,14 @@ export function Conversation({ chatId }: ConversationProps) {
           const turnError = isLast ? runError : null;
           const turnWaiting = isLast && waiting;
           const turnStopped = isLast && !!run?.stopped;
-          const showAssistant = turn.blocks.length > 0 || turnWaiting || !!turnError || turnStopped;
+          const showAssistant = turn.blocks.length > 0 || !!turn.notice || turnWaiting || !!turnError || turnStopped;
           return (
             <Fragment key={turn.key}>
               {turn.user && <UserBubble message={turn.user} />}
               {showAssistant && (
                 <AssistantTurn
                   blocks={turn.blocks}
+                  notice={turn.notice}
                   modelLabel={
                     turn.model
                       ? modelName(

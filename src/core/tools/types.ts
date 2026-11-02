@@ -23,4 +23,7 @@ export interface Tool {
 //   getProjectTools(): Tool[]
 //   renderTree(root: string, opts: { depth: number; maxEntries: number }): Promise<string>
 export type GetProjectTools = () => Tool[];
-export type RenderTree = (root: string, opts: { depth: number; maxEntries: number }) => Promise<string>;
+export type RenderTree = (
+  root: string,
+  opts: { depth: number; maxEntries: number; signal?: AbortSignal },
+) => Promise<string>;

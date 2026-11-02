@@ -48,6 +48,8 @@ export interface AssistantMessage {
   error?: ApiErrorInfo;
   usage?: Usage;
   providerMeta?: unknown; // opaque; the provider adapter round-trips it (e.g. OpenRouter reasoning_details)
+  /** UI-only note shown under the message; never sent to the provider. */
+  notice?: string;
 }
 
 export interface ToolCall {
