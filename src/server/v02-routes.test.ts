@@ -1,10 +1,19 @@
 // v0.2 routes (plan §4.3, G3.5): project files, attach, and the chat change-set lifecycle. Uses the in-memory
 // `ChangesService` fake from the harness.
 
-import { mkdir, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, realpath, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { AgentEvent } from '@shared/events';
-import type { AttachmentRef, Chat, ChatChanges, PendingChanges, Project, ProjectFileTree } from '@shared/types';
+import type {
+  AttachmentRef,
+  Chat,
+  ChatChanges,
+  HomeFileTree,
+  PendingChanges,
+  Project,
+  ProjectFileContent,
+  ProjectFileTree,
+} from '@shared/types';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AgentService } from '../core/types';
 import { collectEvents, createHarness, type Harness, PNG_BYTES } from './test-helpers';
@@ -50,6 +59,9 @@ describe('client header', () => {
     ['GET', '/api/projects/x/files'],
     ['GET', '/api/projects/x/files/content?path=a'],
     ['POST', '/api/projects/x/files/attach'],
+    ['GET', '/api/home/files'],
+    ['GET', '/api/home/files/content?path=a'],
+    ['POST', '/api/home/files/attach'],
     ['GET', '/api/chats/x/changes'],
     ['DELETE', '/api/chats/x/changes'],
     ['POST', '/api/chats/x/changes/apply'],
@@ -114,6 +126,25 @@ describe('project files', () => {
     expect(img.kind).toBe('image');
     const denied = await h.call(`/api/projects/${p.id}/files/attach`, { method: 'POST', json: { path: '.env' } });
     expect(denied.status).toBe(400);
+  });
+});
+
+describe('home files', () => {
+  it('lists the home directory, hides secrets and refuses escapes', async () => {
+    const tree = await json<HomeFileTree>(await h.call('/api/home/files'));
+    expect(tree.root).toBe(await realpath(h.homeDir));
+    expect(tree.truncated).toBe(false);
+    expect(tree.entries).toEqual([{ path: 'note.txt', type: 'file' }]);
+    const file = await json<ProjectFileContent>(await h.call('/api/home/files/content?path=note.txt'));
+    expect(file.content).toBe('hello from home\n');
+    expect((await h.call('/api/home/files/content?path=.env')).status).toBe(400);
+    expect((await h.call(`/api/home/files/content?path=${encodeURIComponent('../project/README.md')}`)).status).toBe(
+      400,
+    );
+    const att = await json<AttachmentRef>(
+      await h.call('/api/home/files/attach', { method: 'POST', json: { path: 'note.txt' } }),
+    );
+    expect(att).toMatchObject({ name: 'note.txt', kind: 'text' });
   });
 });
 

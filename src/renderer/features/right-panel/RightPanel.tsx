@@ -1,12 +1,18 @@
 // The right panel (plan §5.1): tab strip over one surface at a time. Mounted by AppShell next to the chat column
 // while `rightPanelOpen`. Per-chat state (active surface, open tabs) lives in `panel-store.ts`.
+// Width is the user's: the handle on the left edge sets it, and opening a file does not change it.
 
-import { useChats } from '@renderer/app/queries';
 import { cx } from '@renderer/components/ui';
 import { useUiStore } from '@renderer/stores/ui';
 import { LAYOUT } from '@shared/constants';
 import type { Id } from '@shared/types';
-import { useEffect, useRef, useState } from 'react';
+import {
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import { FileViewer } from '../files/FileViewer';
 import { FileIcon, PlusIcon, XIcon } from './icons';
 import { Launcher } from './Launcher';
@@ -23,35 +29,91 @@ const tabOff = 'bg-transparent text-text-muted hover:bg-overlay-ghost hover:text
 
 const baseName = (path: string) => path.slice(path.lastIndexOf('/') + 1);
 
-export function RightPanel({ chatId }: { chatId: Id }) {
-  const chats = useChats();
-  const projectId = chats.data?.find((c) => c.id === chatId)?.projectId ?? null;
+const noopSetWidth = () => {};
+
+function availablePanelWidth(sidebarCollapsed: boolean, viewport: number): number {
+  const sidebar = sidebarCollapsed ? 0 : LAYOUT.sidebar;
+  return Math.max(LAYOUT.panelMin, viewport - sidebar - LAYOUT.conversationMin);
+}
+
+export function RightPanel({ chatId, projectId }: { chatId: Id; projectId: Id | null | undefined }) {
   const hasChanges = useHasChanges(chatId);
   const state = useChatPanelState(chatId);
   const setPanelOpen = useUiStore((s) => s.setRightPanelOpen);
+  const preferredWidth = useUiStore((s) => s.rightPanelWidth);
+  const setPanelWidth = useUiStore((s) => s.setRightPanelWidth);
+  const sidebarCollapsed = useUiStore((s) => s.sidebarCollapsed);
   const show = usePanelStore((s) => s.show);
   const closeTab = usePanelStore((s) => s.closeTab);
   const openSurface = usePanelStore((s) => s.openSurface);
-  const setWidth = usePanelStore((s) => s.setWidth);
-  useRefreshProjectFiles(chatId, projectId);
+  useRefreshProjectFiles(chatId, projectId ?? null);
 
-  const ctx: SurfaceContext = { chatId, projectId, hasChanges };
+  const ctx: SurfaceContext = { chatId, projectId: projectId ?? null, hasChanges };
   const filesEnabled = getSurface('files')?.availability(ctx).enabled ?? false;
 
   const defaultTarget: PanelTarget = filesEnabled ? { type: 'surface', id: 'files' } : { type: 'launcher' };
   let active: PanelTarget = state.active ?? defaultTarget;
-  // Files and file tabs make no sense without a project (chat moved out of it): show the launcher.
+  // A disabled Files surface drops a leftover file tab back to the launcher.
   if (!filesEnabled && (active.type === 'file' || (active.type === 'surface' && active.id === 'files'))) {
     active = { type: 'launcher' };
   }
 
   const activeSurface = active.type === 'surface' ? getSurface(active.id) : undefined;
-  const width =
-    active.type === 'file'
-      ? LAYOUT.panelViewer
-      : active.type === 'surface'
-        ? (state.widths[active.id] ?? activeSurface?.width ?? LAYOUT.panelFiles)
-        : LAYOUT.panelFiles;
+
+  const [viewport, setViewport] = useState(() => window.innerWidth);
+  useEffect(() => {
+    const onResize = () => setViewport(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  const maxWidth = availablePanelWidth(sidebarCollapsed, viewport);
+  const width = Math.min(preferredWidth, maxWidth);
+
+  const [dragging, setDragging] = useState(false);
+  const stopDrag = useRef<(() => void) | null>(null);
+  useEffect(() => () => stopDrag.current?.(), []);
+  const onResizeStart = (event: ReactPointerEvent) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    stopDrag.current?.();
+    const startX = event.clientX;
+    const startW = width;
+    const max = maxWidth;
+    setDragging(true);
+    const move = (ev: PointerEvent) => {
+      const next = Math.round(startW + (startX - ev.clientX));
+      setPanelWidth(Math.min(max, Math.max(LAYOUT.panelMin, next)));
+    };
+    const up = () => {
+      setDragging(false);
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      stopDrag.current = null;
+    };
+    stopDrag.current = up;
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+  useEffect(() => {
+    if (!dragging) return;
+    const { cursor, userSelect } = document.body.style;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    return () => {
+      document.body.style.cursor = cursor;
+      document.body.style.userSelect = userSelect;
+    };
+  }, [dragging]);
+  const onResizeKey = (event: ReactKeyboardEvent) => {
+    const step = event.shiftKey ? 48 : 16;
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      setPanelWidth(Math.min(maxWidth, width + step));
+    } else if (event.key === 'ArrowRight') {
+      event.preventDefault();
+      setPanelWidth(width - step);
+    }
+  };
 
   // Measured width, for surfaces that need to know whether Split fits.
   const ref = useRef<HTMLElement>(null);
@@ -78,9 +140,23 @@ export function RightPanel({ chatId }: { chatId: Id }) {
       ref={ref}
       id="right-panel"
       aria-label="Right panel"
-      className="panel-in flex h-full min-h-0 max-w-full flex-col border-l border-border bg-sidebar transition-[flex-basis] duration-[220ms] ease-[cubic-bezier(.16,1,.3,1)] motion-reduce:transition-none"
-      style={{ flex: `0 1 ${width}px`, minWidth: LAYOUT.panelMin }}
+      className={cx(
+        'panel-in relative flex h-full min-h-0 max-w-full flex-col border-l border-border bg-sidebar motion-reduce:transition-none',
+        dragging ? 'transition-none' : 'transition-[flex-basis] duration-[220ms] ease-[cubic-bezier(.16,1,.3,1)]',
+      )}
+      style={{ flex: `0 1 ${width}px`, width, minWidth: LAYOUT.panelMin }}
     >
+      <hr
+        aria-orientation="vertical"
+        aria-label="Resize right panel"
+        aria-valuenow={width}
+        aria-valuemin={LAYOUT.panelMin}
+        aria-valuemax={maxWidth}
+        tabIndex={0}
+        onPointerDown={onResizeStart}
+        onKeyDown={onResizeKey}
+        className="absolute top-0 left-0 z-20 m-0 h-full w-1.5 cursor-col-resize touch-none border-0 bg-transparent hover:bg-border-control focus-visible:bg-border-control"
+      />
       <header className="flex min-h-[52px] items-center gap-1.5 border-b border-border-header py-2 pr-2 pl-2.5">
         <div
           role="tablist"
@@ -176,7 +252,7 @@ export function RightPanel({ chatId }: { chatId: Id }) {
           }}
         />
       ) : null}
-      {active.type === 'file' && projectId ? (
+      {active.type === 'file' ? (
         <FileViewer chatId={chatId} projectId={projectId} path={active.path} onBack={() => show(chatId, filesTarget)} />
       ) : null}
       {SurfaceComponent ? (
@@ -185,7 +261,7 @@ export function RightPanel({ chatId }: { chatId: Id }) {
           projectId={projectId}
           params={active.type === 'surface' ? (state.params[active.id] ?? {}) : {}}
           panelWidth={measured}
-          setWidth={(px) => active.type === 'surface' && setWidth(chatId, active.id, px)}
+          setWidth={noopSetWidth}
         />
       ) : null}
     </aside>

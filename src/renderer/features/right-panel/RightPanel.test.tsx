@@ -1,6 +1,7 @@
 import { renderApp, resetUi, seededClient } from '@renderer/app/test-utils';
 import { sampleProposal } from '@renderer/lib/mock-changes';
 import { readPersistedUi, STORAGE_KEYS } from '@renderer/stores/ui';
+import { LAYOUT } from '@shared/constants';
 import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { usePanelStore } from './panel-store';
@@ -115,12 +116,68 @@ describe('launcher rules', () => {
     expect(within(panel()).getByRole('tab', { name: 'Files', selected: true })).toBeTruthy();
   });
 
-  it('a chat without a project shows the launcher with Files disabled', async () => {
+  it('a chat without a project browses the home folder', async () => {
     await renderChat({ loose: true });
     openPanel();
+    expect(await within(panel()).findByText('/home/you')).toBeTruthy();
+    expect(within(panel()).getByRole('navigation', { name: 'Home files' })).toBeTruthy();
+    expect(within(panel()).getByRole('tab', { name: 'Files', selected: true })).toBeTruthy();
+    fireEvent.click(within(panel()).getByRole('button', { name: 'Open a panel' }));
     const files = within(panel()).getByRole('button', { name: /^Files/ }) as HTMLButtonElement;
-    expect(files.disabled).toBe(true);
-    expect(files.textContent).toContain('Only for chats in a project');
-    expect(within(panel()).getByRole('heading', { name: 'Open a panel' })).toBeTruthy();
+    expect(files.disabled).toBe(false);
+    expect(files.textContent).toContain('Browse your home folder, read-only');
+  });
+});
+
+describe('new chat screen', () => {
+  it('shows the toggle and opens the home folder when no project is selected', async () => {
+    renderApp({ route: '/new' });
+    await screen.findByRole('heading', { name: 'What are we building?' });
+    expect(toggle().getAttribute('aria-pressed')).toBe('false');
+    openPanel();
+    expect(await within(panel()).findByText('/home/you')).toBeTruthy();
+    ctrlBracket();
+    expect(screen.queryByRole('complementary', { name: 'Right panel' })).toBeNull();
+  });
+
+  it('lists the project chosen on the new chat screen', async () => {
+    const seed = await seededClient();
+    renderApp({ client: seed.client, route: `/new?project=${seed.project.id}` });
+    await screen.findByRole('heading', { name: 'What are we building?' });
+    openPanel();
+    expect(await within(panel()).findByText(seed.project.name)).toBeTruthy();
+    expect(within(panel()).getByRole('navigation', { name: 'Project files' })).toBeTruthy();
+  });
+});
+
+describe('panel width', () => {
+  const previousWidth = window.innerWidth;
+  afterEach(() => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, writable: true, value: previousWidth });
+  });
+
+  it('keeps the same width when a file opens, and remembers a drag', async () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, writable: true, value: 1800 });
+    await renderChat();
+    openPanel();
+    const aside = panel() as HTMLElement;
+    expect(aside.style.width).toBe(`${LAYOUT.panelFiles}px`);
+
+    await within(panel()).findByRole('navigation', { name: 'Project files' });
+    fireEvent.click(await within(panel()).findByRole('button', { name: 'README.md' }));
+    await within(panel()).findByRole('tab', { name: 'README.md', selected: true });
+    expect(aside.style.width).toBe(`${LAYOUT.panelFiles}px`);
+
+    const handle = within(panel()).getByRole('separator', { name: 'Resize right panel' });
+    fireEvent.pointerDown(handle, { button: 0, clientX: 500, pointerId: 1 });
+    fireEvent.pointerMove(window, { clientX: 400, pointerId: 1 });
+    fireEvent.pointerUp(window, { pointerId: 1 });
+    expect(aside.style.width).toBe(`${LAYOUT.panelFiles + 100}px`);
+    expect(window.localStorage.getItem(STORAGE_KEYS.rightPanelWidth)).toBe(String(LAYOUT.panelFiles + 100));
+    expect(readPersistedUi().rightPanelWidth).toBe(LAYOUT.panelFiles + 100);
+
+    handle.focus();
+    fireEvent.keyDown(handle, { key: 'ArrowRight' });
+    expect(aside.style.width).toBe(`${LAYOUT.panelFiles + 100 - 16}px`);
   });
 });

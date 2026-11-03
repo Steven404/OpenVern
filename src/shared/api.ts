@@ -25,6 +25,9 @@ export const ROUTES = {
   projectFiles: '/projects/:id/files',
   projectFileContent: '/projects/:id/files/content',
   projectFileAttach: '/projects/:id/files/attach',
+  homeFiles: '/home/files',
+  homeFileContent: '/home/files/content',
+  homeFileAttach: '/home/files/attach',
   chatChanges: '/chats/:id/changes',
   chatChangesApply: '/chats/:id/changes/apply',
 } as const;

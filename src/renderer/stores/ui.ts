@@ -1,6 +1,7 @@
 // Global UI state (owned by S6; seeded by the orchestrator so S7 can open modals without depending on S6 code).
 // S6 added the sidebar / expansion fields below but kept the original names.
 
+import { LAYOUT } from '@shared/constants';
 import type { Id } from '@shared/types';
 import { create } from 'zustand';
 
@@ -8,7 +9,22 @@ export const STORAGE_KEYS = {
   sidebarCollapsed: 'openvern.sidebarCollapsed',
   expandedProjects: 'openvern.expandedProjects',
   rightPanelOpen: 'openvern.rightPanelOpen',
+  rightPanelWidth: 'openvern.rightPanelWidth',
 } as const;
+
+/** Hard cap so a bad stored value cannot cover the window. The layout also clamps to the space beside the chat. */
+const PANEL_WIDTH_CAP = 2400;
+
+export function clampPanelWidth(px: number): number {
+  if (!Number.isFinite(px)) return LAYOUT.panelFiles;
+  return Math.min(PANEL_WIDTH_CAP, Math.max(LAYOUT.panelMin, Math.round(px)));
+}
+
+function readPanelWidth(): number {
+  const raw = readStorage(STORAGE_KEYS.rightPanelWidth);
+  if (raw === null) return LAYOUT.panelFiles;
+  return clampPanelWidth(Number(raw));
+}
 
 function readStorage(key: string): string | null {
   try {
@@ -27,7 +43,10 @@ function writeStorage(key: string, value: string): void {
 }
 
 /** Persisted slice of the UI state. Exported so tests can simulate a reload. */
-export function readPersistedUi(): Pick<UiState, 'sidebarCollapsed' | 'expandedProjects' | 'rightPanelOpen'> {
+export function readPersistedUi(): Pick<
+  UiState,
+  'sidebarCollapsed' | 'expandedProjects' | 'rightPanelOpen' | 'rightPanelWidth'
+> {
   let expandedProjects: Record<Id, true> = {};
   try {
     const parsed: unknown = JSON.parse(readStorage(STORAGE_KEYS.expandedProjects) ?? '[]');
@@ -43,6 +62,7 @@ export function readPersistedUi(): Pick<UiState, 'sidebarCollapsed' | 'expandedP
     sidebarCollapsed: readStorage(STORAGE_KEYS.sidebarCollapsed) === '1',
     expandedProjects,
     rightPanelOpen: readStorage(STORAGE_KEYS.rightPanelOpen) === '1',
+    rightPanelWidth: readPanelWidth(),
   };
 }
 
@@ -95,6 +115,10 @@ export interface UiState {
   setRightPanelOpen(open: boolean): void;
   toggleRightPanel(): void;
 
+  /** Right panel width in px. Persisted (`openvern.rightPanelWidth`). The user sets it with the resize handle. */
+  rightPanelWidth: number;
+  setRightPanelWidth(px: number): void;
+
   /** Expanded project rows in the sidebar (D5), by project id. Persisted (`openvern.expandedProjects`). */
   expandedProjects: Record<Id, true>;
   toggleProject(id: Id): void;
@@ -131,6 +155,11 @@ export const useUiStore = create<UiState>()((set, get) => ({
     set({ rightPanelOpen: open });
   },
   toggleRightPanel: () => get().setRightPanelOpen(!get().rightPanelOpen),
+  setRightPanelWidth: (px) => {
+    const rightPanelWidth = clampPanelWidth(px);
+    writeStorage(STORAGE_KEYS.rightPanelWidth, String(rightPanelWidth));
+    set({ rightPanelWidth });
+  },
 
   toggleProject: (id) => (get().expandedProjects[id] ? get().collapseProject(id) : get().expandProject(id)),
   expandProject: (id) => {

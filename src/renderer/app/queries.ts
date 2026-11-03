@@ -1,10 +1,12 @@
 // Shared server-data hooks for the S6 features (sidebar, header, modals). Keys come from `lib/query-keys.ts`.
 
+import { DRAFT_PANEL_CHAT_ID } from '@renderer/features/right-panel/panel-store';
 import { useApiClient } from '@renderer/lib/api-context';
 import { queryKeys } from '@renderer/lib/query-keys';
-import { paths } from '@renderer/lib/routes';
+import { NEW_CHAT_PROJECT_PARAM, paths } from '@renderer/lib/routes';
+import type { Id } from '@shared/types';
 import { useQuery } from '@tanstack/react-query';
-import { useMatch } from 'react-router';
+import { useMatch, useSearchParams } from 'react-router';
 
 export function useProjects() {
   const api = useApiClient();
@@ -30,6 +32,29 @@ export function useCurrentChatId(): string | undefined {
  * Where "New chat" / `Ctrl+N` go: `#/new`, with the project of the chat on screen preselected (S7.15), if any.
  * Chats without a project, or any other screen, give plain `#/new`.
  */
+/**
+ * The chat the right panel belongs to, plus the folder it should list.
+ * On `#/new` there is no chat yet (`DRAFT_PANEL_CHAT_ID`); a project in `?project=` is listed, otherwise home.
+ */
+export function useRightPanelTarget(): { chatId: Id; projectId: Id | null | undefined } | null {
+  const currentChatId = useCurrentChatId();
+  const onNew = useMatch('/new') !== null;
+  const [params] = useSearchParams();
+  const projects = useProjects();
+  const chats = useChats();
+
+  if (currentChatId) {
+    // `undefined` until the chat list arrives, so a project chat doesn't briefly list the home folder.
+    if (!chats.data) return { chatId: currentChatId, projectId: undefined };
+    return { chatId: currentChatId, projectId: chats.data.find((c) => c.id === currentChatId)?.projectId ?? null };
+  }
+  if (!onNew) return null;
+  const param = params.get(NEW_CHAT_PROJECT_PARAM);
+  const known = param !== null && (projects.data?.some((p) => p.id === param) ?? false);
+  const projectId = param !== null && (known || !projects.data) ? param : null;
+  return { chatId: DRAFT_PANEL_CHAT_ID, projectId };
+}
+
 export function useNewChatPath(): string {
   const currentChatId = useCurrentChatId();
   const chats = useChats();

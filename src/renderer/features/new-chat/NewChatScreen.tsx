@@ -9,6 +9,8 @@ import { useRunsStore } from '../../stores/runs';
 import { Composer, type ComposerSendInput } from '../composer/Composer';
 import { resolveDefaultModel } from '../composer/models';
 import { useModels, useProjects, useRunDeps, useSettings } from '../composer/queries';
+import { RightPanelToggle } from '../right-panel';
+import { DRAFT_PANEL_CHAT_ID } from '../right-panel/panel-store';
 import { ProjectChip } from './ProjectChip';
 
 /** `#/new`: hero, new composer and the project chip. Preselects the project in `?project=<id>`. */
@@ -68,20 +70,26 @@ export function NewChatScreen() {
   );
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto px-6 pt-12 pb-[72px]">
-      <div className="my-auto flex w-full max-w-[720px] flex-col gap-7">
-        <h1 className="m-0 text-center font-display text-[44px] leading-[1.1] font-bold tracking-[-0.03em] text-text max-sm:text-[34px]">
-          What are we building<span className="text-accent">?</span>
-        </h1>
-        <Composer
-          variant="new"
-          model={model}
-          onModelChange={setPicked}
-          projectId={projectId}
-          onSend={onSend}
-          autoFocus
-          projectSlot={<ProjectChip projects={projects} value={projectId} onChange={onProjectChange} />}
-        />
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex min-h-(--height-header) shrink-0 items-center justify-end pr-3">
+        <RightPanelToggle />
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto px-6 pb-[72px]">
+        <div className="my-auto flex w-full max-w-[720px] flex-col gap-7">
+          <h1 className="m-0 text-center font-display text-[44px] leading-[1.1] font-bold tracking-[-0.03em] text-text max-sm:text-[34px]">
+            What are we building<span className="text-accent">?</span>
+          </h1>
+          <Composer
+            variant="new"
+            model={model}
+            onModelChange={setPicked}
+            projectId={projectId}
+            onSend={onSend}
+            autoFocus
+            sinkKey={DRAFT_PANEL_CHAT_ID}
+            projectSlot={<ProjectChip projects={projects} value={projectId} onChange={onProjectChange} />}
+          />
+        </div>
       </div>
     </div>
   );

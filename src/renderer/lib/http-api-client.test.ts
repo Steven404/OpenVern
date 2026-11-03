@@ -124,6 +124,16 @@ describe('HttpApiClient', () => {
       expect(r.init?.method).toBe('GET');
     });
 
+    it('lists and reads the home directory', async () => {
+      expect((await calls((a) => a.listHomeFiles())).url).toBe('/api/home/files');
+      const r = await calls((a) => a.readHomeFile('Docs/a b.txt'));
+      expect(r.url).toBe('/api/home/files/content?path=Docs%2Fa%20b.txt');
+      const att = await calls((a) => a.attachHomeFile('note.txt'));
+      expect(att.url).toBe('/api/home/files/attach');
+      expect(att.init?.method).toBe('POST');
+      expect(att.init?.body).toBe('{"path":"note.txt"}');
+    });
+
     it('attaches a project file', async () => {
       const { url, init } = await calls((a) => a.attachProjectFile('p1', 'a.png'));
       expect(url).toBe('/api/projects/p1/files/attach');

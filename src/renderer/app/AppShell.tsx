@@ -14,7 +14,7 @@ import { useUiStore } from '@renderer/stores/ui';
 import { APP_NAME, LAYOUT } from '@shared/constants';
 import { useCallback, useEffect, useRef } from 'react';
 import { Outlet } from 'react-router';
-import { useCurrentChatId } from './queries';
+import { useCurrentChatId, useRightPanelTarget } from './queries';
 import { useGlobalShortcuts } from './shortcuts';
 
 const OPEN_SIDEBAR_BUTTON_ID = 'sidebar-open';
@@ -25,6 +25,7 @@ export function AppShell() {
   const toggleRightPanel = useUiStore((s) => s.toggleRightPanel);
   const panelOpen = useUiStore((s) => s.rightPanelOpen);
   const currentChatId = useCurrentChatId();
+  const panelTarget = useRightPanelTarget();
 
   // `ChatHeader` titles the window after its chat; everywhere else it is just the app name.
   useEffect(() => {
@@ -45,7 +46,7 @@ export function AppShell() {
   const setVisible = useCallback((next: boolean) => setCollapsed(!next), [setCollapsed]);
   const toggleSidebar = useCallback(() => setVisible(!visible), [setVisible, visible]);
 
-  useGlobalShortcuts({ toggleSidebar, toggleRightPanel: currentChatId ? toggleRightPanel : undefined });
+  useGlobalShortcuts({ toggleSidebar, toggleRightPanel: panelTarget ? toggleRightPanel : undefined });
 
   return (
     <div
@@ -82,7 +83,7 @@ export function AppShell() {
         <Outlet />
       </main>
 
-      {currentChatId && panelOpen ? <RightPanel chatId={currentChatId} /> : null}
+      {panelTarget && panelOpen ? <RightPanel chatId={panelTarget.chatId} projectId={panelTarget.projectId} /> : null}
 
       <SettingsModal />
       <NewProjectModal />

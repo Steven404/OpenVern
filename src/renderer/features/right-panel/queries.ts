@@ -3,11 +3,16 @@ import { queryKeys } from '@renderer/lib/query-keys';
 import type { Id } from '@shared/types';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
+import { DRAFT_PANEL_CHAT_ID } from './panel-store';
 
 /** The chat's proposed / applied edits. G5 keeps this query fresh from `changes_updated`. */
 export function useChatChanges(chatId: Id) {
   const api = useApiClient();
-  return useQuery({ queryKey: queryKeys.chatChanges(chatId), queryFn: () => api.getChatChanges(chatId) });
+  return useQuery({
+    queryKey: queryKeys.chatChanges(chatId),
+    queryFn: () => api.getChatChanges(chatId),
+    enabled: chatId !== DRAFT_PANEL_CHAT_ID,
+  });
 }
 
 /** Diff launcher rule: pending or applied edits exist. */

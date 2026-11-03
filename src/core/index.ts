@@ -72,7 +72,12 @@ export async function createCore(deps: CoreDeps): Promise<Core> {
     agent,
     provider,
     changes,
-    projectFiles: createProjectFilesService({ projects, deniedRoots, deniedFiles }),
+    projectFiles: createProjectFilesService({
+      projects,
+      deniedRoots,
+      deniedFiles,
+      homeDir: deps.homeDir ?? os.homedir(),
+    }),
     version: deps.version,
   };
 }

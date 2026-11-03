@@ -5,6 +5,7 @@ import { cx } from '@renderer/components/ui';
 import { ApiError } from '@renderer/lib/api-client';
 import { useApiClient } from '@renderer/lib/api-context';
 import { queryKeys } from '@renderer/lib/query-keys';
+import type { HomeFileTree } from '@shared/types';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronRight, ChevronsDownUp, Folder, Lock, Search } from 'lucide-react';
 import { useMemo } from 'react';
@@ -18,12 +19,15 @@ export function FilesSurface({ chatId, projectId }: SurfaceProps) {
   const projects = useProjects();
   const state = useChatPanelState(chatId);
   const { setQuery, toggleFolder, collapseAll, openFile } = usePanelStore.getState();
+  const pending = projectId === undefined;
+  const home = projectId === null;
   const tree = useQuery({
-    queryKey: queryKeys.projectFiles(projectId ?? ''),
-    queryFn: () => api.listProjectFiles(projectId as string),
-    enabled: projectId !== null,
+    queryKey: home ? queryKeys.homeFiles : queryKeys.projectFiles(projectId ?? ''),
+    queryFn: () => (home ? api.listHomeFiles() : api.listProjectFiles(projectId as string)),
+    enabled: !pending,
   });
   const projectName = projects.data?.find((p) => p.id === projectId)?.name ?? '';
+  const title = home ? ((tree.data as HomeFileTree | undefined)?.root ?? 'Home') : projectName;
   const current = state.active?.type === 'file' ? state.active.path : null;
   const query = state.query;
   const rows = useMemo(
@@ -35,8 +39,8 @@ export function FilesSurface({ chatId, projectId }: SurfaceProps) {
   return (
     <>
       <div className="flex items-center gap-1 pt-2.5 pr-2 pl-4">
-        <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-text" title={projectName}>
-          {projectName}
+        <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-text" title={title}>
+          {title}
         </span>
         <button
           type="button"
@@ -63,7 +67,7 @@ export function FilesSurface({ chatId, projectId }: SurfaceProps) {
       </div>
 
       <nav
-        aria-label="Project files"
+        aria-label={home ? 'Home files' : 'Project files'}
         className="min-h-[120px] flex-1 basis-0 overflow-y-auto px-2 pt-1 pb-2 [scrollbar-color:var(--color-border-control)_transparent] [scrollbar-width:thin]"
       >
         {tree.isPending ? (
@@ -71,7 +75,11 @@ export function FilesSurface({ chatId, projectId }: SurfaceProps) {
         ) : tree.error ? (
           <div className="m-4 flex flex-col items-start gap-2 text-[13px] text-text-muted">
             <p className="m-0">
-              {tree.error instanceof ApiError ? tree.error.info.message : "Couldn't load the project files."}
+              {tree.error instanceof ApiError
+                ? tree.error.info.message
+                : home
+                  ? "Couldn't load your home folder."
+                  : "Couldn't load the project files."}
             </p>
             <button
               type="button"
@@ -83,7 +91,7 @@ export function FilesSurface({ chatId, projectId }: SurfaceProps) {
           </div>
         ) : rows.length === 0 ? (
           <p className="mx-2.5 my-4 text-[13px] text-text-muted">
-            {filtering ? `No files match “${query}”.` : 'This project has no files.'}
+            {filtering ? `No files match “${query}”.` : home ? 'This folder is empty.' : 'This project has no files.'}
           </p>
         ) : (
           <ul className="m-0 flex list-none flex-col p-0">
@@ -131,7 +139,8 @@ export function FilesSurface({ chatId, projectId }: SurfaceProps) {
         )}
         {tree.data?.truncated ? (
           <p className="mx-2.5 my-2 text-xs text-text-faint">
-            This project is large, so only part of it is listed. Use the filter to narrow it down.
+            {home ? 'This folder is large' : 'This project is large'}, so only part of it is listed. Use the filter to
+            narrow it down.
           </p>
         ) : null}
       </nav>

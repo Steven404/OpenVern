@@ -8,6 +8,7 @@ import type {
   Chat,
   ChatChanges,
   ChatSummary,
+  HomeFileTree,
   Id,
   ModelInfo,
   Project,
@@ -46,6 +47,10 @@ export interface ApiClient {
   listProjectFiles(projectId: Id): Promise<ProjectFileTree>;
   readProjectFile(projectId: Id, path: string): Promise<ProjectFileContent>;
   attachProjectFile(projectId: Id, path: string): Promise<AttachmentRef>;
+  /** Home directory, used when a chat has no project. */
+  listHomeFiles(): Promise<HomeFileTree>;
+  readHomeFile(path: string): Promise<ProjectFileContent>;
+  attachHomeFile(path: string): Promise<AttachmentRef>;
   getChatChanges(chatId: Id): Promise<ChatChanges>;
   applyChatChanges(chatId: Id, body: ApplyChangesBody): Promise<ApplyChangesResponse>;
   discardChatChanges(chatId: Id): Promise<ChatChanges>;

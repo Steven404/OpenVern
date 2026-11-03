@@ -24,6 +24,8 @@ export interface Harness {
   dataDir: string;
   /** A temp project folder containing `README.md`. */
   projectDir: string;
+  /** A temp stand-in for the user's home directory (`note.txt` and a denied `.env`). */
+  homeDir: string;
   /** `app.request` with `X-OpenVern-Client: 1`; objects are sent as JSON. */
   call(
     path: string,
@@ -42,8 +44,12 @@ export async function createHarness(opts: HarnessOptions = {}): Promise<Harness>
   const root = await mkdtemp(path.join(tmpdir(), 'openvern-server-'));
   const dataDir = path.join(root, 'data');
   const projectDir = path.join(root, 'project');
+  const homeDir = path.join(root, 'home');
   await mkdir(projectDir, { recursive: true });
+  await mkdir(homeDir, { recursive: true });
   await writeFile(path.join(projectDir, 'README.md'), '# Demo project\n\nHello from the README.\n');
+  await writeFile(path.join(homeDir, 'note.txt'), 'hello from home\n');
+  await writeFile(path.join(homeDir, '.env'), 'SECRET=1\n');
 
   const provider = createFakeProvider({ delayMs: 0, script: opts.script });
   const real = await createCore({
@@ -52,6 +58,7 @@ export async function createHarness(opts: HarnessOptions = {}): Promise<Harness>
     provider: opts.wrapProvider ? opts.wrapProvider(provider) : provider,
     mode: 'dev',
     version: '9.9.9',
+    homeDir,
   });
   const changes = createMemoryChanges();
   const core: Core = { ...real, changes };
@@ -64,6 +71,7 @@ export async function createHarness(opts: HarnessOptions = {}): Promise<Harness>
     provider,
     dataDir,
     projectDir,
+    homeDir,
     async call(p, init = {}) {
       const { json, headers, ...rest } = init;
       const h = new Headers(headers);

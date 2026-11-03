@@ -35,6 +35,20 @@ export function projectRoutes(core: Core): Hono {
     return c.json(await core.attachments.create(file));
   });
 
+  r.get(ROUTES.homeFiles, async (c) => c.json(await core.projectFiles.homeTree(c.req.raw.signal)));
+
+  r.get(ROUTES.homeFileContent, async (c) => {
+    const p = c.req.query('path');
+    if (!p) throw new CoreError('invalid_request', 'Missing "path" query parameter.');
+    return c.json(await core.projectFiles.homeRead(p));
+  });
+
+  r.post(ROUTES.homeFileAttach, async (c) => {
+    const { path } = await readJson(c, attachProjectFileBody);
+    const file = await core.projectFiles.homeReadBytes(path);
+    return c.json(await core.attachments.create(file));
+  });
+
   r.delete(ROUTES.project, async (c) => {
     const id = c.req.param('id');
     // §3.2: removing a project discards its chats' pending edits (they move to "Chats" and could never be applied).

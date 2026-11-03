@@ -8,6 +8,7 @@ import type {
   Chat,
   ChatChanges,
   ChatSummary,
+  HomeFileTree,
   Id,
   ModelInfo,
   Project,
@@ -142,6 +143,15 @@ export class HttpApiClient implements ApiClient {
   }
   attachProjectFile(projectId: Id, path: string) {
     return this.json<AttachmentRef>('POST', `/projects/${enc(projectId)}/files/attach`, { path });
+  }
+  listHomeFiles() {
+    return this.json<HomeFileTree>('GET', '/home/files');
+  }
+  readHomeFile(path: string) {
+    return this.json<ProjectFileContent>('GET', `/home/files/content?path=${enc(path)}`);
+  }
+  attachHomeFile(path: string) {
+    return this.json<AttachmentRef>('POST', '/home/files/attach', { path });
   }
   getChatChanges(chatId: Id) {
     return this.json<ChatChanges>('GET', `/chats/${enc(chatId)}/changes`);

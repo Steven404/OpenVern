@@ -138,7 +138,7 @@ function HunkBlock({
   );
 }
 
-export function DiffSurface({ chatId, params, panelWidth, setWidth }: SurfaceProps) {
+export function DiffSurface({ chatId, params, panelWidth }: SurfaceProps) {
   const api = useApiClient();
   const queryClient = useQueryClient();
   const changes = useChatChanges(chatId);
@@ -161,11 +161,6 @@ export function DiffSurface({ chatId, params, panelWidth, setWidth }: SurfacePro
   const room = windowWidth - (sidebarCollapsed ? 0 : LAYOUT.sidebar) - LAYOUT.conversationMin;
   const splitDisabled = windowWidth > 0 && room < LAYOUT.splitMin && !(panelWidth >= LAYOUT.splitMin);
   const effMode: DiffMode = splitDisabled ? 'unified' : mode;
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `setWidth` is a new function on every render
-  useEffect(() => {
-    setWidth(effMode === 'split' ? LAYOUT.panelDiffSplit : LAYOUT.panelDiff);
-  }, [effMode]);
 
   // Opened on a file (`openPanelSurface(chatId, 'diff', { path })`); a new params object per call.
   // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the params object on purpose

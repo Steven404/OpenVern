@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { LIMITS } from '@shared/constants';
@@ -55,6 +55,25 @@ describe('ProjectFilesService', () => {
     expect(r.truncated).toBe(true);
     expect(r.content).not.toContain('�');
     expect(r.size).toBeGreaterThan(LIMITS.viewerMaxBytes);
+  });
+
+  it('lists the home directory and refuses to leave it', async () => {
+    await writeFile(path.join(dir, 'note.txt'), 'hi\n');
+    await writeFile(path.join(dir, '.env'), 'SECRET=1\n');
+    const home = createProjectFilesService({
+      projects: {
+        get: async () => {
+          throw new Error('unused');
+        },
+      },
+      homeDir: dir,
+    });
+    const tree = await home.homeTree();
+    expect(tree.root).toBe(await realpath(dir));
+    expect(tree.entries.map((e) => e.path)).toEqual(['note.txt']);
+    expect((await home.homeRead('note.txt')).content).toBe('hi\n');
+    await expect(home.homeRead('.env')).rejects.toBeInstanceOf(CoreError);
+    await expect(home.homeRead('../note.txt')).rejects.toBeInstanceOf(CoreError);
   });
 
   it('counts lines and rejects directories and denied files', async () => {

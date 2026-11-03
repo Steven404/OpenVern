@@ -9,6 +9,7 @@ import type {
   Chat,
   ChatChanges,
   ChatSummary,
+  HomeFileTree,
   HunkDecision,
   Id,
   IsoDate,
@@ -36,6 +37,8 @@ export interface CoreDeps {
   mode: 'dev' | 'prod';
   /** The app version (`pkg.version` in dev, `app.getVersion()` in Electron). */
   version: string;
+  /** Files panel root for chats with no project. Defaults to the user's home directory. */
+  homeDir?: string;
 }
 
 // ── S1 ──────────────────────────────────────────────────────────────────────────────────────────
@@ -177,6 +180,10 @@ export interface ProjectFilesService {
   read(projectId: Id, relPath: string): Promise<ProjectFileContent>;
   /** Raw bytes for "Attach" (images aren't text). Same sandbox as `read`; throws `file_too_large` over the image limit. */
   readBytes(projectId: Id, relPath: string): Promise<{ name: string; bytes: Uint8Array }>;
+  /** Home directory listing for a chat that has no project. Same walker, ignore rules and deny list as `tree`. */
+  homeTree(signal?: AbortSignal): Promise<HomeFileTree>;
+  homeRead(relPath: string): Promise<ProjectFileContent>;
+  homeReadBytes(relPath: string): Promise<{ name: string; bytes: Uint8Array }>;
 }
 
 export type CreateCore = (deps: CoreDeps) => Promise<Core>;

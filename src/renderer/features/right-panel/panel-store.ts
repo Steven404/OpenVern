@@ -5,6 +5,9 @@ import type { Id } from '@shared/types';
 import { create } from 'zustand';
 import type { SurfaceId } from './surfaces';
 
+/** Panel state for the new-chat screen, which has no chat id yet. */
+export const DRAFT_PANEL_CHAT_ID = '__draft__';
+
 /** What the panel body shows. `launcher` is the "Open a panel" list. */
 export type PanelTarget = { type: 'launcher' } | { type: 'surface'; id: SurfaceId } | { type: 'file'; path: string };
 

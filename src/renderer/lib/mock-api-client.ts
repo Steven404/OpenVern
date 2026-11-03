@@ -14,6 +14,7 @@ import type {
   ChatChanges,
   ChatSummary,
   FileChange,
+  HomeFileTree,
   Id,
   Message,
   ModelInfo,
@@ -426,8 +427,27 @@ export class MockApiClient implements ApiClient {
 
   async attachProjectFile(projectId: Id, path: string): Promise<AttachmentRef> {
     const file = await this.readProjectFile(projectId, path);
+    return this.attachListed(file);
+  }
+
+  async listHomeFiles(): Promise<HomeFileTree> {
+    await this.pause(this.delayMs);
+    return { ...sampleFileTree(), root: '/home/you' };
+  }
+
+  async readHomeFile(path: string): Promise<ProjectFileContent> {
+    await this.pause(this.delayMs);
+    return sampleFileContent(path) ?? fail('not_found', 404, 'That file does not exist.');
+  }
+
+  async attachHomeFile(path: string): Promise<AttachmentRef> {
+    const file = await this.readHomeFile(path);
+    return this.attachListed(file);
+  }
+
+  private attachListed(file: ProjectFileContent): AttachmentRef {
     if (file.content === null) return fail('unsupported_file', 415);
-    const name = path.split('/').pop() ?? path;
+    const name = file.path.split('/').pop() ?? file.path;
     const ref: AttachmentRef = { id: crypto.randomUUID(), name, mime: 'text/plain', size: file.size, kind: 'text' };
     this.attachments.set(ref.id, { ref, blob: new Blob([file.content], { type: 'text/plain' }), bound: false });
     return clone(ref);

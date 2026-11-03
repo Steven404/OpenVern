@@ -177,6 +177,11 @@ export interface ProjectFileTree {
   entries: ProjectFileEntry[]; // sorted: dirs first, then case-insensitive name, depth-first
   truncated: boolean;
 }
+/** The Files panel when a chat has no project: the same tree, rooted at the user's home directory. */
+export interface HomeFileTree extends ProjectFileTree {
+  /** Absolute home path, shown as the tree title. */
+  root: string;
+}
 export interface ProjectFileContent {
   path: string;
   size: number;

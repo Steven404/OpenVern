@@ -14,5 +14,7 @@ export const queryKeys = {
   chat: (id: Id) => ['chat', id] as const,
   projectFiles: (projectId: Id) => ['projectFiles', projectId] as const,
   projectFile: (projectId: Id, path: string) => ['projectFile', projectId, path] as const,
+  homeFiles: ['homeFiles'] as const,
+  homeFile: (path: string) => ['homeFile', path] as const,
   chatChanges: (chatId: Id) => ['chatChanges', chatId] as const,
 };

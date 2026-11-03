@@ -21,7 +21,8 @@ export interface SurfaceContext {
 
 export interface SurfaceProps {
   chatId: Id;
-  projectId: Id | null;
+  /** `undefined` while the chat's project is still loading. `null` means there is no project (list the home folder). */
+  projectId: Id | null | undefined;
   /**
    * What the last `openPanelSurface(chatId, id, params)` passed (`{}` if nothing). A new object per call, so an
    * effect keyed on it re-runs when the same file is opened again.
@@ -29,7 +30,10 @@ export interface SurfaceProps {
   params: unknown;
   /** Current measured panel width in px (0 before the first measurement). Split needs `>= LAYOUT.splitMin`. */
   panelWidth: number;
-  /** Ask for a different panel width (`LAYOUT.panelDiff` / `panelDiffSplit`), or `null` for the default. */
+  /**
+   * Unused by the shell: the panel width is the user's, from the resize handle. Kept so a surface can still ask
+   * without the shell having to change shape.
+   */
   setWidth(px: number | null): void;
 }
 
@@ -58,7 +62,7 @@ const registry: SurfaceDefinition[] = [
     availability: ({ projectId }) =>
       projectId
         ? { enabled: true, hint: 'Browse the project, read-only' }
-        : { enabled: false, hint: 'Only for chats in a project' },
+        : { enabled: true, hint: 'Browse your home folder, read-only' },
     tab: 'pinned',
     width: LAYOUT.panelFiles,
     Component: FilesSurface,

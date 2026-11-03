@@ -27,16 +27,25 @@ export function FileViewer({
   onBack,
 }: {
   chatId: Id;
-  projectId: Id;
+  projectId: Id | null | undefined;
   path: string;
   onBack: () => void;
 }) {
   const api = useApiClient();
   const projects = useProjects();
-  const projectName = projects.data?.find((p) => p.id === projectId)?.name ?? 'Files';
+  const home = projectId === null;
+  const homeTree = useQuery({
+    queryKey: queryKeys.homeFiles,
+    queryFn: () => api.listHomeFiles(),
+    enabled: home,
+  });
+  const projectName = home
+    ? (homeTree.data?.root ?? 'Home')
+    : (projects.data?.find((p) => p.id === projectId)?.name ?? 'Files');
   const file = useQuery({
-    queryKey: queryKeys.projectFile(projectId, path),
-    queryFn: () => api.readProjectFile(projectId, path),
+    queryKey: home ? queryKeys.homeFile(path) : queryKeys.projectFile(projectId ?? '', path),
+    queryFn: () => (home ? api.readHomeFile(path) : api.readProjectFile(projectId as Id, path)),
+    enabled: projectId !== undefined,
   });
   const content = file.data?.content ?? null;
   const lines = useMemo(() => {
@@ -65,7 +74,7 @@ export function FileViewer({
   const onAttach = async () => {
     setAttach({ busy: true, error: null });
     try {
-      const ref = await api.attachProjectFile(projectId, path);
+      const ref = home ? await api.attachHomeFile(path) : await api.attachProjectFile(projectId as Id, path);
       if (!addAttachmentRef(chatId, ref)) {
         void api.deleteAttachment(ref.id).catch(() => {});
         setAttach({ busy: false, error: "Couldn't find the message box." });
