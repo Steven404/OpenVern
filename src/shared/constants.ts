@@ -38,8 +38,6 @@ export const LAYOUT = {
   conversationMin: 420,
   panelMin: 380,
   panelFiles: 380,
-  panelViewer: 560,
-  panelDiff: 600,
   panelDiffSplit: 800,
   /** Below this panel width Split is disabled. */
   splitMin: 640,

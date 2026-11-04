@@ -19,7 +19,10 @@ function isDeniedName(name: string): boolean {
   if (n === 'secrets.json') return true;
   if (n.startsWith('.env.') && !SAFE_ENV_NAMES.has(n)) return true;
   if (n.endsWith('.pem') || n.endsWith('.key') || n.endsWith('.p12')) return true;
-  if (n.startsWith('id_rsa') || n.startsWith('id_ed25519')) return true;
+  if (n.startsWith('id_rsa') || n.startsWith('id_ed25519') || n.startsWith('id_ecdsa') || n.startsWith('id_dsa')) {
+    return true;
+  }
+  if (n === '.git-credentials' || n === '.netrc' || n === '_netrc') return true;
   return false;
 }
 
@@ -103,6 +106,11 @@ export interface SandboxOptions {
    * against the denied file's current inode.
    */
   deniedFiles?: readonly string[];
+  /**
+   * Extra deny rule over the root-relative POSIX path (`''` for the root itself), applied to both the lexical and the
+   * real path. Used for the home folder's deny layer, which projects don't share.
+   */
+  isDeniedRel?: (relPosix: string) => boolean;
 }
 
 /** True when `info` (a regular file with more than one link) is the same inode as one of `deniedFiles`. */
@@ -151,7 +159,11 @@ export async function resolveInProject(
     abs = path.join(realRoot, path.relative(lexicalRoot, abs));
   }
   if (!isInside(realRoot, abs)) return { ok: false, kind: 'outside', message: OUTSIDE_MESSAGE };
-  if (isDeniedPath(path.relative(realRoot, abs)) || isWithinAny(deniedRoots, abs)) {
+  if (
+    isDeniedPath(path.relative(realRoot, abs)) ||
+    isWithinAny(deniedRoots, abs) ||
+    opts.isDeniedRel?.(toPosix(path.relative(realRoot, abs)))
+  ) {
     return { ok: false, kind: 'blocked', message: BLOCKED_MESSAGE };
   }
 
@@ -166,7 +178,7 @@ export async function resolveInProject(
   }
   if (!isInside(realRoot, real)) return { ok: false, kind: 'outside', message: OUTSIDE_MESSAGE };
   const rel = toPosix(path.relative(realRoot, real));
-  if (isDeniedPath(rel) || isWithinAny(deniedRoots, real)) {
+  if (isDeniedPath(rel) || isWithinAny(deniedRoots, real) || opts.isDeniedRel?.(rel)) {
     return { ok: false, kind: 'blocked', message: BLOCKED_MESSAGE };
   }
   // The real path (or a directory above it) may be a data dir of any name; ancestors only, to keep the cost bounded.
@@ -210,7 +222,7 @@ export async function resolveForWrite(
       return { ok: false, kind: 'invalid', message: `Cannot create ${res.rel}: ${anc.rel || '.'} is not a directory` };
     }
     const rel = [anc.rel, ...missing].filter(Boolean).join('/');
-    if (isDeniedPath(rel)) return { ok: false, kind: 'blocked', message: BLOCKED_MESSAGE };
+    if (isDeniedPath(rel) || opts.isDeniedRel?.(rel)) return { ok: false, kind: 'blocked', message: BLOCKED_MESSAGE };
     return { ok: true, abs: path.join(anc.abs, ...missing), rel, root: anc.root, exists: false };
   }
 }

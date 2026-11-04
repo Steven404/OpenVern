@@ -236,7 +236,7 @@ The original warm theme, kept for a future theme setting. Same token names, warm
 
 A flex row that wraps: sidebar (272px, fixed basis) then content (`flex: 999 1 560px; min-width: 0`). The conversation and composer centre in a 760px column (New chat: 720px). The header is 64px with a 1px divider. Turns are 32px apart; inside a turn, 14px. Side padding is 24px. There is no overlay mode: the minimum window is 1080×720 (`LAYOUT` in `src/shared/constants.ts`), which fits the sidebar, a 420px conversation and a 380px panel without wrapping.
 
-The **right panel** docks to the right of the conversation (1px left border, sidebar colour, 220ms width transition, 12px slide-in). Its width depends on what it shows: 380px for Files, 560px for an open file, 600px for Diff (800px in split view). The conversation shrinks to a 420px floor; the panel to 380px. Split is disabled when the window can't hold the wider panel next to the sidebar and the conversation.
+The **right panel** docks to the right of the conversation (1px left border, sidebar colour, 220ms width transition, 12px slide-in). Its width depends on what it shows: 380px for Files, 560px for an open file, 600px for Diff (800px in split view). The conversation shrinks to a 420px floor; the panel to 380px. Split is disabled when the window can't hold the wider panel next to the sidebar and the conversation. Picking Split widens the panel to up to 800px when the window has room; the panel never resizes on its own otherwise.
 
 ## Elevation & Depth
 

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { link, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { LIMITS } from '@shared/constants';
@@ -82,5 +82,90 @@ describe('ProjectFilesService', () => {
     expect((await svc().read('p', 'a.txt')).totalLines).toBe(3);
     await expect(svc().read('p', 'secrets.json')).rejects.toBeInstanceOf(CoreError);
     await expect(svc().read('p', '')).rejects.toMatchObject({ code: 'invalid_request' });
+  });
+});
+
+describe('home deny layer', () => {
+  const home = () =>
+    createProjectFilesService({
+      projects: {
+        get: async () => {
+          throw new Error('unused');
+        },
+      },
+      homeDir: dir,
+    });
+  const put = async (rel: string, content = 'x\n') => {
+    await mkdir(path.dirname(path.join(dir, rel)), { recursive: true });
+    await writeFile(path.join(dir, rel), content);
+  };
+  const denied = [
+    '.ssh/config',
+    '.ssh/id_ecdsa',
+    '.aws/credentials',
+    '.netrc',
+    '.git-credentials',
+    '.npmrc',
+    '.config/gh/hosts.yml',
+    '.mozilla/x',
+    'snap/firefox/common/x',
+    'Library/Keychains/k',
+    'code/app/.npmrc',
+    'dotfiles/ssh/.ssh/config',
+  ];
+
+  beforeEach(async () => {
+    for (const f of [...denied, 'note.txt', 'code/app/README.md']) await put(f);
+  });
+
+  it('hides dotfiles, app-data folders and credential folders at any depth', async () => {
+    const { entries } = await home().homeTree();
+    expect(entries.map((e) => e.path)).toEqual([
+      'code',
+      'code/app',
+      'code/app/README.md',
+      'dotfiles',
+      'dotfiles/ssh',
+      'note.txt',
+    ]);
+  });
+
+  it('refuses to read every denied path, whatever the spelling', async () => {
+    const svc = home();
+    for (const p of [
+      ...denied,
+      '.SSH/config',
+      'code/../.ssh/config',
+      'LIBRARY/Keychains/k',
+      'dotfiles/ssh/.SSH/config',
+    ]) {
+      await expect(svc.homeRead(p), p).rejects.toBeInstanceOf(CoreError);
+      await expect(svc.homeReadBytes(p), p).rejects.toBeInstanceOf(CoreError);
+    }
+    expect((await svc.homeRead('code/app/README.md')).content).toBe('x\n');
+  });
+
+  it('hides the target of a symlinked denied entry', async () => {
+    await rm(path.join(dir, '.aws'), { recursive: true });
+    await put('dotfiles/aws/credentials', 'aws_secret_access_key=1\n');
+    await symlink(path.join(dir, 'dotfiles', 'aws'), path.join(dir, '.aws'));
+    const svc = home();
+    const paths = (await svc.homeTree()).entries.map((e) => e.path);
+    expect(paths).not.toContain('dotfiles/aws');
+    expect(paths).not.toContain('dotfiles/aws/credentials');
+    await expect(svc.homeRead('dotfiles/aws/credentials')).rejects.toBeInstanceOf(CoreError);
+    await expect(svc.homeRead('.aws/credentials')).rejects.toBeInstanceOf(CoreError);
+  });
+
+  it('rejects hardlinked files', async () => {
+    await link(path.join(dir, '.aws', 'credentials'), path.join(dir, 'creds-copy'));
+    const svc = home();
+    await expect(svc.homeRead('creds-copy')).rejects.toMatchObject({ code: 'invalid_request' });
+    await expect(svc.homeReadBytes('creds-copy')).rejects.toMatchObject({ code: 'invalid_request' });
+  });
+
+  it('does not apply to projects', async () => {
+    expect((await svc().read('p', '.npmrc')).content).toBe('x\n');
+    expect((await svc().read('p', 'code/app/.npmrc')).content).toBe('x\n');
   });
 });

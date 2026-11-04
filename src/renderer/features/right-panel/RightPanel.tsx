@@ -10,13 +10,23 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from 'react';
 import { FileViewer } from '../files/FileViewer';
 import { FileIcon, PlusIcon, XIcon } from './icons';
 import { Launcher } from './Launcher';
-import { type PanelTab, type PanelTarget, tabKey, useChatPanelState, usePanelStore } from './panel-store';
+import { availablePanelWidth } from './layout';
+import {
+  type PanelTab,
+  type PanelTarget,
+  resetFileState,
+  rootKey,
+  tabKey,
+  useChatPanelState,
+  usePanelStore,
+} from './panel-store';
 import { useHasChanges, useRefreshProjectFiles } from './queries';
 import { getSurface, getSurfaces, type SurfaceContext, type SurfaceId } from './surfaces';
 
@@ -29,19 +39,21 @@ const tabOff = 'bg-transparent text-text-muted hover:bg-overlay-ghost hover:text
 
 const baseName = (path: string) => path.slice(path.lastIndexOf('/') + 1);
 
-const noopSetWidth = () => {};
-
-function availablePanelWidth(sidebarCollapsed: boolean, viewport: number): number {
-  const sidebar = sidebarCollapsed ? 0 : LAYOUT.sidebar;
-  return Math.max(LAYOUT.panelMin, viewport - sidebar - LAYOUT.conversationMin);
-}
-
 export function RightPanel({ chatId, projectId }: { chatId: Id; projectId: Id | null | undefined }) {
   const hasChanges = useHasChanges(chatId);
-  const state = useChatPanelState(chatId);
+  const stored = useChatPanelState(chatId);
+  const bindRoot = usePanelStore((s) => s.bindRoot);
+  // File tabs are relative to the folder being listed. If it changed (project chip, chat moved out of its project),
+  // show the reset state right away; the layout effect writes it back to the store.
+  const root = projectId === undefined ? undefined : rootKey(projectId);
+  useLayoutEffect(() => {
+    if (root) bindRoot(chatId, root);
+  }, [chatId, root, bindRoot]);
+  const state = root && stored.root && stored.root !== root ? resetFileState(stored, root) : stored;
   const setPanelOpen = useUiStore((s) => s.setRightPanelOpen);
   const preferredWidth = useUiStore((s) => s.rightPanelWidth);
   const setPanelWidth = useUiStore((s) => s.setRightPanelWidth);
+  const commitPanelWidth = useUiStore((s) => s.commitRightPanelWidth);
   const sidebarCollapsed = useUiStore((s) => s.sidebarCollapsed);
   const show = usePanelStore((s) => s.show);
   const closeTab = usePanelStore((s) => s.closeTab);
@@ -82,9 +94,10 @@ export function RightPanel({ chatId, projectId }: { chatId: Id; projectId: Id | 
     setDragging(true);
     const move = (ev: PointerEvent) => {
       const next = Math.round(startW + (startX - ev.clientX));
-      setPanelWidth(Math.min(max, Math.max(LAYOUT.panelMin, next)));
+      setPanelWidth(Math.min(max, Math.max(LAYOUT.panelMin, next)), { persist: false });
     };
     const up = () => {
+      commitPanelWidth();
       setDragging(false);
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
@@ -115,17 +128,6 @@ export function RightPanel({ chatId, projectId }: { chatId: Id; projectId: Id | 
     }
   };
 
-  // Measured width, for surfaces that need to know whether Split fits.
-  const ref = useRef<HTMLElement>(null);
-  const [measured, setMeasured] = useState(0);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el || typeof ResizeObserver === 'undefined') return;
-    const ro = new ResizeObserver(() => setMeasured(Math.round(el.getBoundingClientRect().width)));
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
   const close = () => {
     setPanelOpen(false);
     document.getElementById(RIGHT_PANEL_TOGGLE_ID)?.focus();
@@ -137,7 +139,6 @@ export function RightPanel({ chatId, projectId }: { chatId: Id; projectId: Id | 
 
   return (
     <aside
-      ref={ref}
       id="right-panel"
       aria-label="Right panel"
       className={cx(
@@ -260,8 +261,6 @@ export function RightPanel({ chatId, projectId }: { chatId: Id; projectId: Id | 
           chatId={chatId}
           projectId={projectId}
           params={active.type === 'surface' ? (state.params[active.id] ?? {}) : {}}
-          panelWidth={measured}
-          setWidth={noopSetWidth}
         />
       ) : null}
     </aside>

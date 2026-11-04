@@ -3,10 +3,12 @@ import { ApiError } from '@renderer/lib/api-client';
 import { makeFileChange, makeHunk, sampleProposal } from '@renderer/lib/mock-changes';
 import { queryKeys } from '@renderer/lib/query-keys';
 import { createRun, useRunsStore } from '@renderer/stores/runs';
+import { useUiStore } from '@renderer/stores/ui';
+import { LAYOUT } from '@shared/constants';
 import { errorInfo } from '@shared/errors';
 import type { PendingChanges } from '@shared/types';
 import { QueryClient } from '@tanstack/react-query';
-import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { usePanelStore } from '../right-panel/panel-store';
 import {
@@ -292,22 +294,69 @@ describe('review pane', () => {
     expect((within(p).getByRole('button', { name: 'Discard' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it('switches to the split layout when there is room', async () => {
+  const panelWidthNow = () => useUiStore.getState().rightPanelWidth;
+  const splitBtn = (p: HTMLElement) => within(p).getByRole('button', { name: 'Split' }) as HTMLButtonElement;
+
+  it('switches to the split layout when there is room, widening the panel', async () => {
     const { p } = await openReview();
-    const split = within(p).getByRole('button', { name: 'Split' }) as HTMLButtonElement;
+    const split = splitBtn(p);
     expect(split.disabled).toBe(false);
+    expect(panelWidthNow()).toBe(380);
     fireEvent.click(split);
+    expect(panelWidthNow()).toBe(LAYOUT.panelDiffSplit);
+    expect(p.style.width).toBe('800px');
     expect(split.getAttribute('aria-pressed')).toBe('true');
     expect(p.querySelector('[data-side="left"]')).toBeTruthy();
     expect(p.querySelector('[data-line="none"]')).toBeTruthy();
   });
 
+  it('keeps an already wide panel as is when Split is picked', async () => {
+    act(() => useUiStore.getState().setRightPanelWidth(700));
+    const { p } = await openReview();
+    fireEvent.click(splitBtn(p));
+    expect(panelWidthNow()).toBe(700);
+    expect(splitBtn(p).getAttribute('aria-pressed')).toBe('true');
+    expect(p.querySelector('[data-side="left"]')).toBeTruthy();
+  });
+
+  it('widens only as far as the window allows', async () => {
+    window.innerWidth = 1400;
+    const { p } = await openReview();
+    fireEvent.click(splitBtn(p));
+    expect(panelWidthNow()).toBe(708);
+    expect(p.querySelector('[data-side="left"]')).toBeTruthy();
+  });
+
+  it('falls back to unified when the panel is narrowed, and Split widens it again', async () => {
+    const { p } = await openReview();
+    fireEvent.click(splitBtn(p));
+    act(() => useUiStore.getState().setRightPanelWidth(500));
+    expect(splitBtn(p).getAttribute('aria-pressed')).toBe('false');
+    expect(within(p).getByRole('button', { name: 'Unified' }).getAttribute('aria-pressed')).toBe('true');
+    expect(p.querySelector('[data-side="left"]')).toBeNull();
+    expect(splitBtn(p).disabled).toBe(false);
+    fireEvent.click(splitBtn(p));
+    expect(panelWidthNow()).toBe(LAYOUT.panelDiffSplit);
+    expect(p.querySelector('[data-side="left"]')).toBeTruthy();
+  });
+
   it('disables Split on a narrow window', async () => {
     window.innerWidth = 1100;
     const { p } = await openReview();
-    const split = within(p).getByRole('button', { name: 'Split' }) as HTMLButtonElement;
+    const split = splitBtn(p);
     expect(split.disabled).toBe(true);
-    expect(split.title).toBe('Needs a wider panel');
+    expect(split.title).toBe('Make the window wider to use Split');
+    fireEvent.click(split);
+    expect(panelWidthNow()).toBe(380);
+  });
+
+  it('enables Split on a narrow window when the sidebar is collapsed', async () => {
+    window.innerWidth = 1100;
+    useUiStore.setState({ sidebarCollapsed: true });
+    const { p } = await openReview();
+    expect(splitBtn(p).disabled).toBe(false);
+    fireEvent.click(splitBtn(p));
+    expect(panelWidthNow()).toBe(680);
   });
 
   it('marks the placeholder for a file that is too large', async () => {

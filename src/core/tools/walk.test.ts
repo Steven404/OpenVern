@@ -129,3 +129,38 @@ describe('walk .gitignore hardening', () => {
     expect(tree.split('\n')).toContain('a.txt');
   });
 });
+
+describe('walk deny options', () => {
+  async function walkAll(r: string, extra: Partial<Parameters<typeof walk>[0]> = {}): Promise<string[]> {
+    const out: string[] = [];
+    for await (const e of walk({
+      root: r,
+      startRel: '',
+      maxDepth: Infinity,
+      signal: new AbortController().signal,
+      ...extra,
+    }))
+      out.push(e.rel);
+    return out;
+  }
+
+  it('isDeniedRel hides a directory and its whole subtree', async () => {
+    const r = path.join(base, 'rel-proj');
+    await mkdir(path.join(r, 'keep'), { recursive: true });
+    await mkdir(path.join(r, 'hide', 'deep'), { recursive: true });
+    await writeFile(path.join(r, 'keep', 'a.txt'), 'x\n');
+    await writeFile(path.join(r, 'hide', 'deep', 'b.txt'), 'x\n');
+    const isDeniedRel = (rel: string) => rel.split('/')[0] === 'hide';
+    expect(await walkAll(r, { isDeniedRel })).toEqual(['keep', 'keep/a.txt']);
+    expect(await walkAll(r, { isDeniedRel, startRel: 'hide' })).toEqual([]);
+    expect(await walkAll(r)).toContain('hide/deep/b.txt');
+  });
+
+  it('does not yield a file that is itself a denied root', async () => {
+    const r = path.join(base, 'roots-proj');
+    await mkdir(r, { recursive: true });
+    await writeFile(path.join(r, 'secret.txt'), 'x\n');
+    await writeFile(path.join(r, 'plain.txt'), 'x\n');
+    expect(await walkAll(r, { deniedRoots: [path.join(r, 'secret.txt')] })).toEqual(['plain.txt']);
+  });
+});

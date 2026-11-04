@@ -2,6 +2,7 @@ import type { ChatSummary } from '@shared/types';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
+import { resolveNewChatProject } from '../../app/queries';
 import { useApiClient } from '../../lib/api-context';
 import { queryKeys } from '../../lib/query-keys';
 import { NEW_CHAT_PROJECT_PARAM, paths } from '../../lib/routes';
@@ -10,7 +11,7 @@ import { Composer, type ComposerSendInput } from '../composer/Composer';
 import { resolveDefaultModel } from '../composer/models';
 import { useModels, useProjects, useRunDeps, useSettings } from '../composer/queries';
 import { RightPanelToggle } from '../right-panel';
-import { DRAFT_PANEL_CHAT_ID } from '../right-panel/panel-store';
+import { DRAFT_PANEL_CHAT_ID, usePanelStore } from '../right-panel/panel-store';
 import { ProjectChip } from './ProjectChip';
 
 /** `#/new`: hero, new composer and the project chip. Preselects the project in `?project=<id>`. */
@@ -30,8 +31,7 @@ export function NewChatScreen() {
   // `#/new?project=<id>`) both land on the right chip.
   const paramProject = params.get(NEW_CHAT_PROJECT_PARAM);
   const projects = projectsQuery.data ?? [];
-  const known = paramProject !== null && projects.some((p) => p.id === paramProject);
-  const projectId = paramProject !== null && (known || !projectsQuery.data) ? paramProject : null;
+  const { projectId, known } = resolveNewChatProject(paramProject, projectsQuery.data);
 
   // A project that is not in the (possibly stale) list yet, e.g. just created: refetch once.
   const refetchedFor = useRef<string | null>(null);
@@ -62,6 +62,8 @@ export function NewChatScreen() {
       );
       void queryClient.invalidateQueries({ queryKey: queryKeys.chats });
       void queryClient.invalidateQueries({ queryKey: queryKeys.projects });
+      // The panel's tabs follow the draft into the new chat, so the next New chat starts clean.
+      usePanelStore.getState().moveChat(DRAFT_PANEL_CHAT_ID, chat.id);
       // The run lives in the store, so it keeps going after this screen unmounts.
       navigate(paths.chat(chat.id));
       void send(deps, chat.id, { text, attachments, model });

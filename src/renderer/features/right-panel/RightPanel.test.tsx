@@ -1,4 +1,4 @@
-import { renderApp, resetUi, seededClient } from '@renderer/app/test-utils';
+import { openMenu, renderApp, resetUi, seededClient } from '@renderer/app/test-utils';
 import { sampleProposal } from '@renderer/lib/mock-changes';
 import { readPersistedUi, STORAGE_KEYS } from '@renderer/stores/ui';
 import { LAYOUT } from '@shared/constants';
@@ -150,6 +150,87 @@ describe('new chat screen', () => {
   });
 });
 
+describe('stale file state', () => {
+  const nav = (name: string) => within(panel()).getByRole('navigation', { name });
+
+  async function switchChip(label: string) {
+    openMenu(screen.getByRole('button', { name: /^Project:/ }));
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: label }));
+  }
+
+  async function dirty(
+    seed: Awaited<ReturnType<typeof seededClient>>,
+    route: string,
+    files: 'Project files' | 'Home files',
+  ) {
+    renderApp({ client: seed.client, route });
+    await screen.findByRole('heading', { name: 'What are we building?' });
+    openPanel();
+    await within(panel()).findByRole('navigation', { name: files });
+    fireEvent.click(await within(panel()).findByRole('button', { name: /^README\.md/ }));
+    expect(await within(panel()).findByRole('tab', { name: 'README.md', selected: true })).toBeTruthy();
+    fireEvent.click(within(panel()).getByRole('tab', { name: 'Files' }));
+    fireEvent.click(within(nav(files)).getByRole('button', { name: /^src$/ }));
+    fireEvent.change(within(panel()).getByRole('searchbox', { name: 'Filter files' }), { target: { value: 'tools' } });
+    return seed;
+  }
+
+  function expectClean() {
+    expect(within(panel()).queryByRole('tab', { name: 'README.md' })).toBeNull();
+    expect(within(panel()).getByRole('tab', { name: 'Files', selected: true })).toBeTruthy();
+    expect((within(panel()).getByRole('searchbox', { name: 'Filter files' }) as HTMLInputElement).value).toBe('');
+  }
+
+  it('switching the chip to "No project" resets the panel and lists home', async () => {
+    const seed = await seededClient();
+    await dirty(seed, `/new?project=${seed.project.id}`, 'Project files');
+    await switchChip('No project');
+    await within(panel()).findByRole('navigation', { name: 'Home files' });
+    expectClean();
+    expect(
+      (await within(nav('Home files')).findByRole('button', { name: /^src$/ })).getAttribute('aria-expanded'),
+    ).toBe('false');
+  });
+
+  it('switching to another project resets the panel', async () => {
+    const seed = await seededClient();
+    const other = seed.projects.find((p) => p.id !== seed.project.id);
+    if (!other) throw new Error('seed needs a second project');
+    await dirty(seed, `/new?project=${seed.project.id}`, 'Project files');
+    await switchChip(other.name);
+    await waitFor(() => expectClean());
+    expect(
+      (await within(nav('Project files')).findByRole('button', { name: /^src$/ })).getAttribute('aria-expanded'),
+    ).toBe('false');
+  });
+
+  it('a chat moved out of its project does not resolve old file tabs against home', async () => {
+    const seed = await seededClient();
+    const chat = await seed.client.createChat({ projectId: null, model: 'm' });
+    const read = vi.spyOn(seed.client, 'readHomeFile');
+    usePanelStore.setState({
+      chats: {
+        [chat.id]: {
+          root: 'project:x',
+          tabs: [{ type: 'file', path: 'src/index.ts' }],
+          active: { type: 'file', path: 'src/index.ts' },
+          params: {},
+          expanded: {},
+          query: '',
+        },
+      },
+    });
+    renderApp({ client: seed.client, route: `/chat/${chat.id}` });
+    await screen.findByRole('heading', { level: 1, name: chat.title });
+    openPanel();
+    await within(panel()).findByRole('navigation', { name: 'Home files' });
+    expect(within(panel()).queryByRole('tab', { name: 'index.ts' })).toBeNull();
+    expect(within(panel()).getByRole('tab', { name: 'Files', selected: true })).toBeTruthy();
+    expect(read).not.toHaveBeenCalledWith('src/index.ts');
+    expect(usePanelStore.getState().chats[chat.id]?.root).toBe('home');
+  });
+});
+
 describe('panel width', () => {
   const previousWidth = window.innerWidth;
   afterEach(() => {
@@ -171,6 +252,8 @@ describe('panel width', () => {
     const handle = within(panel()).getByRole('separator', { name: 'Resize right panel' });
     fireEvent.pointerDown(handle, { button: 0, clientX: 500, pointerId: 1 });
     fireEvent.pointerMove(window, { clientX: 400, pointerId: 1 });
+    expect(aside.style.width).toBe(`${LAYOUT.panelFiles + 100}px`);
+    expect(window.localStorage.getItem(STORAGE_KEYS.rightPanelWidth)).toBeNull();
     fireEvent.pointerUp(window, { pointerId: 1 });
     expect(aside.style.width).toBe(`${LAYOUT.panelFiles + 100}px`);
     expect(window.localStorage.getItem(STORAGE_KEYS.rightPanelWidth)).toBe(String(LAYOUT.panelFiles + 100));

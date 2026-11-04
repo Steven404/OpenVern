@@ -12,6 +12,7 @@ import type { DiffHunk, FileChange, PendingChanges } from '@shared/types';
 import { useQueryClient } from '@tanstack/react-query';
 import { ArrowRight, Check, ChevronsUpDown, Columns2, Rows3, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { availablePanelWidth } from '../right-panel/layout';
 import { useChatChanges } from '../right-panel/queries';
 import type { SurfaceProps } from '../right-panel/surfaces';
 import { AppliedList } from './AppliedList';
@@ -138,7 +139,7 @@ function HunkBlock({
   );
 }
 
-export function DiffSurface({ chatId, params, panelWidth }: SurfaceProps) {
+export function DiffSurface({ chatId, params }: SurfaceProps) {
   const api = useApiClient();
   const queryClient = useQueryClient();
   const changes = useChatChanges(chatId);
@@ -152,15 +153,27 @@ export function DiffSurface({ chatId, params, panelWidth }: SurfaceProps) {
     return st === 'running' || st === 'settling';
   });
   const sidebarCollapsed = useUiStore((s) => s.sidebarCollapsed);
+  const rightPanelWidth = useUiStore((s) => s.rightPanelWidth);
+  const setRightPanelWidth = useUiStore((s) => s.setRightPanelWidth);
   const windowWidth = useWindowWidth();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Split needs room for the wider panel next to the conversation. `panelWidth` is the measured width.
-  const room = windowWidth - (sidebarCollapsed ? 0 : LAYOUT.sidebar) - LAYOUT.conversationMin;
-  const splitDisabled = windowWidth > 0 && room < LAYOUT.splitMin && !(panelWidth >= LAYOUT.splitMin);
-  const effMode: DiffMode = splitDisabled ? 'unified' : mode;
+  // Split needs a panel at least `splitMin` wide. The panel only widens on an explicit Split click (never on its
+  // own), and only when the window has room; otherwise Split is disabled. `windowWidth` is 0 only before it is known.
+  const maxWidth = availablePanelWidth(sidebarCollapsed, windowWidth);
+  const panelTarget = Math.min(rightPanelWidth, maxWidth);
+  const canSplit = windowWidth === 0 || maxWidth >= LAYOUT.splitMin;
+  const fits = panelTarget >= LAYOUT.splitMin;
+  const effMode: DiffMode = mode === 'split' && fits ? 'split' : 'unified';
+
+  const pick = (m: DiffMode) => {
+    if (m === 'split' && !fits && canSplit) {
+      setRightPanelWidth(Math.max(rightPanelWidth, Math.min(LAYOUT.panelDiffSplit, maxWidth)));
+    }
+    setMode(chatId, m);
+  };
 
   // Opened on a file (`openPanelSurface(chatId, 'diff', { path })`); a new params object per call.
   // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the params object on purpose
@@ -233,15 +246,15 @@ export function DiffSurface({ chatId, params, panelWidth }: SurfaceProps) {
         >
           {(['unified', 'split'] as const).map((m) => {
             const on = effMode === m;
-            const disabled = m === 'split' && splitDisabled;
+            const disabled = m === 'split' && !canSplit;
             return (
               <button
                 key={m}
                 type="button"
                 aria-pressed={on}
                 disabled={disabled}
-                title={disabled ? 'Needs a wider panel' : undefined}
-                onClick={() => setMode(chatId, m)}
+                title={disabled ? 'Make the window wider to use Split' : undefined}
+                onClick={() => pick(m)}
                 className={cx(
                   'inline-flex min-h-[30px] cursor-pointer items-center gap-1.5 rounded-[7px] border-0 px-2.5 text-[12.5px] disabled:cursor-not-allowed disabled:opacity-50',
                   on ? 'bg-segment-on text-text shadow-[0_1px_2px_rgb(0_0_0/0.35)]' : 'bg-transparent text-text-muted',

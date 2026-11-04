@@ -94,6 +94,14 @@ describe('deny list', () => {
     '.git',
     'sub/.git/HEAD',
     '.ENV',
+    'id_ecdsa',
+    'id_ecdsa.pub',
+    'id_ecdsa_sk',
+    'id_dsa',
+    '.git-credentials',
+    '.netrc',
+    '_netrc',
+    'a/.NETRC',
   ])('blocks %s', (p) => {
     expect(isDeniedPath(p)).toBe(true);
   });
@@ -107,6 +115,9 @@ describe('deny list', () => {
     '.gitignore',
     '.github/workflows/ci.yml',
     'keyboard.ts',
+    '.npmrc',
+    '.docker/config.json',
+    'identity.ts',
   ])('allows %s', (p) => {
     expect(isDeniedPath(p)).toBe(false);
   });
@@ -130,6 +141,30 @@ describe('deny list', () => {
     }
     expect(await resolveInProject(fx.root, '.env.example')).toMatchObject({ ok: true });
     expect(await resolveInProject(fx.root, '.env.sample')).toMatchObject({ ok: true });
+  });
+});
+
+describe('isDeniedRel', () => {
+  let base: string;
+  beforeAll(async () => {
+    base = await realpath(await mkdtemp(path.join(tmpdir(), 'openvern-rel-')));
+    await mkdir(path.join(base, 'x', '.ssh'), { recursive: true });
+    await writeFile(path.join(base, 'x', '.ssh', 'config'), 'Host *\n');
+    await writeFile(path.join(base, 'ok.txt'), 'ok\n');
+    await symlink(path.join(base, 'x', '.ssh'), path.join(base, 'link'));
+  });
+  afterAll(async () => {
+    await rm(base, { recursive: true, force: true });
+  });
+
+  const isDeniedRel = (r: string) => r.split('/').includes('.ssh');
+
+  it('blocks a lexical match and a symlink whose real path matches', async () => {
+    const blocked = { ok: false, kind: 'blocked', message: BLOCKED_MESSAGE };
+    expect(await resolveInProject(base, 'x/.ssh/config', { isDeniedRel })).toMatchObject(blocked);
+    expect(await resolveInProject(base, 'link/config', { isDeniedRel })).toMatchObject(blocked);
+    expect(await resolveInProject(base, 'link/config')).toMatchObject({ ok: true, rel: 'x/.ssh/config' });
+    expect(await resolveInProject(base, 'ok.txt', { isDeniedRel })).toMatchObject({ ok: true });
   });
 });
 

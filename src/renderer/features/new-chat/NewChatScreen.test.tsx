@@ -8,10 +8,14 @@ import { useRunsStore } from '../../stores/runs';
 import { useUiStore } from '../../stores/ui';
 import { installDomStubs, renderWithProviders, resetStores } from '../composer/test-utils';
 import { Conversation } from '../conversation';
+import { usePanelStore } from '../right-panel/panel-store';
 import { NewChatScreen } from './NewChatScreen';
 
 beforeAll(installDomStubs);
-beforeEach(resetStores);
+beforeEach(() => {
+  resetStores();
+  usePanelStore.setState({ chats: {} });
+});
 afterEach(cleanup);
 
 function Probe() {
@@ -140,6 +144,31 @@ describe('NewChatScreen', () => {
     expect(screen.getAllByTestId('tool-row')).toHaveLength(1);
     // title arrives through chat_updated
     expect(queryClient.getQueryData<{ title: string }>(['chat', chatId])?.title).toBe('Explain the loop');
+  });
+
+  it('moves the panel state from the draft to the created chat', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const project = (await api.listProjects())[0];
+    renderWithProviders(
+      <>
+        <Goto to="/new" />
+        <App />
+      </>,
+      { api, route: paths.newChat(project?.id) },
+    );
+    await screen.findByRole('button', { name: 'Model: Claude Sonnet 5.5' });
+    usePanelStore.getState().openFile('__draft__', 'README.md');
+    fireEvent.change(textarea(), { target: { value: 'hi' } });
+    fireEvent.keyDown(textarea(), { key: 'Enter' });
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toMatch(/^\/chat\/.+/));
+    const chatId = screen.getByTestId('location').textContent?.replace('/chat/', '') ?? '';
+    const { chats } = usePanelStore.getState();
+    expect(chats.__draft__).toBeUndefined();
+    expect(chats[chatId]?.tabs).toEqual([{ type: 'file', path: 'README.md' }]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'go /new' }));
+    await screen.findByRole('heading', { name: 'What are we building?' });
+    expect(usePanelStore.getState().chats.__draft__?.tabs ?? []).toEqual([]);
   });
 
   it('keeps the run going after leaving the screen and shows its progress on return', async () => {

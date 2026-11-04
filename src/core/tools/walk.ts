@@ -26,6 +26,8 @@ export interface WalkOptions {
   signal: AbortSignal;
   /** Real absolute directories that are never entered or yielded (the app's data dir, S1-M1). */
   deniedRoots?: readonly string[];
+  /** Extra deny rule over the root-relative POSIX path; matching entries are never yielded or entered. */
+  isDeniedRel?: (relPosix: string) => boolean;
 }
 
 const isSmallRegularFile = (st: Stats): boolean => st.isFile() && st.size <= LIMITS.gitignoreMaxBytes;
@@ -78,6 +80,7 @@ export async function* walk(opts: WalkOptions): AsyncGenerator<WalkEntry> {
   const { root, startRel, maxDepth, signal, deniedRoots } = opts;
   // `root` is real and the walker never follows symlinks, so `path.join(root, rel)` is a real path.
   if (isWithinAny(deniedRoots, path.join(root, startRel))) return;
+  if (startRel !== '' && opts.isDeniedRel?.(startRel)) return;
   if (await isInsideOpenVernDataDir(root, path.join(root, startRel))) return;
 
   // `.gitignore` files of the start directory's ancestors apply to everything below it.
@@ -117,7 +120,9 @@ export async function* walk(opts: WalkOptions): AsyncGenerator<WalkEntry> {
       if (kind === 'dir' && ALWAYS_SKIPPED_DIRS.has(d.name)) continue;
       if (isDeniedEntryName(d.name)) continue;
       const rel = item.rel === '' ? d.name : `${item.rel}/${d.name}`;
-      if (kind === 'dir' && isWithinAny(deniedRoots, path.join(root, rel))) continue;
+      if (opts.isDeniedRel?.(rel)) continue;
+      // Every kind, not only dirs: a denied root may be a file (the target of a symlinked `~/.netrc`, say).
+      if (isWithinAny(deniedRoots, path.join(root, rel))) continue;
       if (kind === 'dir' && (await isOpenVernDataDir(path.join(root, rel)))) continue;
       if (local.ignores(rel, kind === 'dir')) continue;
       children.push({ rel, name: d.name, kind, depth: item.depth });

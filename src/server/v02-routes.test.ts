@@ -131,6 +131,11 @@ describe('project files', () => {
 
 describe('home files', () => {
   it('lists the home directory, hides secrets and refuses escapes', async () => {
+    await mkdir(path.join(h.homeDir, '.ssh'));
+    await mkdir(path.join(h.homeDir, '.aws'));
+    await writeFile(path.join(h.homeDir, '.ssh', 'id_ecdsa'), 'PRIVATE KEY\n');
+    await writeFile(path.join(h.homeDir, '.aws', 'credentials'), 'aws_secret_access_key=1\n');
+    await writeFile(path.join(h.homeDir, '.netrc'), 'machine x password y\n');
     const tree = await json<HomeFileTree>(await h.call('/api/home/files'));
     expect(tree.root).toBe(await realpath(h.homeDir));
     expect(tree.truncated).toBe(false);
@@ -145,6 +150,12 @@ describe('home files', () => {
       await h.call('/api/home/files/attach', { method: 'POST', json: { path: 'note.txt' } }),
     );
     expect(att).toMatchObject({ name: 'note.txt', kind: 'text' });
+    for (const p of ['.ssh/id_ecdsa', '.aws/credentials']) {
+      expect((await h.call(`/api/home/files/content?path=${encodeURIComponent(p)}`)).status, p).toBe(400);
+    }
+    for (const p of ['.netrc', '.aws/credentials']) {
+      expect((await h.call('/api/home/files/attach', { method: 'POST', json: { path: p } })).status, p).toBe(400);
+    }
   });
 });
 

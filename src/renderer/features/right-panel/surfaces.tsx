@@ -2,7 +2,6 @@
 // tab strip are driven by this registry. G5 plugs the Diff surface in by replacing the `diff` entry's `Component`
 // (G5: `DiffSurface`).
 
-import { LAYOUT } from '@shared/constants';
 import type { Id } from '@shared/types';
 import type { ComponentType, ReactNode } from 'react';
 import { DiffSurface } from '../changes/DiffSurface';
@@ -28,13 +27,6 @@ export interface SurfaceProps {
    * effect keyed on it re-runs when the same file is opened again.
    */
   params: unknown;
-  /** Current measured panel width in px (0 before the first measurement). Split needs `>= LAYOUT.splitMin`. */
-  panelWidth: number;
-  /**
-   * Unused by the shell: the panel width is the user's, from the resize handle. Kept so a surface can still ask
-   * without the shell having to change shape.
-   */
-  setWidth(px: number | null): void;
 }
 
 export interface SurfaceDefinition {
@@ -47,8 +39,6 @@ export interface SurfaceDefinition {
   availability(ctx: SurfaceContext): { enabled: boolean; hint: string };
   /** `pinned` surfaces always have the first tab (Files); others get a closable tab once opened. */
   tab: 'pinned' | 'opened';
-  /** Default panel width. */
-  width: number;
   /** Absent = cannot be opened (Terminal). */
   Component?: ComponentType<SurfaceProps>;
 }
@@ -64,7 +54,6 @@ const registry: SurfaceDefinition[] = [
         ? { enabled: true, hint: 'Browse the project, read-only' }
         : { enabled: true, hint: 'Browse your home folder, read-only' },
     tab: 'pinned',
-    width: LAYOUT.panelFiles,
     Component: FilesSurface,
   },
   {
@@ -74,7 +63,6 @@ const registry: SurfaceDefinition[] = [
     icon: <TerminalIcon />,
     availability: () => ({ enabled: false, hint: 'Not available yet' }),
     tab: 'opened',
-    width: LAYOUT.panelFiles,
   },
   {
     id: 'diff',
@@ -86,7 +74,6 @@ const registry: SurfaceDefinition[] = [
         ? { enabled: true, hint: 'Review the edits this chat proposed' }
         : { enabled: false, hint: 'Available after the current chat has made edits' },
     tab: 'opened',
-    width: LAYOUT.panelDiff,
     Component: DiffSurface,
   },
 ];

@@ -117,7 +117,10 @@ export interface UiState {
 
   /** Right panel width in px. Persisted (`openvern.rightPanelWidth`). The user sets it with the resize handle. */
   rightPanelWidth: number;
-  setRightPanelWidth(px: number): void;
+  /** Clamps. Writes storage unless `persist: false` (mid-drag); then call `commitRightPanelWidth` once. */
+  setRightPanelWidth(px: number, options?: { persist?: boolean }): void;
+  /** Writes the current width to storage. */
+  commitRightPanelWidth(): void;
 
   /** Expanded project rows in the sidebar (D5), by project id. Persisted (`openvern.expandedProjects`). */
   expandedProjects: Record<Id, true>;
@@ -155,11 +158,12 @@ export const useUiStore = create<UiState>()((set, get) => ({
     set({ rightPanelOpen: open });
   },
   toggleRightPanel: () => get().setRightPanelOpen(!get().rightPanelOpen),
-  setRightPanelWidth: (px) => {
+  setRightPanelWidth: (px, options) => {
     const rightPanelWidth = clampPanelWidth(px);
-    writeStorage(STORAGE_KEYS.rightPanelWidth, String(rightPanelWidth));
+    if (options?.persist !== false) writeStorage(STORAGE_KEYS.rightPanelWidth, String(rightPanelWidth));
     set({ rightPanelWidth });
   },
+  commitRightPanelWidth: () => writeStorage(STORAGE_KEYS.rightPanelWidth, String(get().rightPanelWidth)),
 
   toggleProject: (id) => (get().expandedProjects[id] ? get().collapseProject(id) : get().expandProject(id)),
   expandProject: (id) => {
