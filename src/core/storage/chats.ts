@@ -108,6 +108,7 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
         model: input.model,
         createdAt: now,
         updatedAt: now,
+        archived: false,
         messages: [],
       };
       return lock.run(async () => {
@@ -127,6 +128,15 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
         if (patch.model !== undefined && patch.model !== chat.model) {
           next.model = patch.model;
           next.updatedAt = new Date().toISOString();
+        }
+        if (next.projectId !== null) {
+          if (patch.archived === true) {
+            throw new CoreError('conflict', 'Only chats without a project can be archived.');
+          }
+          // Moving into a project clears the flag.
+          next.archived = false;
+        } else if (patch.archived !== undefined) {
+          next.archived = patch.archived;
         }
         await writeChat(next);
         const summary = summarize(next);

@@ -215,3 +215,322 @@ describe('ChatsService', () => {
     expect(await fresh.chats.list()).toEqual([]);
   });
 });
+
+type RawChat = { archived?: unknown; projectId: string | null; version?: number; messages?: { id: string }[] };
+
+async function readRawChat(dataDir: string, id: string): Promise<RawChat> {
+  return JSON.parse(await fs.readFile(dataPaths(dataDir).chatFile(id), 'utf8'));
+}
+
+async function readRawEntry(dataDir: string, id: string): Promise<RawChat> {
+  const index = JSON.parse(await fs.readFile(dataPaths(dataDir).chatsIndex, 'utf8')) as {
+    chats: (RawChat & { id: string })[];
+  };
+  const entry = index.chats.find((c) => c.id === id);
+  if (!entry) throw new Error(`no index entry for ${id}`);
+  return entry;
+}
+
+/** The raw chat file and the raw index entry must agree on `archived` and `projectId`. */
+async function expectInSync(dataDir: string, id: string): Promise<void> {
+  const file = await readRawChat(dataDir, id);
+  const entry = await readRawEntry(dataDir, id);
+  expect(typeof file.archived).toBe('boolean');
+  expect(typeof entry.archived).toBe('boolean');
+  expect(entry.archived).toBe(file.archived);
+  expect(entry.projectId).toBe(file.projectId);
+}
+
+const ids = (chats: { id: string }[]) => chats.map((c) => c.id);
+const NOT_ARCHIVABLE = 'Only chats without a project can be archived.';
+
+const NOW = '2026-01-01T00:00:00.000Z';
+const handChat = (id: string, extra: Record<string, unknown> = {}) => ({
+  version: 1,
+  id,
+  projectId: null,
+  title: `Chat ${id}`,
+  model: 'm',
+  createdAt: NOW,
+  updatedAt: NOW,
+  messages: [
+    { id: `${id}-u`, role: 'user', createdAt: NOW, text: 'hi', attachments: [] },
+    { id: `${id}-a`, role: 'assistant', createdAt: NOW, model: 'm', text: 'yo', toolCalls: [], status: 'complete' },
+  ],
+  ...extra,
+});
+
+async function names(dataDir: string): Promise<string[]> {
+  return fs.readdir(dataPaths(dataDir).chatsDir);
+}
+
+describe('ChatsService archived flag', () => {
+  it('create sets archived false in the return value, the file and the index', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const chat = await storage.chats.create({ projectId: null, model: 'm' });
+    expect(chat.archived).toBe(false);
+    expect((await readRawChat(dataDir, chat.id)).archived).toBe(false);
+    expect((await readRawEntry(dataDir, chat.id)).archived).toBe(false);
+    await expectInSync(dataDir, chat.id);
+  });
+
+  it('archives a loose chat without touching updatedAt, order or version, and restores it', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const a = await storage.chats.create({ projectId: null, model: 'm' });
+    await sleep(5);
+    const b = await storage.chats.create({ projectId: null, model: 'm' });
+    const before = ids(await storage.chats.list());
+    expect(before).toEqual([b.id, a.id]);
+
+    await sleep(5);
+    const archived = await storage.chats.update(a.id, { archived: true });
+    expect(archived.archived).toBe(true);
+    expect(archived.updatedAt).toBe(a.updatedAt);
+    expect((await storage.chats.get(a.id)).archived).toBe(true);
+    await expectInSync(dataDir, a.id);
+    await expectInSync(dataDir, b.id);
+    expect((await readRawChat(dataDir, a.id)).archived).toBe(true);
+    expect((await readRawEntry(dataDir, a.id)).archived).toBe(true);
+    expect((await readRawChat(dataDir, a.id)).version).toBe(1);
+    const listed = await storage.chats.list();
+    expect(ids(listed)).toEqual(before);
+    expect(listed.find((c) => c.id === a.id)).toMatchObject({ archived: true, updatedAt: a.updatedAt });
+    expect(listed.find((c) => c.id === b.id)?.archived).toBe(false);
+
+    await sleep(5);
+    const restored = await storage.chats.update(a.id, { archived: false });
+    expect(restored.archived).toBe(false);
+    expect(restored.updatedAt).toBe(a.updatedAt);
+    expect((await storage.chats.get(a.id)).archived).toBe(false);
+    await expectInSync(dataDir, a.id);
+    expect((await readRawChat(dataDir, a.id)).archived).toBe(false);
+    expect(ids(await storage.chats.list())).toEqual(before);
+  });
+
+  it('refuses to archive a project chat and writes nothing', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const project = await storage.projects.create({ rootPath: await makeTempDir() });
+    const chat = await storage.chats.create({ projectId: project.id, model: 'm' });
+    const paths = dataPaths(dataDir);
+    const fileBefore = await fs.readFile(paths.chatFile(chat.id), 'utf8');
+    const indexBefore = await fs.readFile(paths.chatsIndex, 'utf8');
+
+    await expect(storage.chats.update(chat.id, { archived: true })).rejects.toMatchObject({
+      code: 'conflict',
+      message: NOT_ARCHIVABLE,
+    });
+    expect(await fs.readFile(paths.chatFile(chat.id), 'utf8')).toBe(fileBefore);
+    expect(await fs.readFile(paths.chatsIndex, 'utf8')).toBe(indexBefore);
+    expect((await storage.chats.get(chat.id)).archived).toBe(false);
+    await expectInSync(dataDir, chat.id);
+  });
+
+  it('update({ projectId, archived: true }) on a loose chat is a conflict and the chat stays loose and unarchived', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const project = await storage.projects.create({ rootPath: await makeTempDir() });
+    const chat = await storage.chats.create({ projectId: null, model: 'm' });
+    const paths = dataPaths(dataDir);
+    const fileBefore = await fs.readFile(paths.chatFile(chat.id), 'utf8');
+    const indexBefore = await fs.readFile(paths.chatsIndex, 'utf8');
+
+    await expect(storage.chats.update(chat.id, { projectId: project.id, archived: true })).rejects.toMatchObject({
+      code: 'conflict',
+      message: NOT_ARCHIVABLE,
+    });
+    const after = await storage.chats.get(chat.id);
+    expect(after).toMatchObject({ projectId: null, archived: false });
+    expect(await fs.readFile(paths.chatFile(chat.id), 'utf8')).toBe(fileBefore);
+    expect(await fs.readFile(paths.chatsIndex, 'utf8')).toBe(indexBefore);
+    await expectInSync(dataDir, chat.id);
+  });
+
+  it('moving an archived chat into a project clears the flag; moving it out leaves a chat archived', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const project = await storage.projects.create({ rootPath: await makeTempDir() });
+    const chat = await storage.chats.create({ projectId: null, model: 'm' });
+    await storage.chats.update(chat.id, { archived: true });
+    await expectInSync(dataDir, chat.id);
+
+    const moved = await storage.chats.update(chat.id, { projectId: project.id });
+    expect(moved).toMatchObject({ projectId: project.id, archived: false });
+    expect((await storage.chats.get(chat.id)).archived).toBe(false);
+    expect((await readRawChat(dataDir, chat.id)).archived).toBe(false);
+    expect((await readRawEntry(dataDir, chat.id)).archived).toBe(false);
+    await expectInSync(dataDir, chat.id);
+
+    // Back to loose: unarchived stays unarchived.
+    const loose = await storage.chats.update(chat.id, { projectId: null });
+    expect(loose).toMatchObject({ projectId: null, archived: false });
+    await expectInSync(dataDir, chat.id);
+
+    // An archived loose chat patched with projectId: null stays archived.
+    await storage.chats.update(chat.id, { archived: true });
+    const stillArchived = await storage.chats.update(chat.id, { projectId: null });
+    expect(stillArchived.archived).toBe(true);
+    expect((await storage.chats.get(chat.id)).archived).toBe(true);
+    await expectInSync(dataDir, chat.id);
+  });
+
+  it('appendMessage, truncateAfterLastUser, model and title updates keep an archived chat archived', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const chat = await storage.chats.create({ projectId: null, model: 'm1' });
+    await storage.chats.appendMessage(chat.id, user('u1'));
+    await storage.chats.update(chat.id, { archived: true });
+    await expectInSync(dataDir, chat.id);
+
+    const appended = await storage.chats.appendMessage(chat.id, assistant('a1'));
+    expect(appended.archived).toBe(true);
+    await expectInSync(dataDir, chat.id);
+    expect((await readRawChat(dataDir, chat.id)).archived).toBe(true);
+    expect((await readRawEntry(dataDir, chat.id)).archived).toBe(true);
+
+    await storage.chats.appendMessage(chat.id, user('u2'));
+    await storage.chats.appendMessage(chat.id, assistant('a2'));
+    const cut = await storage.chats.truncateAfterLastUser(chat.id);
+    expect(cut.archived).toBe(true);
+    expect(cut.messages.map((m) => m.id)).toEqual(['u1', 'a1', 'u2']);
+    await expectInSync(dataDir, chat.id);
+    expect((await readRawChat(dataDir, chat.id)).archived).toBe(true);
+    expect((await readRawEntry(dataDir, chat.id)).archived).toBe(true);
+
+    const modelChanged = await storage.chats.update(chat.id, { model: 'm2' });
+    expect(modelChanged.archived).toBe(true);
+    await expectInSync(dataDir, chat.id);
+    expect((await readRawChat(dataDir, chat.id)).archived).toBe(true);
+
+    const renamed = await storage.chats.update(chat.id, { title: 'Renamed' });
+    expect(renamed.archived).toBe(true);
+    await expectInSync(dataDir, chat.id);
+    expect((await readRawChat(dataDir, chat.id)).archived).toBe(true);
+    expect((await readRawEntry(dataDir, chat.id)).archived).toBe(true);
+  });
+
+  it('keeps every message and the archived flag when appends race an archive', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const chat = await storage.chats.create({ projectId: null, model: 'm' });
+    const calls: Promise<unknown>[] = [];
+    for (let i = 0; i < 20; i++) {
+      calls.push(storage.chats.appendMessage(chat.id, user(`u${i}`)));
+      if (i === 9) calls.push(storage.chats.update(chat.id, { archived: true }));
+    }
+    await Promise.all(calls);
+    const loaded = await storage.chats.get(chat.id);
+    expect(loaded.messages.map((m) => m.id)).toEqual(Array.from({ length: 20 }, (_, i) => `u${i}`));
+    expect(loaded.archived).toBe(true);
+    await expectInSync(dataDir, chat.id);
+    expect((await readRawChat(dataDir, chat.id)).archived).toBe(true);
+    expect((await readRawEntry(dataDir, chat.id)).archived).toBe(true);
+  });
+
+  it('a rebuilt index (missing) keeps the flag and writes it back', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const a = await storage.chats.create({ projectId: null, model: 'm' });
+    const b = await storage.chats.create({ projectId: null, model: 'm' });
+    await storage.chats.update(a.id, { archived: true });
+    await fs.rm(dataPaths(dataDir).chatsIndex);
+
+    const fresh = await createStorage({ dataDir, secretStore: new MemorySecretStore() });
+    const listed = await fresh.chats.list();
+    expect(listed.find((c) => c.id === a.id)?.archived).toBe(true);
+    expect(listed.find((c) => c.id === b.id)?.archived).toBe(false);
+    expect((await readRawEntry(dataDir, a.id)).archived).toBe(true);
+    expect((await readRawEntry(dataDir, b.id)).archived).toBe(false);
+    await expectInSync(dataDir, a.id);
+  });
+
+  it('a rebuilt index (corrupt, backed up) keeps the flag and writes it back', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const a = await storage.chats.create({ projectId: null, model: 'm' });
+    await storage.chats.update(a.id, { archived: true });
+    await fs.writeFile(dataPaths(dataDir).chatsIndex, '{{{{');
+
+    const logger = recordingLogger();
+    const fresh = await createStorage({ dataDir, secretStore: new MemorySecretStore(), logger });
+    expect((await fresh.chats.list()).find((c) => c.id === a.id)?.archived).toBe(true);
+    expect((await readRawEntry(dataDir, a.id)).archived).toBe(true);
+    expect((await names(dataDir)).some((n) => n.startsWith('index.json.corrupt-'))).toBe(true);
+    await expectInSync(dataDir, a.id);
+  });
+
+  it('hand-written files and index without the flag load as unarchived, messages intact, nothing quarantined', async () => {
+    const { dataDir } = await makeStorage();
+    const paths = dataPaths(dataDir);
+    await fs.mkdir(paths.chatsDir, { recursive: true });
+    const file = handChat('hand');
+    await fs.writeFile(paths.chatFile('hand'), JSON.stringify(file));
+    const { version: _v, messages: _m, ...entry } = file;
+    await fs.writeFile(paths.chatsIndex, JSON.stringify({ version: 1, chats: [entry] }));
+
+    const logger = recordingLogger();
+    const fresh = await createStorage({ dataDir, secretStore: new MemorySecretStore(), logger });
+    const listed = await fresh.chats.list();
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toMatchObject({ id: 'hand', archived: false });
+    const loaded = await fresh.chats.get('hand');
+    expect(loaded.archived).toBe(false);
+    expect(loaded.messages.map((m) => m.id)).toEqual(['hand-u', 'hand-a']);
+    expect((await names(dataDir)).some((n) => n.includes('.corrupt-'))).toBe(false);
+    expect(logger.messages).toEqual([]);
+
+    // Same again with the index missing: the rebuild scans the hand-written file.
+    await fs.rm(paths.chatsIndex);
+    const logger2 = recordingLogger();
+    const rebuilt = await createStorage({ dataDir, secretStore: new MemorySecretStore(), logger: logger2 });
+    const relisted = await rebuilt.chats.list();
+    expect(relisted).toHaveLength(1);
+    expect(relisted[0]).toMatchObject({ id: 'hand', archived: false });
+    expect((await rebuilt.chats.get('hand')).messages.map((m) => m.id)).toEqual(['hand-u', 'hand-a']);
+    expect((await names(dataDir)).some((n) => n.includes('.corrupt-'))).toBe(false);
+    expect(logger2.messages).toEqual([]);
+  });
+
+  it('a malformed flag ("yes") loads as unarchived, is not quarantined, and keeps the messages', async () => {
+    const { dataDir } = await makeStorage();
+    const paths = dataPaths(dataDir);
+    await fs.mkdir(paths.chatsDir, { recursive: true });
+    await fs.writeFile(paths.chatFile('odd'), JSON.stringify(handChat('odd', { archived: 'yes' })));
+    await fs.rm(paths.chatsIndex, { force: true });
+
+    const logger = recordingLogger();
+    const fresh = await createStorage({ dataDir, secretStore: new MemorySecretStore(), logger });
+    const loaded = await fresh.chats.get('odd');
+    expect(loaded.archived).toBe(false);
+    expect(loaded.messages.map((m) => m.id)).toEqual(['odd-u', 'odd-a']);
+    expect((await fresh.chats.list()).map((c) => [c.id, c.archived])).toEqual([['odd', false]]);
+    expect((await names(dataDir)).some((n) => n.includes('.corrupt-'))).toBe(false);
+    expect(logger.messages).toEqual([]);
+  });
+
+  it('archiving again repairs an index entry that disagrees with the file', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const chat = await storage.chats.create({ projectId: null, model: 'm' });
+    await storage.chats.update(chat.id, { archived: true });
+    const paths = dataPaths(dataDir);
+    const index = JSON.parse(await fs.readFile(paths.chatsIndex, 'utf8'));
+    index.chats[0].archived = false;
+    await fs.writeFile(paths.chatsIndex, JSON.stringify(index));
+    expect((await readRawEntry(dataDir, chat.id)).archived).toBe(false);
+    expect((await readRawChat(dataDir, chat.id)).archived).toBe(true);
+
+    const again = await storage.chats.update(chat.id, { archived: true });
+    expect(again.archived).toBe(true);
+    expect((await readRawEntry(dataDir, chat.id)).archived).toBe(true);
+    await expectInSync(dataDir, chat.id);
+  });
+
+  it('detachProject leaves the moved chats unarchived', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const project = await storage.projects.create({ rootPath: await makeTempDir() });
+    const chat = await storage.chats.create({ projectId: null, model: 'm' });
+    await storage.chats.update(chat.id, { archived: true });
+    await storage.chats.update(chat.id, { projectId: project.id });
+    const other = await storage.chats.create({ projectId: project.id, model: 'm' });
+
+    await storage.chats.detachProject(project.id);
+    for (const id of [chat.id, other.id]) {
+      expect(await storage.chats.get(id)).toMatchObject({ projectId: null, archived: false });
+      await expectInSync(dataDir, id);
+    }
+    expect((await storage.chats.list()).every((c) => c.archived === false)).toBe(true);
+  });
+});

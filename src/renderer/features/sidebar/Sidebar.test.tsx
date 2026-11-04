@@ -144,6 +144,103 @@ describe('CHATS section and empty states (S6.3, S6.5)', () => {
   });
 });
 
+describe('Archived chats group', () => {
+  /** Loose chats created oldest first; the ones named in `archive` are archived afterwards. */
+  async function looseClient(titles: string[], archive: string[]) {
+    const client = new MockApiClient({ delayMs: 0, seed: false });
+    const made: Record<string, string> = {};
+    for (const title of titles) {
+      const chat = await client.createChat({ projectId: null, model: 'm' });
+      await client.updateChat(chat.id, { title });
+      made[title] = chat.id;
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    for (const title of archive) await client.updateChat(made[title] ?? '', { archived: true });
+    return { client, ids: made };
+  }
+  const chatsSection = async () => {
+    const section = (await screen.findByRole('heading', { name: 'Chats' })).closest('section');
+    if (!section) throw new Error('missing section');
+    return section;
+  };
+  const toggleIn = (section: HTMLElement) => within(section).queryByRole('button', { name: /^Archived/ });
+  const linkTitles = (section: HTMLElement) =>
+    within(section)
+      .queryAllByRole('link')
+      .map((a) => a.textContent);
+
+  it('keeps archived loose chats out of Chats; a collapsed Archived toggle with the count expands newest first', async () => {
+    const { client } = await looseClient(['Old archived', 'Active', 'New archived'], ['Old archived', 'New archived']);
+    renderApp({ client });
+    const section = await chatsSection();
+    expect(linkTitles(section)).toEqual(['Active']);
+    const toggle = toggleIn(section);
+    if (!toggle) throw new Error('missing Archived toggle');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle.textContent).toBe('Archived2');
+    expect(screen.queryByRole('link', { name: 'Old archived' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'New archived' })).toBeNull();
+
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(linkTitles(section)).toEqual(['Active', 'New archived', 'Old archived']);
+
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(linkTitles(section)).toEqual(['Active']);
+  });
+
+  it('keeps the Chats section with only the toggle when every loose chat is archived', async () => {
+    const { client } = await looseClient(['One', 'Two'], ['One', 'Two']);
+    renderApp({ client });
+    const section = await chatsSection();
+    expect(linkTitles(section)).toEqual([]);
+    expect(within(section).getAllByRole('button')).toHaveLength(1);
+    const toggle = toggleIn(section);
+    expect(toggle?.textContent).toBe('Archived2');
+    expect(toggle?.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('shows no toggle when nothing is archived', async () => {
+    const { client } = await looseClient(['One', 'Two'], []);
+    renderApp({ client });
+    const section = await chatsSection();
+    expect(linkTitles(section)).toEqual(['Two', 'One']);
+    expect(toggleIn(section)).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Archived/ })).toBeNull();
+  });
+
+  it('leaves project rows unaffected by archived loose chats', async () => {
+    const { client, project } = await seededClient();
+    const loose = await client.createChat({ projectId: null, model: 'm' });
+    await client.updateChat(loose.id, { title: 'Parked', archived: true });
+    renderApp({ client });
+    const row = await projectButton(project.name);
+    expect(row.getAttribute('aria-expanded')).toBe('false');
+    expect(row.textContent).toContain('3');
+    const section = await chatsSection();
+    expect(toggleIn(section)?.textContent).toBe('Archived1');
+    fireEvent.click(row);
+    expect(row.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByRole('link', { name: 'Streaming replies over SSE' })).toBeTruthy();
+    expect(linkTitles(section)).toEqual([]);
+  });
+
+  it('opening an archived chat expands the group and marks its link as the current page', async () => {
+    const { client, ids } = await looseClient(
+      ['Active', 'Archived one', 'Archived two'],
+      ['Archived one', 'Archived two'],
+    );
+    renderApp({ client, route: `/chat/${ids['Archived one']}` });
+    const section = await chatsSection();
+    await waitFor(() => expect(toggleIn(section)?.getAttribute('aria-expanded')).toBe('true'));
+    const link = within(section).getByRole('link', { name: 'Archived one' });
+    expect(link.getAttribute('aria-current')).toBe('page');
+    expect(within(section).getByRole('link', { name: 'Archived two' }).getAttribute('aria-current')).toBeNull();
+    expect(within(section).getByRole('link', { name: 'Active' }).getAttribute('aria-current')).toBeNull();
+  });
+});
+
 describe('Project row "…" menu (S6.4)', () => {
   it('New chat here opens #/new with the project preselected', async () => {
     const { client, project } = await seededClient();

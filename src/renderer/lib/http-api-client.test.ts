@@ -22,6 +22,26 @@ describe('HttpApiClient', () => {
     expect(init?.body).toBe('{"rootPath":"/x"}');
   });
 
+  it('updateChat sends the archived flag as a PATCH JSON body', async () => {
+    const summary = {
+      id: 'c1',
+      projectId: null,
+      title: 't',
+      model: 'm',
+      createdAt: '',
+      updatedAt: '',
+      archived: true,
+    };
+    const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => json(summary));
+    const api = new HttpApiClient('/api', fetchMock as typeof fetch);
+    await expect(api.updateChat('c1', { archived: true })).resolves.toEqual(summary);
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe('/api/chats/c1');
+    expect(init?.method).toBe('PATCH');
+    expect(init?.body).toBe('{"archived":true}');
+    expect(new Headers(init?.headers).get('Content-Type')).toBe('application/json');
+  });
+
   it('turns error bodies into ApiError', async () => {
     const api = new HttpApiClient('/api', (async () =>
       json({ error: { code: 'path_invalid', message: 'Nope.', retryable: false } }, 400)) as typeof fetch);

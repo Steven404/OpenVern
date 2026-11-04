@@ -92,6 +92,7 @@ export function toChatSummary(chat: ChatSummary | Chat): ChatSummary {
     model: chat.model,
     createdAt: chat.createdAt,
     updatedAt: chat.updatedAt,
+    archived: chat.archived,
   };
 }
 

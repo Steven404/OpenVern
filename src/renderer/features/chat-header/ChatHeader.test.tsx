@@ -1,4 +1,5 @@
 import { location, openMenu, renderApp, resetUi, seededClient } from '@renderer/app/test-utils';
+import { createRun, useRunsStore } from '@renderer/stores/runs';
 import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -125,4 +126,96 @@ describe('Chat options (D9)', () => {
     expect(del).not.toHaveBeenCalled();
     expect(location()).toMatch(/^\/chat\//);
   });
+});
+
+describe('Archive in chat options (D9)', () => {
+  afterEach(() => useRunsStore.setState({ runs: {} }));
+
+  /** A seeded client plus a loose chat titled "Loose chat", optionally archived already. */
+  async function renderLoose(archived = false) {
+    const seed = await seededClient();
+    const loose = await seed.client.createChat({ projectId: null, model: 'm' });
+    await seed.client.updateChat(loose.id, { title: 'Loose chat', ...(archived ? { archived: true } : {}) });
+    const view = renderApp({ client: seed.client, route: `/chat/${loose.id}` });
+    const header = (await screen.findByRole('heading', { level: 1, name: 'Loose chat' })).closest('header');
+    if (!header) throw new Error('missing header');
+    return { ...seed, ...view, loose, header };
+  }
+  const chatsSection = async () => {
+    const section = (await screen.findByRole('heading', { name: 'Chats' })).closest('section');
+    if (!section) throw new Error('missing section');
+    return section;
+  };
+
+  it('Archive: calls updateChat, stays on the chat, shows "Archived /", files it under Archived, and offers Unarchive', async () => {
+    const { header, client, loose } = await renderLoose();
+    expect(await within(header).findByText('Chats /')).toBeTruthy();
+    const update = vi.spyOn(client, 'updateChat');
+    openMenu(optionsButton(header));
+    expect(screen.queryByRole('menuitem', { name: 'Unarchive' })).toBeNull();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Archive' }));
+    await waitFor(() => expect(update).toHaveBeenCalledWith(loose.id, { archived: true }));
+    expect(await within(header).findByText('Archived /')).toBeTruthy();
+    expect(within(header).queryByText('Chats /')).toBeNull();
+    expect(location()).toBe(`/chat/${loose.id}`);
+
+    const section = await chatsSection();
+    const toggle = await within(section).findByRole('button', { name: /^Archived/ });
+    expect(toggle.textContent).toBe('Archived1');
+    await waitFor(() => expect(toggle.getAttribute('aria-expanded')).toBe('true'));
+    expect(within(section).getByRole('link', { name: 'Loose chat' }).getAttribute('aria-current')).toBe('page');
+
+    openMenu(optionsButton(header));
+    expect(await screen.findByRole('menuitem', { name: 'Unarchive' })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: 'Archive' })).toBeNull();
+  });
+
+  it('Unarchive: calls updateChat, returns the chat to the Chats list and the breadcrumb to "Chats /"', async () => {
+    const { header, client, loose } = await renderLoose(true);
+    expect(await within(header).findByText('Archived /')).toBeTruthy();
+    const update = vi.spyOn(client, 'updateChat');
+    openMenu(optionsButton(header));
+    expect(screen.queryByRole('menuitem', { name: 'Archive' })).toBeNull();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Unarchive' }));
+    await waitFor(() => expect(update).toHaveBeenCalledWith(loose.id, { archived: false }));
+    expect(await within(header).findByText('Chats /')).toBeTruthy();
+    expect(within(header).queryByText('Archived /')).toBeNull();
+    expect(location()).toBe(`/chat/${loose.id}`);
+
+    const section = await chatsSection();
+    await waitFor(() => expect(within(section).queryByRole('button', { name: /^Archived/ })).toBeNull());
+    expect(within(section).getByRole('link', { name: 'Loose chat' }).getAttribute('aria-current')).toBe('page');
+
+    openMenu(optionsButton(header));
+    expect(await screen.findByRole('menuitem', { name: 'Archive' })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: 'Unarchive' })).toBeNull();
+  });
+
+  it('a project chat has neither Archive nor Unarchive', async () => {
+    const { header } = await renderChat();
+    openMenu(optionsButton(header));
+    expect(await screen.findByRole('menuitem', { name: 'Rename' })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: 'Archive' })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'Unarchive' })).toBeNull();
+  });
+
+  it.each([false, true])(
+    'is disabled while a reply is running and selecting it does nothing (archived: %s)',
+    async (archived) => {
+      const seed = await seededClient();
+      const loose = await seed.client.createChat({ projectId: null, model: 'm' });
+      await seed.client.updateChat(loose.id, { title: 'Loose chat', ...(archived ? { archived: true } : {}) });
+      useRunsStore.setState({ runs: { [loose.id]: createRun(1) } });
+      const update = vi.spyOn(seed.client, 'updateChat');
+      renderApp({ client: seed.client, route: `/chat/${loose.id}` });
+      const header = (await screen.findByRole('heading', { level: 1, name: 'Loose chat' })).closest('header');
+      if (!header) throw new Error('missing header');
+
+      openMenu(optionsButton(header));
+      const item = await screen.findByRole('menuitem', { name: archived ? 'Unarchive' : 'Archive' });
+      expect(item.hasAttribute('data-disabled')).toBe(true);
+      fireEvent.click(item);
+      expect(update).not.toHaveBeenCalled();
+    },
+  );
 });

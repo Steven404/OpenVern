@@ -22,6 +22,9 @@ colors:
   border-control: "#343f72"
   border-hover: "#46528c"
   border-focus: "#5a68a8"
+  scroll-thumb: "#343f72"
+  scroll-thumb-hover: "#46528c"
+  scroll-thumb-active: "#5a68a8"
   text: "#ecf0fa"
   text-body: "#d8deef"
   text-code: "#e2e7f5"
@@ -203,7 +206,7 @@ A cool night-blue ramp lit by warm lamplight, taken from canal streets at blue h
 Tokens `diff-add-*`, `diff-del-*`, `diff-text`, `diff-range` and `segment-on` (the selected half of the Unified/Split control). Added lines sit on seafoam at 9% opacity with a `#9fd4b3` sign; removed lines on gable brick at 11% with a `#f09a7c` sign; line-number gutters (`*-num`, `*-num-bg`) take the same hue a step stronger. Rejected hunks are dimmed to 42% opacity.
 
 ### Alternate theme: Late Workshop
-The original warm theme, kept for a future theme setting. Same token names, warm plum-black values: ground `#161316`, sidebar `#120f12`, surface `#221c21`, text `#f0e6e6`, accent Late Sand `#f2cc8f`, accent-2 Terracotta `#e07a5f`, success Sage `#b8d4a0`, no backdrop glow. The full set lives in `src/renderer/styles/tokens.css` under `[data-theme="late-workshop"]`; setting that attribute on `<html>` switches the whole app.
+The original warm theme, kept for a future theme setting. Same token names, warm plum-black values: ground `#161316`, sidebar `#120f12`, surface `#221c21`, text `#f0e6e6`, accent Late Sand `#f2cc8f`, accent-2 Terracotta `#e07a5f`, success Sage `#b8d4a0`, no backdrop glow. The full set lives in `src/renderer/styles/tokens.css` under `[data-theme="late-workshop"]`; setting that attribute on `<html>` switches the whole app. The three scrollbar thumb tokens (`--color-scroll-thumb`, `--color-scroll-thumb-hover`, `--color-scroll-thumb-active`) are overridden here rather than aliased, because the warm border steps do not match the thumb: rest `#4a3c46`, hover `#5e4c58`, drag `#76626f`. The token names are the same.
 
 ### Named Rules
 **The One Glow Rule.** Lamplight marks at most one primary action per view, plus focus. If two things are amber, one of them is wrong.
@@ -291,6 +294,16 @@ A tab strip (pinned Files tab, closable tabs for open files and Diff, a "+" that
 
 ### Review pane (signature)
 The Diff surface: header with +/− totals and a Unified/Split segmented control, file list with per-file review state (or "Changed on disk" for a skipped file), diff body on night canal with a sticky file header, per-hunk Reject/Accept (then a status pill and Undo), and an apply bar whose primary button counts the accepted changes (Discard when everything is rejected). Applied batches are listed below, read-only. The **Proposed edits** card in the conversation (and **Edits applied** after applying) uses the tool-row surface with a status dot and a "Review changes" button that reads "Reviewing" while the pane is open.
+
+### Scrollbars
+Quiet and always there when something can scroll. The thumb is the only mark.
+- **Visibility:** shown whenever the region can scroll. No auto-hide.
+- **Shape:** no track and no arrow buttons. The gutter is transparent; the thumb is the only visible mark.
+- **Colour:** the thumb uses `--color-scroll-thumb` at rest, `--color-scroll-thumb-hover` on hover and `--color-scroll-thumb-active` while dragging. In Blue hour these alias border-control (`#343f72`), border-hover (`#46528c`) and border-focus (`#5a68a8`). Lamplight never appears on a thumb, including while dragging; the One Glow Rule holds.
+- **Size:** one size everywhere. Chat, diff, file tree, file viewer and sidebar share a 10px gutter. Horizontal bars are the same metrics turned sideways.
+- **Reserved gutter:** the gutter is reserved even when nothing overflows, so rows and lines do not reflow. Menus, popovers and dialogs do not reserve that gutter.
+- **Motion:** none. Rest, hover and drag switch instantly.
+- **Anatomy:** 4px end inset, 10px gutter, thumb 6px at rest and 8px on hover and drag, pill ends, 40px minimum length.
 
 ## Do's and Don'ts
 

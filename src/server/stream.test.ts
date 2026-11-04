@@ -1,5 +1,7 @@
 // Streaming route tests (S5.4/S5.8): event order, pre-stream validation, disconnect = stop, 409, retry.
 
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import type { AgentEvent } from '@shared/events';
 import type { AttachmentRef, Chat, Project } from '@shared/types';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -248,6 +250,81 @@ describe('POST /api/chats/:id/messages', () => {
     expect(h.core.agent.isRunning(chat.id)).toBe(false);
     expect((await h.call(`/api/chats/${chat.id}`)).status).toBe(404);
     expect((await h.call(`/api/attachments/${ref.id}/content`)).status).toBe(404);
+  });
+});
+
+describe('archiving around a run', () => {
+  beforeEach(async () => {
+    h = await createHarness();
+  });
+
+  /** Streams a bit, pauses long enough for the test to PATCH, then finishes normally. */
+  const pausedScript: FakeScript = () => [
+    { type: 'text_delta', delta: 'partial ' },
+    { type: 'text_delta', delta: 'reply' },
+    { type: 'delay', ms: 400 },
+    { type: 'finish', reason: 'stop' },
+  ];
+  const patch = (chatId: string, json: unknown) => h.call(`/api/chats/${chatId}`, { method: 'PATCH', json });
+  const readChatFile = async (chatId: string) =>
+    JSON.parse(await readFile(path.join(h.dataDir, 'chats', `${chatId}.json`), 'utf8')) as { archived: boolean };
+  const readIndexEntry = async (chatId: string) =>
+    (
+      JSON.parse(await readFile(path.join(h.dataDir, 'chats', 'index.json'), 'utf8')) as {
+        chats: { id: string; archived: boolean }[];
+      }
+    ).chats.find((c) => c.id === chatId);
+
+  it('a rejected archive does not abort a running reply; after it goes idle, archive succeeds', async () => {
+    h = await replaceHarness(pausedScript);
+    const chat = await newChat();
+    const res = await send(chat.id, { text: 'go', attachmentIds: [], model: VISION });
+    const { reader, text: seen } = await readUntil(res, /text_delta/);
+    expect(h.core.agent.isRunning(chat.id)).toBe(true);
+
+    const rejected = await patch(chat.id, { archived: true });
+    expect(rejected.status).toBe(409);
+    const body = (await rejected.json()) as { error: { code: string; message: string } };
+    expect(body.error).toMatchObject({
+      code: 'conflict',
+      message: 'Wait for the response to finish before archiving or unarchiving this chat.',
+    });
+
+    // Keep reading as the real UI does; the run must still finish with `done`, not `stopped`.
+    let rest = seen;
+    const decoder = new TextDecoder();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      rest += decoder.decode(value, { stream: true });
+    }
+    expect(rest).toContain('"type":"done"');
+    expect(rest).not.toContain('"status":"stopped"');
+    expect(await lastMessage(chat.id)).toMatchObject({ role: 'assistant', status: 'complete', text: 'partial reply' });
+    expect((await h.core.chats.get(chat.id)).archived).toBe(false);
+
+    await waitFor(() => !h.core.agent.isRunning(chat.id));
+    const ok = await patch(chat.id, { archived: true });
+    expect(ok.status).toBe(200);
+    expect(((await ok.json()) as { archived: boolean }).archived).toBe(true);
+    expect((await h.core.chats.get(chat.id)).archived).toBe(true);
+  });
+
+  it('sending on an archived chat keeps it archived and the events say so', async () => {
+    const chat = await newChat();
+    expect((await patch(chat.id, { archived: true })).status).toBe(200);
+
+    const events = await collectEvents(await send(chat.id, { text: 'hi', attachmentIds: [], model: VISION }));
+    expect(events.at(-1)).toEqual({ type: 'done' });
+    const updates = events.filter((e): e is Extract<AgentEvent, { type: 'chat_updated' }> => e.type === 'chat_updated');
+    expect(updates.length).toBeGreaterThan(0);
+    expect(updates.every((e) => e.chat.archived === true)).toBe(true);
+
+    await waitFor(() => !h.core.agent.isRunning(chat.id));
+    expect((await h.core.chats.get(chat.id)).archived).toBe(true);
+    expect((await readChatFile(chat.id)).archived).toBe(true);
+    expect((await readIndexEntry(chat.id))?.archived).toBe(true);
+    expect((await h.core.chats.get(chat.id)).messages.map((m) => m.role)).toEqual(['user', 'assistant']);
   });
 });
 

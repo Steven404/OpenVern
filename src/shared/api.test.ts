@@ -23,6 +23,28 @@ describe('api schemas', () => {
     expect(updateChatBody.parse({})).toEqual({});
     expect(updateChatBody.parse({ projectId: null })).toEqual({ projectId: null });
   });
+
+  it('updateChatBody accepts archived booleans, alone or with a null project', () => {
+    expect(updateChatBody.parse({ archived: true })).toEqual({ archived: true });
+    expect(updateChatBody.parse({ archived: false })).toEqual({ archived: false });
+    expect(updateChatBody.parse({ projectId: null, archived: true })).toEqual({ projectId: null, archived: true });
+    expect(updateChatBody.parse({ projectId: 'p1', archived: false })).toEqual({ projectId: 'p1', archived: false });
+  });
+
+  it('updateChatBody rejects non-boolean archived values', () => {
+    for (const archived of ['true', null, 1]) {
+      expect(updateChatBody.safeParse({ archived }).success).toBe(false);
+    }
+  });
+
+  it('updateChatBody rejects archiving into a project, reporting it on the archived path', () => {
+    const result = updateChatBody.safeParse({ projectId: 'p1', archived: true });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error.issues).toHaveLength(1);
+    expect(result.error.issues[0]?.path).toEqual(['archived']);
+    expect(result.error.issues[0]?.message).toBe('A chat in a project cannot be archived.');
+  });
 });
 
 describe('errors', () => {

@@ -22,6 +22,8 @@ export interface ChatSummary {
   model: string; // model used for the latest turn
   createdAt: IsoDate;
   updatedAt: IsoDate;
+  /** Hidden under "Archived" in the sidebar. Only meaningful when `projectId === null`. */
+  archived: boolean;
 }
 export interface Chat extends ChatSummary {
   messages: Message[];

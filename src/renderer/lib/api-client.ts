@@ -32,7 +32,7 @@ export interface ApiClient {
   listChats(): Promise<ChatSummary[]>;
   createChat(input: { projectId: Id | null; model: string }): Promise<Chat>;
   getChat(id: Id): Promise<Chat>;
-  updateChat(id: Id, patch: { title?: string; projectId?: Id | null }): Promise<ChatSummary>;
+  updateChat(id: Id, patch: { title?: string; projectId?: Id | null; archived?: boolean }): Promise<ChatSummary>;
   deleteChat(id: Id): Promise<void>;
   sendMessage(
     chatId: Id,

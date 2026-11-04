@@ -32,6 +32,8 @@ const chatSummaryShape = {
   model: z.string(),
   createdAt: z.string(),
   updatedAt: z.string(),
+  // `.catch`, not `.default`: a missing or malformed flag loads as false instead of quarantining the file.
+  archived: z.boolean().catch(false),
 };
 const chatSummarySchema: z.ZodType<ChatSummary> = z.object(chatSummaryShape);
 export const chatIndexSchema = z.object({ version: z.literal(1), chats: z.array(chatSummarySchema) });
@@ -68,5 +70,6 @@ export function summarize(chat: ChatSummary): ChatSummary {
     model: chat.model,
     createdAt: chat.createdAt,
     updatedAt: chat.updatedAt,
+    archived: chat.archived,
   };
 }

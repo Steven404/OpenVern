@@ -16,9 +16,10 @@ import {
 import { useApiClient } from '@renderer/lib/api-context';
 import { queryKeys } from '@renderer/lib/query-keys';
 import { paths } from '@renderer/lib/routes';
+import { patchChatSummary, useRunsStore } from '@renderer/stores/runs';
 import type { ChatSummary } from '@shared/types';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Folder, FolderInput, Pencil, Trash2 } from 'lucide-react';
+import { Archive, ArchiveRestore, Folder, FolderInput, Pencil, Trash2 } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { RenameDialog } from './RenameDialog';
@@ -26,7 +27,7 @@ import { RenameDialog } from './RenameDialog';
 /** Radio value for "No project" (Radix radio values must be strings). */
 const NO_PROJECT = '__none__';
 
-/** D9: the "…" button in the chat header — Rename · Move to project ▸ · Delete. */
+/** D9: the "…" button in the chat header — Rename · Move to project ▸ · Archive (no project only) · Delete. */
 export function ChatOptionsMenu({ chat }: { chat: ChatSummary }) {
   const api = useApiClient();
   const queryClient = useQueryClient();
@@ -45,6 +46,17 @@ export function ChatOptionsMenu({ chat }: { chat: ChatSummary }) {
 
   const move = useMutation({
     mutationFn: (projectId: string | null) => api.updateChat(chat.id, { projectId }),
+    onSettled: refresh,
+  });
+
+  // The server rejects archive changes while a reply is in progress, so the item waits for the run to finish.
+  const streaming = useRunsStore((s) => {
+    const st = s.runs[chat.id]?.status;
+    return st === 'running' || st === 'settling';
+  });
+  const archive = useMutation({
+    mutationFn: (archived: boolean) => api.updateChat(chat.id, { archived }),
+    onSuccess: (summary) => patchChatSummary(queryClient, summary),
     onSettled: refresh,
   });
 
@@ -102,6 +114,15 @@ export function ChatOptionsMenu({ chat }: { chat: ChatSummary }) {
               </MenuRadioGroup>
             </MenuSubContent>
           </MenuSub>
+          {chat.projectId === null ? (
+            <MenuItem
+              icon={chat.archived ? <ArchiveRestore size={15} /> : <Archive size={15} />}
+              disabled={streaming || archive.isPending}
+              onSelect={() => archive.mutate(!chat.archived)}
+            >
+              {chat.archived ? 'Unarchive' : 'Archive'}
+            </MenuItem>
+          ) : null}
           <MenuSeparator />
           <MenuItem danger icon={<Trash2 size={15} />} onSelect={() => setDeleteOpen(true)}>
             Delete

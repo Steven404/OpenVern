@@ -111,7 +111,7 @@ export class HttpApiClient implements ApiClient {
   getChat(id: Id) {
     return this.json<Chat>('GET', `/chats/${enc(id)}`);
   }
-  updateChat(id: Id, patch: { title?: string; projectId?: Id | null }) {
+  updateChat(id: Id, patch: { title?: string; projectId?: Id | null; archived?: boolean }) {
     return this.json<ChatSummary>('PATCH', `/chats/${enc(id)}`, patch);
   }
   deleteChat(id: Id) {

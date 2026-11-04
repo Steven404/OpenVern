@@ -159,11 +159,7 @@ export function RightPanel({ chatId, projectId }: { chatId: Id; projectId: Id | 
         className="absolute top-0 left-0 z-20 m-0 h-full w-1.5 cursor-col-resize touch-none border-0 bg-transparent hover:bg-border-control focus-visible:bg-border-control"
       />
       <header className="flex min-h-[52px] items-center gap-1.5 border-b border-border-header py-2 pr-2 pl-2.5">
-        <div
-          role="tablist"
-          aria-label="Open panels"
-          className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-color:var(--color-border-control)_transparent] [scrollbar-width:thin]"
-        >
+        <div role="tablist" aria-label="Open panels" className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
           {pinned.map((def) => (
             <button
               key={def.id}

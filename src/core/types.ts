@@ -74,8 +74,15 @@ export interface ChatsService {
   get(id: Id): Promise<Chat>;
   /** Title `NEW_CHAT_TITLE`, no messages. Throws `not_found` if `projectId` is unknown. */
   create(input: { projectId: Id | null; model: string }): Promise<Chat>;
-  /** Bumps `updatedAt` only when `model` changes (renames/moves don't reorder the sidebar). */
-  update(id: Id, patch: { title?: string; projectId?: Id | null; model?: string }): Promise<ChatSummary>;
+  /**
+   * Bumps `updatedAt` only when `model` changes (renames, moves and archive changes don't reorder the sidebar).
+   * `archived` applies only to chats without a project: a chat that ends up in a project is always unarchived,
+   * and `archived: true` for one throws `conflict` without writing. Moving to `projectId: null` keeps the flag.
+   */
+  update(
+    id: Id,
+    patch: { title?: string; projectId?: Id | null; model?: string; archived?: boolean },
+  ): Promise<ChatSummary>;
   /** Deletes the chat file and its index entry (attachments are removed by the caller). */
   remove(id: Id): Promise<void>;
   /** Appends and bumps `updatedAt`. Returns the new summary. */

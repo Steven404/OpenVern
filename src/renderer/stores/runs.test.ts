@@ -39,6 +39,7 @@ const summary: ChatSummary = {
   model: 'm',
   createdAt: '',
   updatedAt: '',
+  archived: false,
 };
 
 const run = (events: RunEvent[], start: RunState = createRun(1, pending)) => events.reduce(reduceRun, start);

@@ -176,6 +176,7 @@ export class MockApiClient implements ApiClient {
       model: input.model,
       createdAt: t,
       updatedAt: t,
+      archived: false,
       messages: [],
     };
     this.chats.push(chat);
@@ -184,13 +185,24 @@ export class MockApiClient implements ApiClient {
   async getChat(id: Id) {
     return clone(this.chat(id));
   }
-  async updateChat(id: Id, patch: { title?: string; projectId?: Id | null }) {
+  async updateChat(id: Id, patch: { title?: string; projectId?: Id | null; archived?: boolean }) {
+    // Same rules as `PATCH /chats/:id`. Everything is validated before anything is mutated.
+    if (patch.archived === true && typeof patch.projectId === 'string')
+      fail('invalid_request', 400, 'A chat in a project cannot be archived.');
     const c = this.chat(id);
+    const changesArchived = patch.archived !== undefined || (c.archived && typeof patch.projectId === 'string');
+    if (changesArchived && this.running.has(id))
+      fail('conflict', 409, 'Wait for the response to finish before archiving or unarchiving this chat.');
+    if (patch.projectId && !this.projects.some((p) => p.id === patch.projectId)) fail('not_found', 404);
+    const projectId = patch.projectId !== undefined ? patch.projectId : c.projectId;
+    if (projectId !== null && patch.archived === true)
+      fail('conflict', 409, 'Only chats without a project can be archived.');
+
     if (patch.title !== undefined) c.title = patch.title.trim();
-    if (patch.projectId !== undefined) {
-      if (patch.projectId && !this.projects.some((p) => p.id === patch.projectId)) fail('not_found', 404);
-      c.projectId = patch.projectId;
-    }
+    c.projectId = projectId;
+    // Moving into a project clears the flag; a chat without a project keeps it unless the patch sets it.
+    if (projectId !== null) c.archived = false;
+    else if (patch.archived !== undefined) c.archived = patch.archived;
     return this.summary(c);
   }
   async deleteChat(id: Id) {
@@ -543,6 +555,7 @@ export class MockApiClient implements ApiClient {
         model: DEFAULT_MODEL,
         createdAt: minutesAgo(age + 30),
         updatedAt: minutesAgo(age),
+        archived: false,
         messages,
       };
     };

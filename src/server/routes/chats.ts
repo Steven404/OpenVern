@@ -35,6 +35,24 @@ export function chatRoutes(core: Core): Hono {
     };
   };
 
+  /**
+   * Apply, discard and archive changes need the chat idle; the claim also keeps a new turn from starting while
+   * they run. Rejects rather than aborting or waiting for the run.
+   */
+  const withIdleChat = async <T>(
+    chatId: Id,
+    fn: () => Promise<T>,
+    conflictMessage = 'Wait for the response to finish before applying or discarding edits.',
+  ): Promise<T> => {
+    if (starting.has(chatId) || core.agent.isRunning(chatId)) throw new CoreError('conflict', conflictMessage);
+    starting.add(chatId);
+    try {
+      return await fn();
+    } finally {
+      starting.delete(chatId);
+    }
+  };
+
   r.get(ROUTES.chats, async (c) => c.json(await core.chats.list()));
 
   r.post(ROUTES.chats, async (c) => {
@@ -47,10 +65,34 @@ export function chatRoutes(core: Core): Hono {
   r.patch(ROUTES.chat, async (c) => {
     const id = c.req.param('id');
     const body = await readJson(c, updateChatBody);
-    if (body.projectId !== undefined) {
-      const chat = await core.chats.get(id);
-      if (chat.projectId !== body.projectId && (await core.changes.get(id)).pending)
-        throw new CoreError('conflict', 'Apply or discard the proposed edits first.');
+    if (body.projectId !== undefined || body.archived !== undefined) {
+      const chat = await core.chats.get(id); // 404 before any claim
+      const rejectPendingMove = async (projectId: Id | null) => {
+        if (body.projectId !== undefined && projectId !== body.projectId && (await core.changes.get(id)).pending)
+          throw new CoreError('conflict', 'Apply or discard the proposed edits first.');
+      };
+      // A move into a project can clear the flag. Hold the run claim across a fresh read so an archive
+      // that lands after the first snapshot cannot be wiped while a reply is in progress.
+      const guardsFlag = body.archived !== undefined || typeof body.projectId === 'string';
+      if (guardsFlag) {
+        if (starting.has(id))
+          throw new CoreError('conflict', 'Wait for the response to finish before archiving or unarchiving this chat.');
+        starting.add(id);
+        try {
+          const fresh = await core.chats.get(id);
+          await rejectPendingMove(fresh.projectId);
+          const changesFlag = body.archived !== undefined || (fresh.archived && typeof body.projectId === 'string');
+          if (changesFlag && core.agent.isRunning(id))
+            throw new CoreError(
+              'conflict',
+              'Wait for the response to finish before archiving or unarchiving this chat.',
+            );
+          return c.json(await core.chats.update(id, body));
+        } finally {
+          starting.delete(id);
+        }
+      }
+      await rejectPendingMove(chat.projectId);
     }
     return c.json(await core.chats.update(id, body));
   });
@@ -105,18 +147,6 @@ export function chatRoutes(core: Core): Hono {
     const release = claim(chatId);
     return streamTurn(c, core, { chatId, model: body.model, release });
   });
-
-  /** Apply and discard need the chat idle; the claim also keeps a new turn from starting while they run. */
-  const withIdleChat = async <T>(chatId: Id, fn: () => Promise<T>): Promise<T> => {
-    if (starting.has(chatId) || core.agent.isRunning(chatId))
-      throw new CoreError('conflict', 'Wait for the response to finish before applying or discarding edits.');
-    starting.add(chatId);
-    try {
-      return await fn();
-    } finally {
-      starting.delete(chatId);
-    }
-  };
 
   r.get(ROUTES.chatChanges, async (c) => {
     const id = c.req.param('id');

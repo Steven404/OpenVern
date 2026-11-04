@@ -46,6 +46,7 @@ export function createFakeChats(now: () => Date = createClock()): FakeChats {
     model: c.model,
     createdAt: c.createdAt,
     updatedAt: c.updatedAt,
+    archived: c.archived,
   });
   return {
     store,
@@ -64,6 +65,7 @@ export function createFakeChats(now: () => Date = createClock()): FakeChats {
         model,
         createdAt: ts,
         updatedAt: ts,
+        archived: false,
         messages: [],
       };
       store.set(chat.id, chat);
@@ -77,6 +79,7 @@ export function createFakeChats(now: () => Date = createClock()): FakeChats {
         c.model = patch.model;
         c.updatedAt = now().toISOString();
       }
+      if (patch.archived !== undefined) c.archived = patch.archived;
       return summary(c);
     },
     async remove(id) {
