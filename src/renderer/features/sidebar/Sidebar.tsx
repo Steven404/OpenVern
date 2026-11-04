@@ -3,10 +3,10 @@ import { Button, cx, IconButton, Kbd } from '@renderer/components/ui';
 import { useUiStore } from '@renderer/stores/ui';
 import { APP_NAME } from '@shared/constants';
 import type { ChatSummary } from '@shared/types';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import { useMatch, useNavigate } from 'react-router';
 import { ChatLink } from './ChatLink';
-import { GearIcon, PanelIcon, PlusIcon } from './icons';
+import { ChevronIcon, GearIcon, PanelIcon, PlusIcon } from './icons';
 import { ProjectRow } from './ProjectRow';
 
 export const SIDEBAR_COLLAPSE_BUTTON_ID = 'sidebar-collapse';
@@ -15,7 +15,7 @@ const sectionLabel = 'm-0 font-mono text-[11px] font-medium tracking-[0.12em] te
 
 const byNewest = (a: ChatSummary, b: ChatSummary) => b.updatedAt.localeCompare(a.updatedAt);
 
-/** D1–D7 plus the "CHATS" section. `onCollapse` hides the sidebar (desktop collapse, or closing the overlay). */
+/** D1–D7 plus the "CHATS" section (with its collapsible "Archived" list). `onCollapse` hides the sidebar (desktop collapse, or closing the overlay). */
 export function Sidebar({ onCollapse, className }: { onCollapse: () => void; className?: string }) {
   const navigate = useNavigate();
   const projects = useProjects();
@@ -27,14 +27,15 @@ export function Sidebar({ onCollapse, className }: { onCollapse: () => void; cla
   const openNewProject = useUiStore((s) => s.openNewProject);
   const expandProject = useUiStore((s) => s.expandProject);
 
-  const { byProject, loose } = useMemo(() => {
+  const { byProject, loose, archived } = useMemo(() => {
     const byProject = new Map<string, ChatSummary[]>();
     const loose: ChatSummary[] = [];
+    const archived: ChatSummary[] = [];
     for (const chat of [...(chats.data ?? [])].sort(byNewest)) {
-      if (chat.projectId === null) loose.push(chat);
+      if (chat.projectId === null) (chat.archived ? archived : loose).push(chat);
       else byProject.set(chat.projectId, [...(byProject.get(chat.projectId) ?? []), chat]);
     }
-    return { byProject, loose };
+    return { byProject, loose, archived };
   }, [chats.data]);
 
   // The project of the chat on screen expands when you arrive at (or move) the chat; manual collapse sticks after that.
@@ -42,6 +43,14 @@ export function Sidebar({ onCollapse, className }: { onCollapse: () => void; cla
   useEffect(() => {
     if (currentProjectId) expandProject(currentProjectId);
   }, [currentProjectId, expandProject]);
+
+  // "Archived" starts collapsed and expands when the chat on screen is an archived loose chat.
+  const [archivedOpen, setArchivedOpen] = useState(false);
+  const archivedListId = useId();
+  const currentArchivedId = archived.find((c) => c.id === currentChatId)?.id ?? null;
+  useEffect(() => {
+    if (currentArchivedId) setArchivedOpen(true);
+  }, [currentArchivedId]);
 
   return (
     <aside
@@ -79,7 +88,10 @@ export function Sidebar({ onCollapse, className }: { onCollapse: () => void; cla
         </button>
       </div>
 
-      <nav aria-label="Projects and chats" className="min-h-0 flex-1 overflow-y-auto px-3 pt-[18px] pb-3">
+      <nav
+        aria-label="Projects and chats"
+        className="min-h-0 flex-1 overflow-y-auto scrollbar-stable px-3 pt-[18px] pb-3"
+      >
         <div className="flex min-h-7 items-center justify-between px-2 pb-2 box-content">
           <h2 className={sectionLabel}>Projects</h2>
           <IconButton size="sm" aria-label="New project" onClick={openNewProject}>
@@ -114,20 +126,49 @@ export function Sidebar({ onCollapse, className }: { onCollapse: () => void; cla
           </div>
         )}
 
-        {loose.length > 0 ? (
+        {loose.length > 0 || archived.length > 0 ? (
           <section aria-labelledby="sidebar-chats" className="pt-[18px]">
             <div className="flex min-h-7 items-center px-2 pb-2 box-content">
               <h2 id="sidebar-chats" className={sectionLabel}>
                 Chats
               </h2>
             </div>
-            <ul className="m-0 flex list-none flex-col gap-px p-0">
-              {loose.map((chat) => (
-                <li key={chat.id}>
-                  <ChatLink chat={chat} current={chat.id === currentChatId} />
-                </li>
-              ))}
-            </ul>
+            {loose.length > 0 ? (
+              <ul className="m-0 flex list-none flex-col gap-px p-0">
+                {loose.map((chat) => (
+                  <li key={chat.id}>
+                    <ChatLink chat={chat} current={chat.id === currentChatId} />
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {archived.length > 0 ? (
+              <div>
+                <button
+                  type="button"
+                  aria-expanded={archivedOpen}
+                  aria-controls={archivedOpen ? archivedListId : undefined}
+                  onClick={() => setArchivedOpen((open) => !open)}
+                  className="flex min-h-9 w-full cursor-pointer items-center gap-2 rounded-[9px] px-2 text-left text-sm font-medium text-text hover:bg-overlay-row"
+                >
+                  <ChevronIcon
+                    className="shrink-0 text-text-faint transition-transform duration-150 ease-in-out"
+                    style={{ transform: `rotate(${archivedOpen ? 90 : 0}deg)` }}
+                  />
+                  <span className="flex-1 truncate">Archived</span>
+                  <span className="font-mono text-[11px] text-text-faint">{archived.length}</span>
+                </button>
+                {archivedOpen ? (
+                  <ul id={archivedListId} className="m-0 flex list-none flex-col gap-px p-0">
+                    {archived.map((chat) => (
+                      <li key={chat.id}>
+                        <ChatLink chat={chat} current={chat.id === currentChatId} />
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+            ) : null}
           </section>
         ) : null}
       </nav>

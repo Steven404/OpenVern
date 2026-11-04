@@ -91,7 +91,7 @@ export function ModelPicker({
                 className="h-11 w-full border-0 bg-transparent text-[14px] text-text outline-none placeholder:text-text-faint"
               />
             </div>
-            <Command.List className="max-h-[320px] overflow-y-auto p-1.5">
+            <Command.List className="max-h-[320px] overflow-y-auto scrollbar-stable p-1.5">
               <Command.Empty className="px-3 py-6 text-center text-[13.5px] text-text-faint">
                 No models match.
               </Command.Empty>

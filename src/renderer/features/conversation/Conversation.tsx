@@ -93,7 +93,7 @@ export function Conversation({ chatId }: ConversationProps) {
       onScroll={onScroll}
       aria-label="Conversation"
       aria-busy={active || undefined}
-      className="min-h-0 flex-1 overflow-y-auto px-6 pt-10 pb-6"
+      className="min-h-0 flex-1 overflow-y-auto scrollbar-stable px-6 pt-10 pb-6"
     >
       <div ref={innerRef} className="mx-auto flex max-w-[760px] flex-col gap-8">
         {chatQuery.isPending && !run && (

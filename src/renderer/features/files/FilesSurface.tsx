@@ -68,7 +68,7 @@ export function FilesSurface({ chatId, projectId }: SurfaceProps) {
 
       <nav
         aria-label={home ? 'Home files' : 'Project files'}
-        className="min-h-[120px] flex-1 basis-0 overflow-y-auto px-2 pt-1 pb-2 [scrollbar-color:var(--color-border-control)_transparent] [scrollbar-width:thin]"
+        className="min-h-[120px] flex-1 basis-0 overflow-y-auto px-2 pt-1 pb-2 scrollbar-stable"
       >
         {tree.isPending ? (
           <p className="m-4 text-[13px] text-text-muted">Loading files…</p>

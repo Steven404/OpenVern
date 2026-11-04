@@ -138,7 +138,7 @@ export function FileViewer({
       <div
         role="tabpanel"
         aria-label={path}
-        className="min-h-0 flex-1 overflow-auto bg-code pt-2 pb-6 [scrollbar-color:var(--color-border-control)_transparent] [scrollbar-width:thin]"
+        className="min-h-0 flex-1 overflow-auto bg-code pt-2 pb-6 scrollbar-stable"
       >
         {file.isPending ? (
           <p className="m-4 text-[13px] text-text-muted">Loading {name}…</p>

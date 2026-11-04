@@ -30,6 +30,59 @@
       border-color 0.15s ease,
       color 0.15s ease;
   }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-button {
+    display: none;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+    margin: 4px;
+  }
+
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: var(--color-scroll-thumb);
+    background-clip: padding-box;
+    border: 2px solid transparent;
+    border-radius: 999px;
+    min-height: 40px;
+    min-width: 40px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: var(--color-scroll-thumb-hover);
+    border-width: 1px;
+  }
+
+  ::-webkit-scrollbar-thumb:active {
+    background-color: var(--color-scroll-thumb-active);
+    border-width: 1px;
+  }
+}
+
+@utility scrollbar-stable {
+  scrollbar-gutter: stable;
+}
+
+/* Firefox (dev-only) fallback; Chromium uses the ::-webkit-scrollbar rules. */
+@supports not selector(::-webkit-scrollbar) {
+  :root {
+    scrollbar-color: var(--color-scroll-thumb) transparent;
+  }
+
+  * {
+    scrollbar-width: thin;
+  }
 }
 
 /* Right panel entrance: slides in from 12px (plan §5.1). */

@@ -24,6 +24,10 @@
   --color-border-hover: #46528c;
   --color-border-focus: #5a68a8;
 
+  --color-scroll-thumb: var(--color-border-control);
+  --color-scroll-thumb-hover: var(--color-border-hover);
+  --color-scroll-thumb-active: var(--color-border-focus);
+
   --color-text: #ecf0fa;
   --color-text-body: #d8deef;
   --color-text-code: #e2e7f5;
@@ -96,6 +100,10 @@
   --color-border-control: #3d3139;
   --color-border-hover: #4d3e48;
   --color-border-focus: #5e4c58;
+
+  --color-scroll-thumb: #4a3c46;
+  --color-scroll-thumb-hover: #5e4c58;
+  --color-scroll-thumb-active: #76626f;
 
   --color-text: #f0e6e6;
   --color-text-body: #e2d6d7;

@@ -102,7 +102,7 @@ function ToolSection({ label, text, danger = false }: { label: string; text: str
     <div className="flex flex-col gap-1">
       <span className="font-mono text-[11px] tracking-[0.08em] text-text-faint uppercase">{label}</span>
       <pre
-        className={`m-0 max-h-[320px] overflow-auto whitespace-pre-wrap break-words font-mono text-[12.5px] leading-[1.6] ${danger ? 'text-danger' : 'text-text-code'}`}
+        className={`m-0 max-h-[320px] overflow-auto scrollbar-stable whitespace-pre-wrap break-words font-mono text-[12.5px] leading-[1.6] ${danger ? 'text-danger' : 'text-text-code'}`}
       >
         {text}
       </pre>
