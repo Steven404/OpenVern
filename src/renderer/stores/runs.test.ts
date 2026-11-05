@@ -235,6 +235,86 @@ describe('useRunsStore', () => {
     );
   });
 
+  /** Records the run's `usageBefore` the first time it is seen running. */
+  function captureUsageBefore(chatId: string) {
+    const seen: { value?: RunState['usageBefore'] } = {};
+    const unsubscribe = useRunsStore.subscribe((st) => {
+      const r = st.runs[chatId];
+      if (r?.status === 'running' && !('value' in seen)) seen.value = r.usageBefore;
+    });
+    return { seen, unsubscribe };
+  }
+
+  it('send captures the cached usage at run start in usageBefore', async () => {
+    const { queryClient, chat, deps } = await setup();
+    const cached = queryClient.getQueryData<ChatSummary[]>(queryKeys.chats)?.find((c) => c.id === chat.id)?.usage;
+    expect(cached?.requests).toBeGreaterThan(0);
+    const { seen, unsubscribe } = captureUsageBefore(chat.id);
+    await useRunsStore.getState().send(deps, chat.id, { text: 'again please', attachments: [], model: chat.model });
+    unsubscribe();
+    expect(seen.value).toEqual(cached);
+  });
+
+  it('send on a just-created chat captures usageBefore with 0 requests', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const queryClient = new QueryClient();
+    const chat = await api.createChat({ projectId: null, model: 'anthropic/claude-sonnet-5.5' });
+    queryClient.setQueryData(queryKeys.chat(chat.id), chat);
+    const { seen, unsubscribe } = captureUsageBefore(chat.id);
+    await useRunsStore
+      .getState()
+      .send({ api, queryClient }, chat.id, { text: 'hi', attachments: [], model: chat.model });
+    unsubscribe();
+    expect(seen.value).toMatchObject({ requests: 0, contextTokens: 0 });
+  });
+
+  it('usageBefore is null when the chat is not cached', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const chat = await api.createChat({ projectId: null, model: 'anthropic/claude-sonnet-5.5' });
+    const { seen, unsubscribe } = captureUsageBefore(chat.id);
+    await useRunsStore
+      .getState()
+      .send({ api, queryClient: new QueryClient() }, chat.id, { text: 'hi', attachments: [], model: chat.model });
+    unsubscribe();
+    expect(seen.value).toBeNull();
+  });
+
+  it('usageBefore follows the newer of the chats list and the chat query', async () => {
+    const { queryClient, chat, deps } = await setup();
+    const newer = { ...chat, updatedAt: '9999-01-01T00:00:00.000Z', usage: { ...chat.usage, requests: 99 } };
+    queryClient.setQueryData(queryKeys.chat(chat.id), newer);
+    const { seen, unsubscribe } = captureUsageBefore(chat.id);
+    await useRunsStore.getState().send(deps, chat.id, { text: 'go', attachments: [], model: chat.model });
+    unsubscribe();
+    expect(seen.value?.requests).toBe(99);
+  });
+
+  it('retry captures the cached usage at run start in usageBefore', async () => {
+    const { queryClient, chat, deps } = await setup();
+    const cached = queryClient.getQueryData<ChatSummary[]>(queryKeys.chats)?.find((c) => c.id === chat.id)?.usage;
+    expect(cached?.requests).toBeGreaterThan(0);
+    const { seen, unsubscribe } = captureUsageBefore(chat.id);
+    await useRunsStore.getState().retry(deps, chat.id, chat.model);
+    unsubscribe();
+    expect(seen.value).toEqual(cached);
+  });
+
+  it('retry of an unsent first message captures usageBefore with 0 requests', async () => {
+    const api = new MockApiClient({ delayMs: 0, keyConfigured: false });
+    const queryClient = new QueryClient();
+    const chat = await api.createChat({ projectId: null, model: 'anthropic/claude-sonnet-5.5' });
+    queryClient.setQueryData(queryKeys.chat(chat.id), chat);
+    const deps = { api, queryClient };
+    await useRunsStore.getState().send(deps, chat.id, { text: 'hello', attachments: [], model: chat.model });
+    expect(useRunsStore.getState().runs[chat.id]?.unsent?.text).toBe('hello');
+
+    await api.setOpenRouterKey('sk-or-v1-abcdefghijklmnop');
+    const { seen, unsubscribe } = captureUsageBefore(chat.id);
+    await useRunsStore.getState().retry(deps, chat.id, chat.model);
+    unsubscribe();
+    expect(seen.value).toMatchObject({ requests: 0 });
+  });
+
   it('maps ApiErrors to their info and anything else to network_error', () => {
     expect(toErrorInfo(new ApiError(errorInfo('internal'))).code).toBe('internal');
     expect(toErrorInfo(new TypeError('boom'))).toMatchObject({ code: 'network_error', message: 'boom' });

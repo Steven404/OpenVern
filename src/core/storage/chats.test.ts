@@ -227,6 +227,34 @@ describe('ChatsService', () => {
     expect((await fresh.chats.list()).map((c) => c.id)).toEqual([good.id]);
     expect(logger.messages.some((m) => m.includes('x.json'))).toBe(true);
   });
+
+  it('a rebuild that skipped an unreadable chat does not persist the index; a later list() finds the chat', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const good = await storage.chats.create({ projectId: null, model: 'm' });
+    await sleep(5);
+    const flaky = await storage.chats.create({ projectId: null, model: 'm' });
+    const paths = dataPaths(dataDir);
+    // Make the chat file unreadable without corrupting it: park it and put a directory in its place (EISDIR).
+    const parked = path.join(dataDir, 'parked.json');
+    await fs.rename(paths.chatFile(flaky.id), parked);
+    await fs.mkdir(paths.chatFile(flaky.id));
+    await fs.rm(paths.chatsIndex);
+
+    const fresh = await createStorage({ dataDir, secretStore: new MemorySecretStore(), logger: recordingLogger() });
+    expect(ids(await fresh.chats.list())).toEqual([good.id]);
+    await expect(fs.access(paths.chatsIndex)).rejects.toMatchObject({ code: 'ENOENT' });
+
+    // A mutation after the partial rebuild writes the index, but without the marker, so it is rebuilt next time.
+    const other = await fresh.chats.create({ projectId: null, model: 'm' });
+    expect(JSON.parse(await fs.readFile(paths.chatsIndex, 'utf8'))).not.toHaveProperty('usageBackfilled');
+
+    // Once the file is readable again, the next list() includes it and the index is complete.
+    await fs.rmdir(paths.chatFile(flaky.id));
+    await fs.rename(parked, paths.chatFile(flaky.id));
+    expect(ids(await fresh.chats.list()).sort()).toEqual([good.id, flaky.id, other.id].sort());
+    const rewritten = JSON.parse(await fs.readFile(paths.chatsIndex, 'utf8')) as { usageBackfilled?: boolean };
+    expect(rewritten.usageBackfilled).toBe(true);
+  });
 });
 
 type RawTotals = { promptTokens: number; completionTokens: number; costUsd: number | null; requests: number };
@@ -602,6 +630,23 @@ describe('ChatsService usage (F1)', () => {
       costUsd: null,
       requests: 2,
     });
+  });
+
+  it('truncateAfterLastUser hides usageTotals when there is nothing to cut, too', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const empty = await storage.chats.create({ projectId: null, model: 'm' });
+    const noCut = await storage.chats.truncateAfterLastUser(empty.id);
+    expect(noCut.messages).toEqual([]);
+    expect(noCut).not.toHaveProperty('usageTotals');
+
+    const chat = await storage.chats.create({ projectId: null, model: 'm' });
+    await storage.chats.appendMessage(chat.id, user('u1'));
+    await storage.chats.appendMessage(chat.id, withUsage(assistant('a1'), { promptTokens: 100, completionTokens: 10 }));
+    await storage.chats.appendMessage(chat.id, user('u2'));
+    const lastIsUser = await storage.chats.truncateAfterLastUser(chat.id);
+    expect(lastIsUser.messages.map((m) => m.id)).toEqual(['u1', 'a1', 'u2']);
+    expect(lastIsUser).not.toHaveProperty('usageTotals');
+    expect((await readRawChat(dataDir, chat.id)).usageTotals).toMatchObject({ requests: 1 });
   });
 
   it('totals add up across the steps of a tool turn', async () => {

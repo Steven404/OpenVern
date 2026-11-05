@@ -65,6 +65,15 @@ function renderCounter(chat: ChatSummary, models: ModelInfo[] = [SONNET_256K]) {
 
 const counter = () => screen.getByRole('button', { name: /Context used/ });
 
+const ZERO_USAGE: ChatUsage = { contextTokens: 0, promptTokens: 0, completionTokens: 0, costUsd: null, requests: 0 };
+
+/** Puts a run for `chatId` in the store with the given status and pre-run usage. */
+function setRun(chatId: string, status: 'running' | 'settling', usageBefore: ChatUsage | null) {
+  useRunsStore.setState((s) => ({
+    runs: { ...s.runs, [chatId]: { ...createRun(1, undefined, undefined, usageBefore), status } },
+  }));
+}
+
 async function openPopover(): Promise<HTMLElement> {
   fireEvent.click(counter());
   return screen.findByRole('dialog', { name: 'Context' });
@@ -140,7 +149,7 @@ describe('ContextUsageButton', () => {
       const { rerenderCounter } = renderCounter(before);
       expect(within(counter()).getByText('10k')).toBeTruthy();
 
-      act(() => useRunsStore.setState({ runs: { [before.id]: { ...createRun(1), status } }, chatModels: {} }));
+      act(() => setRun(before.id, status, before.usage));
       rerenderCounter(during);
       expect(within(counter()).getByText('10k')).toBeTruthy();
       expect(within(counter()).queryByText('97.3k')).toBeNull();
@@ -154,16 +163,45 @@ describe('ContextUsageButton', () => {
     },
   );
 
-  it('keeps the pre-run usage across a remount during the run', () => {
+  it('shows the pre-run usage on a fresh mount during the run', () => {
     const before = chatWith({ contextTokens: 10_000, promptTokens: 10_000, completionTokens: 0, requests: 1 });
     const during = chatWith({ contextTokens: 97_280, promptTokens: 150_000, completionTokens: 5_000, requests: 4 });
-    const first = renderCounter(before);
-    first.unmount();
-
-    act(() => useRunsStore.setState({ runs: { [before.id]: createRun(1) }, chatModels: {} }));
+    act(() => setRun(before.id, 'running', before.usage));
     renderCounter(during);
     expect(within(counter()).getByText('10k')).toBeTruthy();
     expect(within(counter()).queryByText('97.3k')).toBeNull();
+  });
+
+  it('hides the counter during a run whose pre-run usage was not cached', () => {
+    act(() => setRun('chat-1', 'running', null));
+    renderCounter(chatWith({ contextTokens: 97_280, requests: 4 }));
+    expect(screen.queryByRole('button', { name: /Context used/ })).toBeNull();
+  });
+
+  it('switching chats on a mounted counter never shows the previous chat’s figures', () => {
+    const a = { ...chatWith({ contextTokens: 10_000, requests: 1 }), id: 'chat-a' };
+    const bBefore = chatWith({ contextTokens: 50_000, requests: 3 }).usage;
+    const b = { ...chatWith({ contextTokens: 70_000, requests: 5 }), id: 'chat-b' };
+    const c = { ...chatWith({ contextTokens: 1_000, requests: 1 }), id: 'chat-c' };
+    act(() => {
+      setRun(b.id, 'running', bBefore);
+      setRun(c.id, 'running', ZERO_USAGE);
+    });
+
+    const { rerenderCounter } = renderCounter(a);
+    expect(within(counter()).getByText('10k')).toBeTruthy();
+
+    // Same component instance, another chat id (the `chat/:id` route keeps the header mounted).
+    rerenderCounter(b);
+    expect(within(counter()).getByText('50k')).toBeTruthy();
+    expect(within(counter()).queryByText('10k')).toBeNull();
+
+    // A brand-new chat in its first reply stays hidden, even straight after a chat with figures.
+    rerenderCounter(c);
+    expect(screen.queryByRole('button', { name: /Context used/ })).toBeNull();
+
+    rerenderCounter(a);
+    expect(within(counter()).getByText('10k')).toBeTruthy();
   });
 
   it('stays hidden through a new chat’s first reply', () => {
@@ -177,7 +215,7 @@ describe('ContextUsageButton', () => {
     const { rerenderCounter } = renderCounter(empty);
     expect(screen.queryByRole('button', { name: /Context used/ })).toBeNull();
 
-    act(() => useRunsStore.setState({ runs: { [empty.id]: createRun(1) }, chatModels: {} }));
+    act(() => setRun(empty.id, 'running', empty.usage));
     rerenderCounter(firstReply);
     expect(screen.queryByRole('button', { name: /Context used/ })).toBeNull();
 
@@ -249,6 +287,15 @@ describe('Context popover', () => {
     expect(within(dialog).getByRole('progressbar').getAttribute('aria-valuenow')).toBeNull();
   });
 
+  it('treats a reported limit of 0 as no limit, with the "doesn\'t report" note', async () => {
+    const zero: ModelInfo = { ...SONNET_256K, contextLength: 0 };
+    renderCounter(chatWith({ contextTokens: 97_280, costUsd: 0.64 }), [zero]);
+    const dialog = await openPopover();
+    expect(counter().getAttribute('data-level')).toBe('unknown');
+    expect(within(dialog).getByText("This model doesn't report a context limit.")).toBeTruthy();
+    expect(within(dialog).queryByText('Context limit unavailable.')).toBeNull();
+  });
+
   it('does not show the unknown-limit note when the limit is known', async () => {
     renderCounter(chatWith({ contextTokens: 97_280, costUsd: 0.64 }));
     const dialog = await openPopover();
@@ -290,6 +337,35 @@ describe('ChatHeader shows the counter', () => {
     // Models load asynchronously, so wait for the limit to appear next to the used figure.
     await waitFor(() => expect(counter().textContent).toContain('/ 1M'));
     expect(within(counter()).getByText('860k')).toBeTruthy();
+  });
+
+  it('a chat started on /new stays hidden during its first reply, then shows the new usage', async () => {
+    const { queryClient } = renderApp({ route: '/new', clientOptions: { delayMs: 5 } });
+    const message = (await screen.findByLabelText('Message')) as HTMLTextAreaElement;
+    await screen.findByRole('button', { name: /^Model:/ });
+    fireEvent.change(message, { target: { value: 'Explain the loop' } });
+    fireEvent.keyDown(message, { key: 'Enter' });
+
+    await screen.findByRole('heading', { level: 1 });
+    await waitFor(() => expect(Object.values(useRunsStore.getState().runs)[0]?.status).toBe('running'));
+    const [chatId, run] = Object.entries(useRunsStore.getState().runs)[0] ?? [];
+    expect(run?.usageBefore?.requests).toBe(0);
+    expect(screen.queryByRole('button', { name: /Context used/ })).toBeNull();
+
+    // Hidden for the whole run, even if the cached summary already moved: check after every DOM change.
+    let shownDuringRun = false;
+    const observer = new MutationObserver(() => {
+      const status = useRunsStore.getState().runs[chatId ?? '']?.status;
+      const active = status === 'running' || status === 'settling';
+      if (active && screen.queryByRole('button', { name: /Context used/ })) shownDuringRun = true;
+    });
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+    await waitFor(() => expect(useRunsStore.getState().runs[chatId ?? '']).toBeUndefined(), { timeout: 5000 });
+    observer.disconnect();
+    expect(shownDuringRun).toBe(false);
+    const settled = queryClient.getQueryData<ChatSummary[]>(queryKeys.chats)?.find((c) => c.id === chatId);
+    expect(settled?.usage.requests).toBeGreaterThan(0);
+    await waitFor(() => expect(counter()).toBeTruthy());
   });
 
   it('a new chat has no counter', async () => {

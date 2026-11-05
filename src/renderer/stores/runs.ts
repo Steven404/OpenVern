@@ -7,7 +7,16 @@
 import type { ApiErrorInfo } from '@shared/errors';
 import { errorInfo } from '@shared/errors';
 import type { AgentEvent } from '@shared/events';
-import type { AssistantMessage, AttachmentRef, Chat, ChatSummary, Id, Message, UserMessage } from '@shared/types';
+import type {
+  AssistantMessage,
+  AttachmentRef,
+  Chat,
+  ChatSummary,
+  ChatUsage,
+  Id,
+  Message,
+  UserMessage,
+} from '@shared/types';
 import type { QueryClient } from '@tanstack/react-query';
 import { create } from 'zustand';
 import { type ApiClient, ApiError } from '../lib/api-client';
@@ -40,11 +49,21 @@ export interface RunState {
   unsent: UnsentMessage | null;
   /** Distinguishes consecutive runs of one chat (a late settle must not clear a newer run). */
   token: number;
+  /**
+   * F1: the chat's usage when the run started, from the cached summary (`null` if it was not cached). The context
+   * counter shows it while the run is active, so its figures change only when the run ends (plan §2).
+   */
+  usageBefore: ChatUsage | null;
 }
 
 export type RunEvent = AgentEvent | { type: 'aborted' };
 
-export function createRun(token: number, user?: UserMessage, unsent?: UnsentMessage): RunState {
+export function createRun(
+  token: number,
+  user?: UserMessage,
+  unsent?: UnsentMessage,
+  usageBefore: ChatUsage | null = null,
+): RunState {
   return {
     status: 'running',
     messages: user ? [user] : [],
@@ -55,6 +74,7 @@ export function createRun(token: number, user?: UserMessage, unsent?: UnsentMess
     sawDone: false,
     unsent: unsent ?? null,
     token,
+    usageBefore,
   };
 }
 
@@ -200,6 +220,17 @@ export function patchChatSummary(queryClient: QueryClient, summary: ChatSummary)
   queryClient.setQueryData<Chat>(queryKeys.chat(summary.id), (old) => (old ? { ...old, ...summary } : old));
 }
 
+/**
+ * The chat's usage as the UI currently shows it: the newer of the chats-list entry and the `chat(id)` data (the same
+ * pick as `ChatScreen`). `null` when neither is cached.
+ */
+export function cachedUsage(queryClient: QueryClient, chatId: Id): ChatUsage | null {
+  const listed = queryClient.getQueryData<ChatSummary[]>(queryKeys.chats)?.find((c) => c.id === chatId);
+  const loaded = queryClient.getQueryData<Chat>(queryKeys.chat(chatId));
+  if (!listed || !loaded) return (listed ?? loaded)?.usage ?? null;
+  return (loaded.updatedAt > listed.updatedAt ? loaded : listed).usage;
+}
+
 export const useRunsStore = create<RunsState>()((set, get) => {
   const patchRun = (chatId: Id, token: number, f: (r: RunState) => RunState) =>
     set((s) => {
@@ -318,7 +349,8 @@ export const useRunsStore = create<RunsState>()((set, get) => {
         text: input.text,
         attachments: input.attachments,
       };
-      const { token, controller } = start(chatId, (t) => createRun(t, pending, input));
+      const usageBefore = cachedUsage(deps.queryClient, chatId);
+      const { token, controller } = start(chatId, (t) => createRun(t, pending, input, usageBefore));
       get().setChatModel(chatId, input.model);
       await consume(deps, chatId, token, controller, () =>
         deps.api.sendMessage(
@@ -339,13 +371,14 @@ export const useRunsStore = create<RunsState>()((set, get) => {
         });
         return get().send(deps, chatId, { ...unsent, model });
       }
+      const usageBefore = cachedUsage(deps.queryClient, chatId);
       // The server drops the trailing assistant/tool messages; mirror that in the cache straight away.
       deps.queryClient.setQueryData<Chat>(queryKeys.chat(chatId), (old) => {
         if (!old) return old;
         const lastUser = old.messages.findLastIndex((m) => m.role === 'user');
         return { ...old, messages: old.messages.slice(0, lastUser + 1) };
       });
-      const { token, controller } = start(chatId, (t) => createRun(t));
+      const { token, controller } = start(chatId, (t) => createRun(t, undefined, undefined, usageBefore));
       get().setChatModel(chatId, model);
       await consume(deps, chatId, token, controller, () => deps.api.retry(chatId, { model }, controller.signal));
     },

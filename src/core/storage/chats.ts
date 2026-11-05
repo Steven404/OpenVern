@@ -41,7 +41,15 @@ type ChatFile = StoredChat & { version: 1 };
 const toFile = (chat: StoredChat): ChatFile => ({ version: 1, ...chat });
 /** What the API returns: the stored chat without the internal cumulative counters (plan §4.3). */
 const toChat = ({ usageTotals: _usageTotals, ...chat }: StoredChat): Chat => chat;
-const writeIndexFile = (chats: ChatSummary[]): ChatIndexFile => ({ version: 1, chats, usageBackfilled: true });
+/**
+ * `complete: false` (a rebuild skipped an unreadable chat file) leaves out the `usageBackfilled` marker, so the
+ * next load rebuilds from disk again instead of hiding that chat for good.
+ */
+const writeIndexFile = (chats: ChatSummary[], complete: boolean): ChatIndexFile =>
+  complete ? { version: 1, chats, usageBackfilled: true } : { version: 1, chats };
+
+/** Index entries; `complete` is false when a rebuild had to skip an unreadable chat file. */
+type LoadedIndex = { chats: ChatSummary[]; complete: boolean };
 
 export function createChatsService(opts: ChatsServiceOptions): ChatsService {
   const paths: DataPaths = dataPaths(opts.dataDir);
@@ -64,9 +72,10 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
 
   const writeChat = (chat: StoredChat) => chatFile(chat.id).write(toFile(chat));
 
-  async function rebuildIndex(): Promise<ChatSummary[]> {
+  async function rebuildIndex(): Promise<LoadedIndex> {
     const names = await fs.readdir(paths.chatsDir).catch(() => [] as string[]);
     const summaries: ChatSummary[] = [];
+    let skipped = false;
     for (const name of names) {
       if (!name.endsWith('.json') || name === 'index.json') continue;
       const id = name.slice(0, -'.json'.length);
@@ -78,29 +87,33 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
         // One unreadable entry must not make every list() fail; skip it and say which one.
         const reason = err instanceof Error ? err.message : String(err);
         logger.warn(`chats/${name} could not be read (${reason}); skipped.`);
+        skipped = true;
         continue;
       }
       if (chat && chat.id === id) summaries.push(summarize(chat));
     }
     summaries.sort(byRecency);
-    await index.write(writeIndexFile(summaries));
-    return summaries;
+    // The error may be transient (EACCES, EMFILE, EBUSY…): persisting this index would hide the skipped chat for
+    // good, so only a clean rebuild is written; otherwise the next list() retries.
+    if (!skipped) await index.write(writeIndexFile(summaries, true));
+    return { chats: summaries, complete: !skipped };
   }
 
   /** Index entries, rebuilding from disk if the index is missing, corrupt or predates F1's `usage`. */
-  async function loadIndex(): Promise<ChatSummary[]> {
+  async function loadIndex(): Promise<LoadedIndex> {
     const current = await index.read();
-    return current?.usageBackfilled ? current.chats : rebuildIndex();
+    return current?.usageBackfilled ? { chats: current.chats, complete: true } : rebuildIndex();
   }
 
-  const saveIndex = (chats: ChatSummary[]) => index.write(writeIndexFile(chats));
+  const saveIndex = ({ chats, complete }: LoadedIndex) => index.write(writeIndexFile(chats, complete));
 
   async function upsertIndex(summary: ChatSummary): Promise<void> {
-    const chats = await loadIndex();
+    const loaded = await loadIndex();
+    const { chats } = loaded;
     const at = chats.findIndex((c) => c.id === summary.id);
     if (at >= 0) chats[at] = summary;
     else chats.push(summary);
-    await saveIndex(chats);
+    await saveIndex(loaded);
   }
 
   async function assertProject(projectId: Id | null | undefined): Promise<void> {
@@ -112,7 +125,7 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
   return {
     async list() {
       // Rebuilding writes, so serialise with mutations; the common path is a plain read.
-      const chats = await lock.run(loadIndex);
+      const { chats } = await lock.run(loadIndex);
       return [...chats].sort(byRecency);
     },
 
@@ -171,9 +184,9 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
       if (!isChatId(id)) throw notFound();
       await lock.run(async () => {
         const removed = await chatFile(id).delete();
-        const chats = await loadIndex();
+        const { chats, complete } = await loadIndex();
         const kept = chats.filter((c) => c.id !== id);
-        if (kept.length !== chats.length) await saveIndex(kept);
+        if (kept.length !== chats.length) await saveIndex({ chats: kept, complete });
         else if (!removed) throw notFound();
       });
     },
@@ -211,7 +224,8 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
 
     detachProject(projectId) {
       return lock.run(async () => {
-        const chats = await loadIndex();
+        const loaded = await loadIndex();
+        const { chats } = loaded;
         let changed = false;
         for (const [i, summary] of chats.entries()) {
           if (summary.projectId !== projectId) continue;
@@ -225,7 +239,7 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
           chats[i] = summarize(next);
           changed = true;
         }
-        if (changed) await saveIndex(chats);
+        if (changed) await saveIndex(loaded);
       });
     },
   };
