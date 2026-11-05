@@ -345,6 +345,69 @@ describe('ChatsService', () => {
     const marked = JSON.parse(await fs.readFile(paths.chatsIndex, 'utf8')) as { usageBackfilled?: boolean };
     expect(marked.usageBackfilled).toBe(true);
   });
+
+  it('a failing listing is warned about once, and blocks removing a project instead of leaving its chats dangling', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const project = await storage.projects.create({ rootPath: await makeTempDir() });
+    const chat = await storage.chats.create({ projectId: project.id, model: 'm' });
+    await fs.rm(dataPaths(dataDir).chatsIndex);
+
+    const logger = recordingLogger();
+    const fresh = await createStorage({ dataDir, secretStore: new MemorySecretStore(), logger });
+    const emfile = () => Object.assign(new Error('EMFILE: too many open files'), { code: 'EMFILE' });
+    const readdir = vi.spyOn(fs, 'readdir').mockRejectedValue(emfile());
+    try {
+      expect(await fresh.chats.list()).toEqual([]);
+      expect(await fresh.chats.list()).toEqual([]);
+      await expect(fresh.projects.remove(project.id)).rejects.toMatchObject({ code: 'conflict' });
+    } finally {
+      readdir.mockRestore();
+    }
+    expect(logger.messages.filter((m) => m.includes('could not be listed'))).toHaveLength(1);
+    // Nothing was detached or removed.
+    expect((await fresh.projects.list()).map((p) => p.id)).toEqual([project.id]);
+    expect((await fresh.chats.get(chat.id)).projectId).toBe(project.id);
+
+    // Once listing works, removal goes through and re-homes the chat.
+    await fresh.projects.remove(project.id);
+    expect((await fresh.chats.get(chat.id)).projectId).toBeNull();
+  });
+
+  it('a clean rebuild whose index write fails does not leave an older partial index in use', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const first = await storage.chats.create({ projectId: null, model: 'm' });
+    const paths = dataPaths(dataDir);
+    await fs.mkdir(path.join(paths.chatsDir, 'x.json'));
+    await fs.rm(paths.chatsIndex);
+
+    const fresh = await createStorage({ dataDir, secretStore: new MemorySecretStore(), logger: recordingLogger() });
+    expect(ids(await fresh.chats.list())).toEqual([first.id]); // partial: x.json skipped
+    // A chat file appears that the partial index doesn't know about (written by another instance).
+    const other = await createStorage({ dataDir, secretStore: new MemorySecretStore(), logger: recordingLogger() });
+    const late = await other.chats.create({ projectId: null, model: 'm' });
+    await fs.rm(paths.chatsIndex);
+    await fs.rmdir(path.join(paths.chatsDir, 'x.json'));
+
+    // The clean rebuild finds both chats, but writing the index fails once.
+    const realRename = fs.rename.bind(fs);
+    const rename = vi.spyOn(fs, 'rename').mockImplementationOnce(async (from, to) => {
+      if (String(to).endsWith('index.json')) throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' });
+      return realRename(from, to);
+    });
+    try {
+      await expect(fresh.chats.list()).rejects.toMatchObject({ code: 'ENOSPC' });
+    } finally {
+      rename.mockRestore();
+    }
+    // The next mutation rebuilds from disk instead of reusing the stale partial index.
+    const third = await fresh.chats.create({ projectId: null, model: 'm' });
+    const onDisk = JSON.parse(await fs.readFile(paths.chatsIndex, 'utf8')) as {
+      chats: { id: string }[];
+      usageBackfilled?: boolean;
+    };
+    expect(onDisk.usageBackfilled).toBe(true);
+    expect(onDisk.chats.map((c) => c.id).sort()).toEqual([first.id, late.id, third.id].sort());
+  });
 });
 
 type RawTotals = { promptTokens: number; completionTokens: number; costUsd: number | null; requests: number };

@@ -48,8 +48,11 @@ const toChat = ({ usageTotals: _usageTotals, ...chat }: StoredChat): Chat => cha
 const writeIndexFile = (chats: ChatSummary[], complete: boolean): ChatIndexFile =>
   complete ? { version: 1, chats, usageBackfilled: true } : { version: 1, chats };
 
-/** Index entries; `complete` is false when a rebuild had to skip an unreadable chat file. */
-type LoadedIndex = { chats: ChatSummary[]; complete: boolean };
+/**
+ * Index entries; `complete` is false when a rebuild had to skip an unreadable chat file. `listingFailed` means
+ * `chats/` itself couldn't be listed, so `chats` may be missing any number of chats.
+ */
+type LoadedIndex = { chats: ChatSummary[]; complete: boolean; listingFailed?: boolean };
 
 export function createChatsService(opts: ChatsServiceOptions): ChatsService {
   const paths: DataPaths = dataPaths(opts.dataDir);
@@ -73,18 +76,20 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
   const writeChat = (chat: StoredChat) => chatFile(chat.id).write(toFile(chat));
 
   /**
-   * Assumes one ChatsService per data dir (createStorage builds one per process); an unmarked index written by
-   * someone else is ignored in favour of this until the next list() rebuild.
+   * Callers must not run two ChatsServices on the same data dir at once: an unmarked index written by another
+   * instance is ignored in favour of this until the next list() rebuild (the index diverges, no chat is lost).
    * The summaries of the last rebuild that skipped an unreadable chat file, kept in step by mutations. Mutations
    * use them instead of re-scanning every chat file on each write; only `list()` retries the full rebuild.
    */
-  let partial: ChatSummary[] | null = null;
+  let partial: LoadedIndex | null = null;
   /** Unreadable entries already logged, so a file that stays unreadable is reported once per process. */
   const warned = new Set<string>();
+  let warnedListing = false;
 
   async function rebuildIndex(): Promise<LoadedIndex> {
     const summaries: ChatSummary[] = [];
     let skipped = false;
+    let listingFailed = false;
     let names: string[] = [];
     try {
       names = await fs.readdir(paths.chatsDir);
@@ -93,8 +98,10 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
       // empty index, which would hide every chat for good: treat it as a partial rebuild so list() retries.
       if (!isNotFound(err)) {
         const reason = err instanceof Error ? err.message : String(err);
-        logger.warn(`chats/ could not be listed (${reason}); the chat list may be incomplete.`);
+        if (!warnedListing) logger.warn(`chats/ could not be listed (${reason}); the chat list may be incomplete.`);
+        warnedListing = true;
         skipped = true;
+        listingFailed = true;
       }
     }
     for (const name of names) {
@@ -118,12 +125,13 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
     // The error may be transient (EACCES, EMFILE, EBUSY…): persisting this index would hide the skipped chat for
     // good, so only a clean rebuild is written; otherwise the next list() retries.
     // Set before the write, so a failed write can't leave an older partial index in place.
-    partial = skipped ? [...summaries] : null;
+    partial = skipped ? { chats: [...summaries], complete: false, listingFailed } : null;
     if (!skipped) {
       warned.clear();
+      warnedListing = false;
       await index.write(writeIndexFile(summaries, true));
     }
-    return { chats: summaries, complete: !skipped };
+    return { chats: summaries, complete: !skipped, listingFailed };
   }
 
   /**
@@ -136,13 +144,13 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
       partial = null;
       return { chats: current.chats, complete: true };
     }
-    if (partial && !retry) return { chats: [...partial], complete: false };
+    if (partial && !retry) return { ...partial, chats: [...partial.chats] };
     return rebuildIndex();
   }
 
-  const saveIndex = async ({ chats, complete }: LoadedIndex) => {
+  const saveIndex = async ({ chats, complete, listingFailed }: LoadedIndex) => {
     await index.write(writeIndexFile(chats, complete));
-    partial = complete ? null : [...chats];
+    partial = complete ? null : { chats: [...chats], complete: false, listingFailed };
   };
 
   async function upsertIndex(summary: ChatSummary): Promise<void> {
@@ -262,7 +270,12 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
 
     detachProject(projectId) {
       return lock.run(async () => {
-        const loaded = await loadIndex();
+        // Retry a failed rebuild; if chats/ still can't be listed, the project's chats are unknown, so refuse
+        // rather than let the caller delete the project and leave its chats pointing at it.
+        const loaded = await loadIndex({ retry: true });
+        if (loaded.listingFailed) {
+          throw new CoreError('conflict', "Some chats couldn't be read, so the project wasn't removed. Try again.");
+        }
         const { chats } = loaded;
         let changed = false;
         for (const [i, summary] of chats.entries()) {
