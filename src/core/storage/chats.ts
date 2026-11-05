@@ -4,13 +4,21 @@
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { NEW_CHAT_TITLE } from '@shared/constants';
-import type { Chat, ChatSummary, Id } from '@shared/types';
+import type { ChatSummary, Id } from '@shared/types';
 import { CoreError } from '../errors';
 import type { ChatsService } from '../types';
 import { JsonFile, type StorageLogger } from './json-file';
 import { createMutex } from './mutex';
 import { type DataPaths, dataPaths } from './paths';
-import { type ChatIndexFile, chatFileSchema, chatIndexSchema, summarize } from './schemas';
+import {
+  addUsage,
+  type ChatIndexFile,
+  chatFileSchema,
+  chatIndexSchema,
+  type StoredChat,
+  summarize,
+  withUsage,
+} from './schemas';
 
 export interface ChatsServiceOptions {
   /** Absolute data dir (the tree must exist; see `ensureDataDir`). */
@@ -29,8 +37,9 @@ const byRecency = (a: ChatSummary, b: ChatSummary) =>
   b.updatedAt.localeCompare(a.updatedAt) || b.createdAt.localeCompare(a.createdAt);
 
 /** On-disk shape of a chat file. */
-type ChatFile = Chat & { version: 1 };
-const toFile = (chat: Chat): ChatFile => ({ version: 1, ...chat });
+type ChatFile = StoredChat & { version: 1 };
+const toFile = (chat: StoredChat): ChatFile => ({ version: 1, ...chat });
+const writeIndexFile = (chats: ChatSummary[]): ChatIndexFile => ({ version: 1, chats, usageBackfilled: true });
 
 export function createChatsService(opts: ChatsServiceOptions): ChatsService {
   const paths: DataPaths = dataPaths(opts.dataDir);
@@ -41,16 +50,16 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
 
   const chatFile = (id: Id) => {
     if (!isChatId(id)) throw notFound();
-    return new JsonFile<Chat, ChatFile>(paths.chatFile(id), chatFileSchema, fileOpts);
+    return new JsonFile<StoredChat, ChatFile>(paths.chatFile(id), chatFileSchema, fileOpts);
   };
 
-  const readChat = async (id: Id): Promise<Chat> => {
+  const readChat = async (id: Id): Promise<StoredChat> => {
     const chat = await chatFile(id).read();
     if (!chat) throw notFound();
     return chat;
   };
 
-  const writeChat = (chat: Chat) => chatFile(chat.id).write(toFile(chat));
+  const writeChat = (chat: StoredChat) => chatFile(chat.id).write(toFile(chat));
 
   async function rebuildIndex(): Promise<ChatSummary[]> {
     const names = await fs.readdir(paths.chatsDir).catch(() => [] as string[]);
@@ -63,17 +72,17 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
       if (chat && chat.id === id) summaries.push(summarize(chat));
     }
     summaries.sort(byRecency);
-    await index.write({ version: 1, chats: summaries });
+    await index.write(writeIndexFile(summaries));
     return summaries;
   }
 
-  /** Index entries, rebuilding from disk if the index is missing or corrupt. Call inside `lock` (or read-only). */
+  /** Index entries, rebuilding from disk if the index is missing, corrupt or predates F1's `usage`. */
   async function loadIndex(): Promise<ChatSummary[]> {
     const current = await index.read();
-    return current ? current.chats : rebuildIndex();
+    return current?.usageBackfilled ? current.chats : rebuildIndex();
   }
 
-  const saveIndex = (chats: ChatSummary[]) => index.write({ version: 1, chats });
+  const saveIndex = (chats: ChatSummary[]) => index.write(writeIndexFile(chats));
 
   async function upsertIndex(summary: ChatSummary): Promise<void> {
     const chats = await loadIndex();
@@ -101,7 +110,7 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
     async create(input) {
       await assertProject(input.projectId);
       const now = new Date().toISOString();
-      const chat: Chat = {
+      const chat: StoredChat = withUsage({
         id: randomUUID(),
         projectId: input.projectId,
         title: NEW_CHAT_TITLE,
@@ -110,7 +119,7 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
         updatedAt: now,
         archived: false,
         messages: [],
-      };
+      });
       return lock.run(async () => {
         await writeChat(chat);
         await upsertIndex(summarize(chat));
@@ -122,7 +131,7 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
       await assertProject(patch.projectId);
       return lock.run(async () => {
         const chat = await readChat(id);
-        const next: Chat = { ...chat };
+        const next: StoredChat = { ...chat };
         if (patch.title !== undefined) next.title = patch.title;
         if (patch.projectId !== undefined) next.projectId = patch.projectId;
         if (patch.model !== undefined && patch.model !== chat.model) {
@@ -159,7 +168,15 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
     appendMessage(chatId, message) {
       return lock.run(async () => {
         const chat = await readChat(chatId);
-        const next: Chat = { ...chat, messages: [...chat.messages, message], updatedAt: new Date().toISOString() };
+        // An assistant message with usage adds to the cumulative counters; a retry later keeps them (plan §2).
+        const usageTotals =
+          message.role === 'assistant' && message.usage ? addUsage(chat.usageTotals, message.usage) : chat.usageTotals;
+        const next = withUsage({
+          ...chat,
+          messages: [...chat.messages, message],
+          usageTotals,
+          updatedAt: new Date().toISOString(),
+        });
         await writeChat(next);
         const summary = summarize(next);
         await upsertIndex(summary);
@@ -172,7 +189,7 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
         const chat = await readChat(chatId);
         const lastUser = chat.messages.findLastIndex((m) => m.role === 'user');
         if (lastUser < 0 || lastUser === chat.messages.length - 1) return chat;
-        const next: Chat = { ...chat, messages: chat.messages.slice(0, lastUser + 1) };
+        const next = withUsage({ ...chat, messages: chat.messages.slice(0, lastUser + 1) });
         await writeChat(next);
         return next;
       });
@@ -189,7 +206,7 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
             throw err;
           });
           if (!chat) continue;
-          const next: Chat = { ...chat, projectId: null };
+          const next = withUsage({ ...chat, projectId: null });
           await writeChat(next);
           chats[i] = summarize(next);
           changed = true;

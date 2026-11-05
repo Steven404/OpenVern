@@ -93,6 +93,7 @@ export function toChatSummary(chat: ChatSummary | Chat): ChatSummary {
     createdAt: chat.createdAt,
     updatedAt: chat.updatedAt,
     archived: chat.archived,
+    usage: chat.usage,
   };
 }
 

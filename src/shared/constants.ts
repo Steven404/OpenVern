@@ -8,6 +8,8 @@ export const APP_ID = 'dev.stefanos.openvern';
 export const DEFAULT_MODEL = 'anthropic/claude-sonnet-5.5';
 export const NEW_CHAT_TITLE = 'New chat';
 export const MAX_AGENT_STEPS = 25; // model calls per user turn
+/** F1: OpenRouter is the only provider; the Context popover shows this label. */
+export const PROVIDER_LABEL = 'OpenRouter';
 
 export const LIMITS = {
   attachmentsPerMessage: 10,
