@@ -352,3 +352,70 @@ describe('MockApiClient', () => {
     });
   });
 });
+
+describe('MockApiClient usage (F1)', () => {
+  const ZERO = { contextTokens: 0, promptTokens: 0, completionTokens: 0, costUsd: null, requests: 0 };
+  const MODEL = 'anthropic/claude-sonnet-5.5';
+  const signal = () => new AbortController().signal;
+
+  it('a new chat starts at zero, and a fake turn adds 120 + 48 for its reply', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const chat = await api.createChat({ projectId: null, model: MODEL });
+    expect(chat.usage).toEqual(ZERO);
+    await collect(api.sendMessage(chat.id, { text: 'hi', attachmentIds: [], model: MODEL }, signal()));
+    expect((await api.getChat(chat.id)).usage).toEqual({
+      contextTokens: 168,
+      promptTokens: 120,
+      completionTokens: 48,
+      costUsd: null,
+      requests: 1,
+    });
+  });
+
+  it('a tool turn counts both of its requests, and the final chat_updated carries the totals', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const [project] = await api.listProjects();
+    const chat = await api.createChat({ projectId: project?.id ?? null, model: MODEL });
+    const events = await collect(
+      api.sendMessage(chat.id, { text: 'Explain', attachmentIds: [], model: MODEL }, signal()),
+    );
+    const expected = { contextTokens: 168, promptTokens: 240, completionTokens: 96, costUsd: null, requests: 2 };
+    const last = events.filter((e) => e.type === 'chat_updated').at(-1);
+    expect(last?.type === 'chat_updated' && last.chat.usage).toEqual(expected);
+    expect((await api.getChat(chat.id)).usage).toEqual(expected);
+  });
+
+  it('the totals survive a retry: the discarded reply still counts, and the context follows the new one', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const chat = await api.createChat({ projectId: null, model: MODEL });
+    await collect(api.sendMessage(chat.id, { text: 'hi', attachmentIds: [], model: MODEL }, signal()));
+    const events = await collect(api.retry(chat.id, { model: MODEL }, signal()));
+
+    const saved = await api.getChat(chat.id);
+    expect(saved.messages.map((m) => m.role)).toEqual(['user', 'assistant']);
+    const expected = { contextTokens: 168, promptTokens: 240, completionTokens: 96, costUsd: null, requests: 2 };
+    expect(saved.usage).toEqual(expected);
+    const last = events.filter((e) => e.type === 'chat_updated').at(-1);
+    expect(last?.type === 'chat_updated' && last.chat.usage).toEqual(expected);
+  });
+
+  it('seeded chats carry their sample usage; a chat with no replies starts at zero', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const chats = await api.listChats();
+    expect(chats.find((c) => c.title === 'Streaming replies over SSE')?.usage).toEqual({
+      contextTokens: 860_000,
+      promptTokens: 858_000,
+      completionTokens: 2_000,
+      costUsd: 0.0031,
+      requests: 1,
+    });
+    expect(chats.find((c) => c.title === 'Theme toggle transition')?.usage).toEqual({
+      contextTokens: 12_400,
+      promptTokens: 12_000,
+      completionTokens: 400,
+      costUsd: 0.00006,
+      requests: 1,
+    });
+    expect(chats.find((c) => c.title === 'Settings: what goes in v1')?.usage).toEqual(ZERO);
+  });
+});
