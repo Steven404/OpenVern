@@ -142,6 +142,60 @@ describe('MockApiClient', () => {
     expect((await api.updateChat(loose.id, { archived: true })).archived).toBe(true);
   });
 
+  it('archives a project chat and keeps the flag on project → project and project → loose moves', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const [first, second] = await api.listProjects();
+    if (!first || !second) throw new Error('seed missing');
+    const chat = await api.createChat({ projectId: first.id, model: 'm' });
+    expect(chat.archived).toBe(false);
+
+    const archived = await api.updateChat(chat.id, { archived: true });
+    expect(archived).toMatchObject({ projectId: first.id, archived: true, updatedAt: chat.updatedAt });
+    expect((await api.getChat(chat.id)).archived).toBe(true);
+    expect((await api.listChats()).find((c) => c.id === chat.id)?.archived).toBe(true);
+
+    const toSecond = await api.updateChat(chat.id, { projectId: second.id });
+    expect(toSecond).toMatchObject({ projectId: second.id, archived: true });
+    expect(await api.getChat(chat.id)).toMatchObject({ projectId: second.id, archived: true });
+
+    const loose = await api.updateChat(chat.id, { projectId: null });
+    expect(loose).toMatchObject({ projectId: null, archived: true });
+    expect((await api.getChat(chat.id)).archived).toBe(true);
+
+    const restored = await api.updateChat(chat.id, { archived: false });
+    expect(restored).toMatchObject({ projectId: null, archived: false });
+    expect((await api.getChat(chat.id)).archived).toBe(false);
+  });
+
+  it('a project chat: archiving during a run conflicts, a plain move is allowed and keeps the flag', async () => {
+    const api = new MockApiClient({ delayMs: 0, seed: false });
+    const first = await api.createProject({ rootPath: '/tmp/first', name: 'First' });
+    const second = await api.createProject({ rootPath: '/tmp/second', name: 'Second' });
+    const chat = await api.createChat({ projectId: first.id, model: 'anthropic/claude-sonnet-5.5' });
+    const run = api
+      .sendMessage(chat.id, { text: 'go', attachmentIds: [], model: chat.model }, new AbortController().signal)
+      [Symbol.asyncIterator]();
+    await run.next(); // the run is registered once the first event is out
+
+    const err = await api.updateChat(chat.id, { archived: true }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err).toMatchObject({
+      status: 409,
+      info: {
+        code: 'conflict',
+        message: 'Wait for the response to finish before archiving or unarchiving this chat.',
+      },
+    });
+    expect(await api.getChat(chat.id)).toMatchObject({ projectId: first.id, archived: false });
+
+    const moved = await api.updateChat(chat.id, { projectId: second.id });
+    expect(moved).toMatchObject({ projectId: second.id, archived: false });
+    expect((await api.getChat(chat.id)).projectId).toBe(second.id);
+
+    await run.return?.(undefined);
+    expect((await api.updateChat(chat.id, { archived: true })).archived).toBe(true);
+  });
+
   it('moves chats to "no project" when their project is removed', async () => {
     const api = new MockApiClient({ delayMs: 0 });
     const site = (await api.listProjects()).find((p) => p.name === 'Portfolio site');

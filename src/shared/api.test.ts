@@ -41,6 +41,10 @@ describe('api schemas', () => {
     const result = updateChatBody.safeParse({ projectId: 'p1', archived: true });
     expect(result.success).toBe(true);
   });
+
+  it('updateChatBody keeps both fields of a combined body', () => {
+    expect(updateChatBody.parse({ projectId: 'p1', archived: true })).toEqual({ projectId: 'p1', archived: true });
+  });
 });
 
 describe('errors', () => {

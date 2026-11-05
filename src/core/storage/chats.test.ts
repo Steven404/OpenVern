@@ -415,6 +415,7 @@ type RawChat = {
   archived?: unknown;
   projectId: string | null;
   version?: number;
+  updatedAt?: string;
   messages?: { id: string }[];
   usageTotals?: RawTotals;
 };
@@ -677,6 +678,84 @@ describe('ChatsService archived flag', () => {
     const again = await storage.chats.update(chat.id, { archived: true });
     expect(again.archived).toBe(true);
     expect((await readRawEntry(dataDir, chat.id)).archived).toBe(true);
+    await expectInSync(dataDir, chat.id);
+  });
+
+  it('archives and unarchives a chat in a project without touching updatedAt', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const project = await storage.projects.create({ rootPath: await makeTempDir() });
+    const chat = await storage.chats.create({ projectId: project.id, model: 'm' });
+    await sleep(5);
+
+    const archived = await storage.chats.update(chat.id, { archived: true });
+    expect(archived).toMatchObject({ projectId: project.id, archived: true });
+    expect(archived.updatedAt).toBe(chat.updatedAt);
+    expect((await storage.chats.get(chat.id)).updatedAt).toBe(chat.updatedAt);
+    expect((await storage.chats.list()).find((c) => c.id === chat.id)).toMatchObject({
+      projectId: project.id,
+      archived: true,
+      updatedAt: chat.updatedAt,
+    });
+    expect((await readRawChat(dataDir, chat.id)).archived).toBe(true);
+    expect((await readRawChat(dataDir, chat.id)).updatedAt).toBe(chat.updatedAt);
+    expect((await readRawEntry(dataDir, chat.id)).archived).toBe(true);
+    await expectInSync(dataDir, chat.id);
+
+    const unarchived = await storage.chats.update(chat.id, { archived: false });
+    expect(unarchived).toMatchObject({ projectId: project.id, archived: false });
+    expect(unarchived.updatedAt).toBe(chat.updatedAt);
+    expect((await storage.chats.get(chat.id)).updatedAt).toBe(chat.updatedAt);
+    expect((await storage.chats.list()).find((c) => c.id === chat.id)?.archived).toBe(false);
+    expect((await readRawChat(dataDir, chat.id)).archived).toBe(false);
+    expect((await readRawEntry(dataDir, chat.id)).archived).toBe(false);
+    await expectInSync(dataDir, chat.id);
+  });
+
+  it('keeps the flag on project → project, project → loose and loose → project moves', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const first = await storage.projects.create({ rootPath: await makeTempDir() });
+    const second = await storage.projects.create({ rootPath: await makeTempDir() });
+    const chat = await storage.chats.create({ projectId: first.id, model: 'm' });
+    await storage.chats.update(chat.id, { archived: true });
+
+    const toSecond = await storage.chats.update(chat.id, { projectId: second.id });
+    expect(toSecond).toMatchObject({ projectId: second.id, archived: true, updatedAt: chat.updatedAt });
+    expect((await readRawChat(dataDir, chat.id)).archived).toBe(true);
+    expect((await readRawEntry(dataDir, chat.id)).archived).toBe(true);
+    await expectInSync(dataDir, chat.id);
+
+    const loose = await storage.chats.update(chat.id, { projectId: null });
+    expect(loose).toMatchObject({ projectId: null, archived: true, updatedAt: chat.updatedAt });
+    await expectInSync(dataDir, chat.id);
+
+    const backToFirst = await storage.chats.update(chat.id, { projectId: first.id });
+    expect(backToFirst).toMatchObject({ projectId: first.id, archived: true, updatedAt: chat.updatedAt });
+    expect((await storage.chats.list()).find((c) => c.id === chat.id)).toMatchObject({
+      projectId: first.id,
+      archived: true,
+    });
+    expect((await readRawChat(dataDir, chat.id)).archived).toBe(true);
+    expect((await readRawEntry(dataDir, chat.id)).archived).toBe(true);
+    await expectInSync(dataDir, chat.id);
+  });
+
+  it('a rename leaves an archived project chat archived, with updatedAt unchanged', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const project = await storage.projects.create({ rootPath: await makeTempDir() });
+    const chat = await storage.chats.create({ projectId: project.id, model: 'm' });
+    await storage.chats.update(chat.id, { archived: true });
+    await sleep(5);
+
+    const renamed = await storage.chats.update(chat.id, { title: 'Renamed in a project' });
+    expect(renamed).toMatchObject({ title: 'Renamed in a project', projectId: project.id, archived: true });
+    expect(renamed.updatedAt).toBe(chat.updatedAt);
+    expect(await storage.chats.get(chat.id)).toMatchObject({ title: 'Renamed in a project', archived: true });
+    expect(await readRawChat(dataDir, chat.id)).toMatchObject({
+      title: 'Renamed in a project',
+      archived: true,
+      updatedAt: chat.updatedAt,
+    });
+    expect(await readRawEntry(dataDir, chat.id)).toMatchObject({ title: 'Renamed in a project', archived: true });
     await expectInSync(dataDir, chat.id);
   });
 
