@@ -1,7 +1,7 @@
 // Sample models used by `FakeProvider` and `MockApiClient`. Real entries from openrouter.ai/models (2026-10-31),
 // chosen to cover every capability combination the UI cares about.
 
-import type { ModelInfo } from './types';
+import type { ModelInfo, Usage } from './types';
 
 export const SAMPLE_MODELS: ModelInfo[] = [
   {
@@ -58,4 +58,26 @@ export const SAMPLE_MODELS: ModelInfo[] = [
     promptPricePerMTok: 0.05,
     completionPricePerMTok: 0.1,
   },
+  {
+    // The router reports no context window. `contextLength: null` here is deliberate: it shows the Context
+    // popover's "limit unknown" state (F1). Don't change the data.
+    id: 'openrouter/auto',
+    name: 'OpenRouter: Auto Router',
+    contextLength: null,
+    supportsTools: true,
+    supportsImages: true,
+    promptPricePerMTok: null,
+    completionPricePerMTok: null,
+  },
 ];
+
+/**
+ * Seeded per-request usage for the mock's sample chats (F1). One chat per counter level: rest, 80 % and over,
+ * 95 % and over, and an unknown limit (the `openrouter/auto` model).
+ */
+export const SAMPLE_USAGE = {
+  ok: { promptTokens: 372_000, completionTokens: 8_000, costUsd: 0.00074 },
+  high: { promptTokens: 858_000, completionTokens: 2_000, costUsd: 0.0031 },
+  full: { promptTokens: 971_000, completionTokens: 1_000, costUsd: 0.0042 },
+  unknown: { promptTokens: 12_000, completionTokens: 400, costUsd: 0.00006 },
+} satisfies Record<string, Usage>;

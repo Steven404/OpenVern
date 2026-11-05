@@ -316,7 +316,7 @@ describe('model picker', () => {
     expect(trigger.textContent).toBe(VISION);
     fireEvent.click(trigger);
     const options = await screen.findAllByRole('option');
-    expect(options).toHaveLength(6);
+    expect(options).toHaveLength(7);
     const gemma = screen.getByRole('option', { name: /Gemma 3 4B/ });
     expect(gemma.textContent).toContain('Google');
     expect(gemma.textContent).toContain('131K');
@@ -324,6 +324,8 @@ describe('model picker', () => {
     expect(gemma.textContent).not.toContain('Tools');
     expect(screen.getByRole('option', { name: /GPT-5.5/ }).textContent).toContain('1.05M');
     expect(screen.getByRole('option', { name: /Claude Haiku 5.5/ }).textContent).toContain('Tools');
+    // The sample's "limit unknown" model (F1): no context figure in the picker.
+    expect(screen.getByRole('option', { name: /Auto Router/ }).textContent).not.toMatch(/\d+(?:\.\d+)?[KM]/);
   });
 
   it('filters by name and id', async () => {

@@ -1,8 +1,8 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { NEW_CHAT_TITLE } from '@shared/constants';
-import type { AssistantMessage, Message, UserMessage } from '@shared/types';
-import { describe, expect, it } from 'vitest';
+import type { AssistantMessage, Message, Usage, UserMessage } from '@shared/types';
+import { describe, expect, it, vi } from 'vitest';
 import { createStorage } from './index';
 import { dataPaths } from './paths';
 import { cleanupTempDirs, MemorySecretStore, makeStorage, makeTempDir, recordingLogger } from './test-helpers';
@@ -214,9 +214,210 @@ describe('ChatsService', () => {
     const fresh = await createStorage({ dataDir, secretStore: new MemorySecretStore() });
     expect(await fresh.chats.list()).toEqual([]);
   });
+
+  it('the rebuild skips and logs an unreadable entry (a directory named x.json)', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const good = await storage.chats.create({ projectId: null, model: 'm' });
+    const paths = dataPaths(dataDir);
+    await fs.mkdir(path.join(paths.chatsDir, 'x.json'));
+    await fs.rm(paths.chatsIndex);
+
+    const logger = recordingLogger();
+    const fresh = await createStorage({ dataDir, secretStore: new MemorySecretStore(), logger });
+    expect((await fresh.chats.list()).map((c) => c.id)).toEqual([good.id]);
+    expect(logger.messages.some((m) => m.includes('x.json'))).toBe(true);
+  });
+
+  it('a rebuild that skipped an unreadable chat does not persist the index; a later list() finds the chat', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const good = await storage.chats.create({ projectId: null, model: 'm' });
+    await sleep(5);
+    const flaky = await storage.chats.create({ projectId: null, model: 'm' });
+    const paths = dataPaths(dataDir);
+    // Make the chat file unreadable without corrupting it: park it and put a directory in its place (EISDIR).
+    const parked = path.join(dataDir, 'parked.json');
+    await fs.rename(paths.chatFile(flaky.id), parked);
+    await fs.mkdir(paths.chatFile(flaky.id));
+    await fs.rm(paths.chatsIndex);
+
+    const fresh = await createStorage({ dataDir, secretStore: new MemorySecretStore(), logger: recordingLogger() });
+    expect(ids(await fresh.chats.list())).toEqual([good.id]);
+    await expect(fs.access(paths.chatsIndex)).rejects.toMatchObject({ code: 'ENOENT' });
+
+    // A mutation after the partial rebuild writes the index, but without the marker, so it is rebuilt next time.
+    const other = await fresh.chats.create({ projectId: null, model: 'm' });
+    expect(JSON.parse(await fs.readFile(paths.chatsIndex, 'utf8'))).not.toHaveProperty('usageBackfilled');
+
+    // Once the file is readable again, the next list() includes it and the index is complete.
+    await fs.rmdir(paths.chatFile(flaky.id));
+    await fs.rename(parked, paths.chatFile(flaky.id));
+    expect(ids(await fresh.chats.list()).sort()).toEqual([good.id, flaky.id, other.id].sort());
+    const rewritten = JSON.parse(await fs.readFile(paths.chatsIndex, 'utf8')) as { usageBackfilled?: boolean };
+    expect(rewritten.usageBackfilled).toBe(true);
+  });
+
+  it('after a partial rebuild, mutations reuse it instead of re-scanning; only list() retries', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const good = await storage.chats.create({ projectId: null, model: 'm' });
+    const paths = dataPaths(dataDir);
+    await fs.mkdir(path.join(paths.chatsDir, 'x.json'));
+    await fs.rm(paths.chatsIndex);
+
+    const logger = recordingLogger();
+    const fresh = await createStorage({ dataDir, secretStore: new MemorySecretStore(), logger });
+    expect(ids(await fresh.chats.list())).toEqual([good.id]);
+    const readdir = vi.spyOn(fs, 'readdir');
+    try {
+      const other = await fresh.chats.create({ projectId: null, model: 'm' });
+      for (let i = 0; i < 5; i++) await fresh.chats.appendMessage(good.id, user(`u${i}`));
+      await fresh.chats.update(other.id, { title: 'Renamed' });
+      // No mutation re-scanned chats/; they all worked from the in-memory partial index.
+      expect(readdir).not.toHaveBeenCalled();
+      const onDisk = JSON.parse(await fs.readFile(paths.chatsIndex, 'utf8')) as {
+        chats: { id: string; title: string }[];
+        usageBackfilled?: boolean;
+      };
+      expect(onDisk.usageBackfilled).toBeUndefined();
+      expect(onDisk.chats.map((c) => c.id).sort()).toEqual([good.id, other.id].sort());
+      expect(onDisk.chats.find((c) => c.id === other.id)?.title).toBe('Renamed');
+
+      // list() retries the rebuild, but the still-unreadable entry is only logged once.
+      expect(ids(await fresh.chats.list()).sort()).toEqual([good.id, other.id].sort());
+      expect(readdir).toHaveBeenCalledTimes(1);
+    } finally {
+      readdir.mockRestore();
+    }
+    expect(logger.messages.filter((m) => m.includes('x.json'))).toHaveLength(1);
+  });
+
+  it('recovers from a partial rebuild: remove and detach keep it in step, then a clean list() writes the marker', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const project = await storage.projects.create({ rootPath: await makeTempDir() });
+    const keep = await storage.chats.create({ projectId: project.id, model: 'm' });
+    const gone = await storage.chats.create({ projectId: null, model: 'm' });
+    const paths = dataPaths(dataDir);
+    await fs.mkdir(path.join(paths.chatsDir, 'x.json'));
+    await fs.rm(paths.chatsIndex);
+
+    const logger = recordingLogger();
+    const fresh = await createStorage({ dataDir, secretStore: new MemorySecretStore(), logger });
+    expect(ids(await fresh.chats.list()).sort()).toEqual([keep.id, gone.id].sort());
+    await fresh.chats.remove(gone.id);
+    await fresh.chats.detachProject(project.id);
+    const unmarked = JSON.parse(await fs.readFile(paths.chatsIndex, 'utf8')) as {
+      chats: { id: string; projectId: string | null }[];
+      usageBackfilled?: boolean;
+    };
+    expect(unmarked.usageBackfilled).toBeUndefined();
+    expect(unmarked.chats).toEqual([expect.objectContaining({ id: keep.id, projectId: null })]);
+
+    // The bad entry goes away: the next list() rebuilds cleanly and marks the index.
+    await fs.rmdir(path.join(paths.chatsDir, 'x.json'));
+    expect(ids(await fresh.chats.list())).toEqual([keep.id]);
+    const marked = JSON.parse(await fs.readFile(paths.chatsIndex, 'utf8')) as { usageBackfilled?: boolean };
+    expect(marked.usageBackfilled).toBe(true);
+
+    // A later unreadable entry is reported again (the warning set was cleared by the clean rebuild).
+    await fs.mkdir(path.join(paths.chatsDir, 'y.json'));
+    await fs.rm(paths.chatsIndex);
+    await fresh.chats.list();
+    expect(logger.messages.filter((m) => m.includes('y.json'))).toHaveLength(1);
+  });
+
+  it('a failing readdir (not ENOENT) does not write a complete, empty index', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const chat = await storage.chats.create({ projectId: null, model: 'm' });
+    const paths = dataPaths(dataDir);
+    await fs.rm(paths.chatsIndex);
+
+    const fresh = await createStorage({ dataDir, secretStore: new MemorySecretStore(), logger: recordingLogger() });
+    const readdir = vi
+      .spyOn(fs, 'readdir')
+      .mockRejectedValueOnce(Object.assign(new Error('EMFILE: too many open files'), { code: 'EMFILE' }));
+    try {
+      expect(await fresh.chats.list()).toEqual([]);
+      await expect(fs.access(paths.chatsIndex)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      readdir.mockRestore();
+    }
+    // Once listing works again the chat is back and the index is complete.
+    expect(ids(await fresh.chats.list())).toEqual([chat.id]);
+    const marked = JSON.parse(await fs.readFile(paths.chatsIndex, 'utf8')) as { usageBackfilled?: boolean };
+    expect(marked.usageBackfilled).toBe(true);
+  });
+
+  it('a failing listing is warned about once, and blocks removing a project instead of leaving its chats dangling', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const project = await storage.projects.create({ rootPath: await makeTempDir() });
+    const chat = await storage.chats.create({ projectId: project.id, model: 'm' });
+    await fs.rm(dataPaths(dataDir).chatsIndex);
+
+    const logger = recordingLogger();
+    const fresh = await createStorage({ dataDir, secretStore: new MemorySecretStore(), logger });
+    const emfile = () => Object.assign(new Error('EMFILE: too many open files'), { code: 'EMFILE' });
+    const readdir = vi.spyOn(fs, 'readdir').mockRejectedValue(emfile());
+    try {
+      expect(await fresh.chats.list()).toEqual([]);
+      expect(await fresh.chats.list()).toEqual([]);
+      await expect(fresh.projects.remove(project.id)).rejects.toMatchObject({ code: 'conflict' });
+    } finally {
+      readdir.mockRestore();
+    }
+    expect(logger.messages.filter((m) => m.includes('could not be listed'))).toHaveLength(1);
+    // Nothing was detached or removed.
+    expect((await fresh.projects.list()).map((p) => p.id)).toEqual([project.id]);
+    expect((await fresh.chats.get(chat.id)).projectId).toBe(project.id);
+
+    // Once listing works, removal goes through and re-homes the chat.
+    await fresh.projects.remove(project.id);
+    expect((await fresh.chats.get(chat.id)).projectId).toBeNull();
+  });
+
+  it('a clean rebuild whose index write fails does not leave an older partial index in use', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const first = await storage.chats.create({ projectId: null, model: 'm' });
+    const paths = dataPaths(dataDir);
+    await fs.mkdir(path.join(paths.chatsDir, 'x.json'));
+    await fs.rm(paths.chatsIndex);
+
+    const fresh = await createStorage({ dataDir, secretStore: new MemorySecretStore(), logger: recordingLogger() });
+    expect(ids(await fresh.chats.list())).toEqual([first.id]); // partial: x.json skipped
+    // A chat file appears that the partial index doesn't know about (written by another instance).
+    const other = await createStorage({ dataDir, secretStore: new MemorySecretStore(), logger: recordingLogger() });
+    const late = await other.chats.create({ projectId: null, model: 'm' });
+    await fs.rm(paths.chatsIndex);
+    await fs.rmdir(path.join(paths.chatsDir, 'x.json'));
+
+    // The clean rebuild finds both chats, but writing the index fails once.
+    const realRename = fs.rename.bind(fs);
+    const rename = vi.spyOn(fs, 'rename').mockImplementationOnce(async (from, to) => {
+      if (String(to).endsWith('index.json')) throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' });
+      return realRename(from, to);
+    });
+    try {
+      await expect(fresh.chats.list()).rejects.toMatchObject({ code: 'ENOSPC' });
+    } finally {
+      rename.mockRestore();
+    }
+    // The next mutation rebuilds from disk instead of reusing the stale partial index.
+    const third = await fresh.chats.create({ projectId: null, model: 'm' });
+    const onDisk = JSON.parse(await fs.readFile(paths.chatsIndex, 'utf8')) as {
+      chats: { id: string }[];
+      usageBackfilled?: boolean;
+    };
+    expect(onDisk.usageBackfilled).toBe(true);
+    expect(onDisk.chats.map((c) => c.id).sort()).toEqual([first.id, late.id, third.id].sort());
+  });
 });
 
-type RawChat = { archived?: unknown; projectId: string | null; version?: number; messages?: { id: string }[] };
+type RawTotals = { promptTokens: number; completionTokens: number; costUsd: number | null; requests: number };
+type RawChat = {
+  archived?: unknown;
+  projectId: string | null;
+  version?: number;
+  messages?: { id: string }[];
+  usageTotals?: RawTotals;
+};
 
 async function readRawChat(dataDir: string, id: string): Promise<RawChat> {
   return JSON.parse(await fs.readFile(dataPaths(dataDir).chatFile(id), 'utf8'));
@@ -532,5 +733,332 @@ describe('ChatsService archived flag', () => {
       await expectInSync(dataDir, id);
     }
     expect((await storage.chats.list()).every((c) => c.archived === false)).toBe(true);
+  });
+});
+
+describe('ChatsService usage (F1)', () => {
+  const withUsage = (msg: AssistantMessage, usage: Usage): AssistantMessage => ({ ...msg, usage });
+  const toolResult = (id: string, toolCallId: string): Message => ({
+    id,
+    role: 'tool',
+    createdAt: NOW,
+    toolCallId,
+    name: 'read_file',
+    ok: true,
+    output: 'x',
+    summary: 'x',
+    durationMs: 1,
+  });
+
+  it('a new chat has no requests and an empty context, in the return value and the index', async () => {
+    const { storage } = await makeStorage();
+    const chat = await storage.chats.create({ projectId: null, model: 'm' });
+    const zero = { contextTokens: 0, promptTokens: 0, completionTokens: 0, costUsd: null, requests: 0 };
+    expect(chat.usage).toEqual(zero);
+    expect((await storage.chats.list())[0]?.usage).toEqual(zero);
+  });
+
+  it('create, get and truncate hide the internal usageTotals; the file keeps it', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const chat = await storage.chats.create({ projectId: null, model: 'm' });
+    expect(chat).not.toHaveProperty('usageTotals');
+    expect(await storage.chats.get(chat.id)).not.toHaveProperty('usageTotals');
+    expect((await readRawChat(dataDir, chat.id)).usageTotals).toEqual({
+      promptTokens: 0,
+      completionTokens: 0,
+      costUsd: null,
+      requests: 0,
+    });
+
+    await storage.chats.appendMessage(chat.id, user('u1'));
+    await storage.chats.appendMessage(chat.id, withUsage(assistant('a1'), { promptTokens: 100, completionTokens: 10 }));
+    await storage.chats.appendMessage(chat.id, user('u2'));
+    await storage.chats.appendMessage(chat.id, withUsage(assistant('a2'), { promptTokens: 200, completionTokens: 20 }));
+    const cut = await storage.chats.truncateAfterLastUser(chat.id);
+    expect(cut).not.toHaveProperty('usageTotals');
+    expect(cut.usage).toMatchObject({ contextTokens: 110, requests: 2 });
+    expect((await readRawChat(dataDir, chat.id)).usageTotals).toEqual({
+      promptTokens: 300,
+      completionTokens: 30,
+      costUsd: null,
+      requests: 2,
+    });
+  });
+
+  it('truncateAfterLastUser hides usageTotals when there is nothing to cut, too', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const empty = await storage.chats.create({ projectId: null, model: 'm' });
+    const noCut = await storage.chats.truncateAfterLastUser(empty.id);
+    expect(noCut.messages).toEqual([]);
+    expect(noCut).not.toHaveProperty('usageTotals');
+
+    const chat = await storage.chats.create({ projectId: null, model: 'm' });
+    await storage.chats.appendMessage(chat.id, user('u1'));
+    await storage.chats.appendMessage(chat.id, withUsage(assistant('a1'), { promptTokens: 100, completionTokens: 10 }));
+    await storage.chats.appendMessage(chat.id, user('u2'));
+    const lastIsUser = await storage.chats.truncateAfterLastUser(chat.id);
+    expect(lastIsUser.messages.map((m) => m.id)).toEqual(['u1', 'a1', 'u2']);
+    expect(lastIsUser).not.toHaveProperty('usageTotals');
+    expect((await readRawChat(dataDir, chat.id)).usageTotals).toMatchObject({ requests: 1 });
+  });
+
+  it('totals add up across the steps of a tool turn', async () => {
+    const { storage } = await makeStorage();
+    const chat = await storage.chats.create({ projectId: null, model: 'm' });
+    await storage.chats.appendMessage(chat.id, user('u1'));
+    await storage.chats.appendMessage(chat.id, {
+      ...assistant('a1'),
+      toolCalls: [{ id: 'c1', name: 'read_file', argsJson: '{"path":"README.md"}' }],
+      usage: { promptTokens: 120, completionTokens: 48 },
+    });
+    await storage.chats.appendMessage(chat.id, toolResult('t1', 'c1'));
+    const after = await storage.chats.appendMessage(chat.id, {
+      ...assistant('a2'),
+      usage: { promptTokens: 150, completionTokens: 30, costUsd: 0.002 },
+    });
+
+    const expected = { contextTokens: 180, promptTokens: 270, completionTokens: 78, costUsd: 0.002, requests: 2 };
+    expect(after.usage).toEqual(expected);
+    expect((await storage.chats.get(chat.id)).usage).toEqual(expected);
+    expect((await storage.chats.list())[0]?.usage).toEqual(expected);
+  });
+
+  it('a retry keeps the discarded turn in the totals, and contextTokens follows the new latest reply', async () => {
+    const { storage } = await makeStorage();
+    const chat = await storage.chats.create({ projectId: null, model: 'm' });
+    await storage.chats.appendMessage(chat.id, user('u1'));
+    await storage.chats.appendMessage(chat.id, withUsage(assistant('a1'), { promptTokens: 100, completionTokens: 10 }));
+    await storage.chats.appendMessage(chat.id, user('u2'));
+    await storage.chats.appendMessage(chat.id, withUsage(assistant('a2'), { promptTokens: 200, completionTokens: 20 }));
+
+    // The retry drops the last reply from the messages. The totals keep it, and the context falls back to a1.
+    const cut = await storage.chats.truncateAfterLastUser(chat.id);
+    expect(cut.messages.map((m) => m.id)).toEqual(['u1', 'a1', 'u2']);
+    expect(cut.usage).toEqual({
+      contextTokens: 110,
+      promptTokens: 300,
+      completionTokens: 30,
+      costUsd: null,
+      requests: 2,
+    });
+
+    const retried = await storage.chats.appendMessage(
+      chat.id,
+      withUsage(assistant('a3'), { promptTokens: 150, completionTokens: 15 }),
+    );
+    expect(retried.usage).toEqual({
+      contextTokens: 165,
+      promptTokens: 450,
+      completionTokens: 45,
+      costUsd: null,
+      requests: 3,
+    });
+    expect((await storage.chats.get(chat.id)).usage).toEqual(retried.usage);
+  });
+
+  it('truncateAfterLastUser refreshes the index, so list() shows the new contextTokens', async () => {
+    const { storage } = await makeStorage();
+    const chat = await storage.chats.create({ projectId: null, model: 'm' });
+    await storage.chats.appendMessage(chat.id, user('u1'));
+    await storage.chats.appendMessage(chat.id, withUsage(assistant('a1'), { promptTokens: 100, completionTokens: 10 }));
+    await storage.chats.appendMessage(chat.id, user('u2'));
+    await storage.chats.appendMessage(chat.id, withUsage(assistant('a2'), { promptTokens: 200, completionTokens: 20 }));
+    expect((await storage.chats.list())[0]?.usage.contextTokens).toBe(220);
+
+    const cut = await storage.chats.truncateAfterLastUser(chat.id);
+    expect(cut.usage.contextTokens).toBe(110);
+    expect((await storage.chats.list())[0]?.usage).toEqual(cut.usage);
+  });
+
+  it('rename, move and detachProject keep the totals after a truncate; they are never re-backfilled', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const project = await storage.projects.create({ rootPath: await makeTempDir() });
+    const chat = await storage.chats.create({ projectId: null, model: 'm' });
+    await storage.chats.appendMessage(chat.id, user('u1'));
+    await storage.chats.appendMessage(chat.id, withUsage(assistant('a1'), { promptTokens: 100, completionTokens: 10 }));
+    await storage.chats.appendMessage(chat.id, user('u2'));
+    await storage.chats.appendMessage(chat.id, withUsage(assistant('a2'), { promptTokens: 200, completionTokens: 20 }));
+    await storage.chats.truncateAfterLastUser(chat.id);
+    const expectedTotals = { promptTokens: 300, completionTokens: 30, costUsd: null, requests: 2 };
+
+    await storage.chats.update(chat.id, { title: 'Renamed' });
+    expect((await readRawChat(dataDir, chat.id)).usageTotals).toEqual(expectedTotals);
+    expect((await storage.chats.list())[0]?.usage).toMatchObject({ contextTokens: 110, ...expectedTotals });
+
+    await storage.chats.update(chat.id, { projectId: project.id });
+    expect((await readRawChat(dataDir, chat.id)).usageTotals).toEqual(expectedTotals);
+    expect((await storage.chats.list())[0]?.usage).toMatchObject({ contextTokens: 110, ...expectedTotals });
+
+    await storage.chats.detachProject(project.id);
+    expect((await readRawChat(dataDir, chat.id)).usageTotals).toEqual(expectedTotals);
+    expect((await storage.chats.list())[0]?.usage).toMatchObject({ contextTokens: 110, ...expectedTotals });
+
+    // Later replies add to the kept totals rather than restarting them from the remaining messages.
+    const next = await storage.chats.appendMessage(
+      chat.id,
+      withUsage(assistant('a3'), { promptTokens: 150, completionTokens: 15 }),
+    );
+    expect(next.usage).toEqual({
+      contextTokens: 165,
+      promptTokens: 450,
+      completionTokens: 45,
+      costUsd: null,
+      requests: 3,
+    });
+  });
+
+  it('a stopped reply counts when it reported usage; one without usage does not', async () => {
+    const { storage } = await makeStorage();
+    const chat = await storage.chats.create({ projectId: null, model: 'm' });
+    await storage.chats.appendMessage(chat.id, user('u1'));
+    const stopped = await storage.chats.appendMessage(chat.id, {
+      ...withUsage(assistant('a1'), { promptTokens: 80, completionTokens: 20 }),
+      status: 'stopped',
+      text: 'Partial',
+    });
+    expect(stopped.usage).toEqual({
+      contextTokens: 100,
+      promptTokens: 80,
+      completionTokens: 20,
+      costUsd: null,
+      requests: 1,
+    });
+
+    const bare = await storage.chats.appendMessage(chat.id, { ...assistant('a2'), status: 'stopped' });
+    expect(bare.usage).toEqual(stopped.usage);
+  });
+
+  it('costUsd stays null while no request reports a cost, and sums the ones that do', async () => {
+    const { storage } = await makeStorage();
+    const quiet = await storage.chats.create({ projectId: null, model: 'm' });
+    await storage.chats.appendMessage(quiet.id, withUsage(assistant('q1'), { promptTokens: 10, completionTokens: 5 }));
+    const q = await storage.chats.appendMessage(
+      quiet.id,
+      withUsage(assistant('q2'), { promptTokens: 10, completionTokens: 5 }),
+    );
+    expect(q.usage).toMatchObject({ costUsd: null, requests: 2 });
+
+    const mixed = await storage.chats.create({ projectId: null, model: 'm' });
+    await storage.chats.appendMessage(
+      mixed.id,
+      withUsage(assistant('m1'), { promptTokens: 10, completionTokens: 5, costUsd: 0.1 }),
+    );
+    await storage.chats.appendMessage(mixed.id, withUsage(assistant('m2'), { promptTokens: 10, completionTokens: 5 }));
+    const m = await storage.chats.appendMessage(
+      mixed.id,
+      withUsage(assistant('m3'), { promptTokens: 10, completionTokens: 5, costUsd: 0.2 }),
+    );
+    expect(m.usage.costUsd).toBeCloseTo(0.3, 10);
+    expect(m.usage.requests).toBe(3);
+  });
+
+  it('a chat file from before F1 (no usageTotals) is backfilled from its messages, once', async () => {
+    const { dataDir } = await makeStorage();
+    const paths = dataPaths(dataDir);
+    await fs.mkdir(paths.chatsDir, { recursive: true });
+    // Written before F1: no `usageTotals`, no `usage`, and no index.
+    const legacy = {
+      version: 1,
+      id: 'legacy',
+      projectId: null,
+      title: 'Old chat',
+      model: 'm',
+      createdAt: NOW,
+      updatedAt: NOW,
+      archived: false,
+      messages: [
+        user('l-u1'),
+        withUsage(assistant('l-a1'), { promptTokens: 120, completionTokens: 48 }),
+        toolResult('l-t1', 'c'),
+        withUsage(assistant('l-a2'), { promptTokens: 130, completionTokens: 40, costUsd: 0.01 }),
+      ],
+    };
+    await fs.writeFile(paths.chatFile('legacy'), JSON.stringify(legacy));
+    await fs.rm(paths.chatsIndex, { force: true });
+
+    const fresh = await createStorage({ dataDir, secretStore: new MemorySecretStore() });
+    const expected = { contextTokens: 170, promptTokens: 250, completionTokens: 88, costUsd: 0.01, requests: 2 };
+    expect((await fresh.chats.get('legacy')).usage).toEqual(expected);
+    expect((await fresh.chats.list())[0]?.usage).toEqual(expected);
+
+    // The next reply adds to the backfilled totals, and nothing is counted twice.
+    const next = await fresh.chats.appendMessage(
+      'legacy',
+      withUsage(assistant('l-a3'), { promptTokens: 10, completionTokens: 5 }),
+    );
+    expect(next.usage).toEqual({
+      contextTokens: 15,
+      promptTokens: 260,
+      completionTokens: 93,
+      costUsd: 0.01,
+      requests: 3,
+    });
+  });
+
+  it('a malformed usageTotals is backfilled from the messages, not quarantined', async () => {
+    const { dataDir } = await makeStorage();
+    const paths = dataPaths(dataDir);
+    await fs.mkdir(paths.chatsDir, { recursive: true });
+    const malformed = handChat('odd', {
+      usageTotals: 'not an object',
+      messages: [
+        user('odd-u'),
+        withUsage(assistant('odd-a'), { promptTokens: 120, completionTokens: 48, costUsd: 0.01 }),
+      ],
+    });
+    await fs.writeFile(paths.chatFile('odd'), JSON.stringify(malformed));
+    await fs.rm(paths.chatsIndex, { force: true });
+
+    const logger = recordingLogger();
+    const fresh = await createStorage({ dataDir, secretStore: new MemorySecretStore(), logger });
+    const expected = { contextTokens: 168, promptTokens: 120, completionTokens: 48, costUsd: 0.01, requests: 1 };
+    expect((await fresh.chats.get('odd')).usage).toEqual(expected);
+    expect((await fresh.chats.list())[0]?.usage).toEqual(expected);
+    expect((await names(dataDir)).some((n) => n.includes('.corrupt-'))).toBe(false);
+    expect(logger.messages).toEqual([]);
+
+    // A later write replaces the malformed value with the backfilled object.
+    const next = await fresh.chats.appendMessage(
+      'odd',
+      withUsage(assistant('odd-a2'), { promptTokens: 10, completionTokens: 5 }),
+    );
+    expect(next.usage).toMatchObject({ promptTokens: 130, completionTokens: 53, requests: 2 });
+    expect((await readRawChat(dataDir, 'odd')).usageTotals).toEqual({
+      promptTokens: 130,
+      completionTokens: 53,
+      costUsd: 0.01,
+      requests: 2,
+    });
+  });
+
+  it('an index written before F1 is rebuilt, so its summaries carry usage', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const chat = await storage.chats.create({ projectId: null, model: 'm' });
+    await storage.chats.appendMessage(chat.id, user('u1'));
+    await storage.chats.appendMessage(chat.id, withUsage(assistant('a1'), { promptTokens: 100, completionTokens: 20 }));
+
+    // Rewrite the index in its pre-F1 shape: no `usage` on the entries and no `usageBackfilled` marker.
+    const paths = dataPaths(dataDir);
+    const old = JSON.parse(await fs.readFile(paths.chatsIndex, 'utf8')) as { chats: Record<string, unknown>[] };
+    await fs.writeFile(
+      paths.chatsIndex,
+      JSON.stringify({ version: 1, chats: old.chats.map(({ usage: _usage, ...entry }) => entry) }),
+    );
+
+    const fresh = await createStorage({ dataDir, secretStore: new MemorySecretStore() });
+    expect((await fresh.chats.list()).find((c) => c.id === chat.id)?.usage).toEqual({
+      contextTokens: 120,
+      promptTokens: 100,
+      completionTokens: 20,
+      costUsd: null,
+      requests: 1,
+    });
+    // The rebuilt index was written back in the F1 shape.
+    const rewritten = JSON.parse(await fs.readFile(paths.chatsIndex, 'utf8')) as {
+      usageBackfilled?: boolean;
+      chats: { usage?: { requests: number } }[];
+    };
+    expect(rewritten.usageBackfilled).toBe(true);
+    expect(rewritten.chats[0]?.usage?.requests).toBe(1);
   });
 });

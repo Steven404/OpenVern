@@ -792,3 +792,124 @@ describe('concurrency and back-pressure', () => {
     expect(log).toContain('assistant_end');
   });
 });
+
+describe('usage (F1)', () => {
+  // Every model call reports usage in these turns, so each assistant step counts once. `callTools` above has no usage.
+  const reports = (): FakeStep => ({ type: 'usage', usage: { promptTokens: 120, completionTokens: 48 } });
+  const toolStep = (): FakeStep[] => [
+    ...textDeltas('Reading. ', 5),
+    { type: 'tool_call', call: { id: 'c1', name: 'read_file', argsJson: '{"path":"README.md"}' } },
+    reports(),
+    { type: 'finish', reason: 'tool_calls' },
+  ];
+  const answerStep = (): FakeStep[] => [
+    ...textDeltas('It is a readme.', 5),
+    reports(),
+    { type: 'finish', reason: 'stop' },
+  ];
+
+  it('the final chat_updated counts one request per assistant step of a tool turn', async () => {
+    const h = await createHarness({ script: scriptFromTurns([toolStep(), answerStep(), TITLE_TURN]) });
+    const events = await h.run();
+
+    const steps = find(events, 'assistant_end');
+    expect(steps).toHaveLength(2);
+    const updates = find(events, 'chat_updated');
+    expect(updates).toHaveLength(2); // the turn's, then the title's
+    const expected = { contextTokens: 168, promptTokens: 240, completionTokens: 96, costUsd: null, requests: 2 };
+    expect(updates.at(-1)?.chat.usage).toEqual(expected);
+    expect(updates.at(-1)?.chat.usage.requests).toBe(steps.length);
+    // The title request reports usage too, but it is not a chat request, so it is not counted.
+    expect(h.provider.calls).toHaveLength(3);
+    expect(updates[0]?.chat.usage).toEqual(expected);
+  });
+
+  it('a reply that fails after reporting usage still counts', async () => {
+    const h = await createHarness({
+      script: scriptFromTurns([
+        [
+          ...textDeltas('Half an ans', 6),
+          reports(),
+          { type: 'throw', error: new ProviderError('rate_limited', 'Slow down.', true, 429) },
+        ],
+      ]),
+    });
+    const events = await h.run();
+    expect(find(events, 'assistant_end')[0]?.message).toMatchObject({ status: 'error' });
+    expect(find(events, 'chat_updated').at(-1)?.chat.usage).toEqual({
+      contextTokens: 168,
+      promptTokens: 120,
+      completionTokens: 48,
+      costUsd: null,
+      requests: 1,
+    });
+  });
+
+  it('a stopped reply that reported usage counts in the trailing chat_updated', async () => {
+    const h = await createHarness({
+      script: scriptFromTurns([
+        [
+          ...textDeltas('Partial answer', 5),
+          reports(),
+          { type: 'delay', ms: 60_000 },
+          { type: 'finish', reason: 'stop' },
+        ],
+      ]),
+    });
+    const controller = new AbortController();
+    const run = h.run({ signal: controller.signal });
+    await new Promise((r) => setTimeout(r, 20));
+    controller.abort();
+    const events = await run;
+
+    expect(find(events, 'assistant_end')[0]?.message).toMatchObject({
+      status: 'stopped',
+      usage: { promptTokens: 120, completionTokens: 48 },
+    });
+    expect(find(events, 'chat_updated').at(-1)?.chat.usage).toEqual({
+      contextTokens: 168,
+      promptTokens: 120,
+      completionTokens: 48,
+      costUsd: null,
+      requests: 1,
+    });
+  });
+
+  it('a retry keeps the discarded turn and adds the new reply in chat_updated.usage', async () => {
+    const h = await createHarness({ script: scriptFromTurns([reply('Second try'), TITLE_TURN]) });
+    const question: UserMessage = { id: 'u1', role: 'user', createdAt: 't', text: 'Question', attachments: [] };
+    const failed: AssistantMessage = {
+      id: 'a1',
+      role: 'assistant',
+      createdAt: 't',
+      model: MODEL,
+      text: 'oops',
+      toolCalls: [],
+      status: 'error',
+      usage: { promptTokens: 100, completionTokens: 10 },
+    };
+    for (const m of [question, failed]) await h.chats.appendMessage(h.chatId, m);
+
+    const events = await h.run({ newUserMessage: undefined });
+    const expected = { contextTokens: 15, promptTokens: 110, completionTokens: 15, costUsd: null, requests: 2 };
+    const updates = find(events, 'chat_updated');
+    expect(updates).toHaveLength(2); // the turn's, then the title's
+    expect(updates[0]?.chat.usage).toEqual(expected);
+    expect(updates.at(-1)?.chat.usage).toEqual(expected);
+    expect((await h.chats.get(h.chatId)).usage).toEqual(expected);
+  });
+
+  it('a reply that reports no usage is not counted, so the counter stays hidden', async () => {
+    const h = await createHarness({
+      script: scriptFromTurns([[...textDeltas('Hi!', 5), { type: 'finish', reason: 'stop' }], TITLE_TURN]),
+    });
+    const events = await h.run();
+    expect(find(events, 'chat_updated').at(-1)?.chat.usage).toEqual({
+      contextTokens: 0,
+      promptTokens: 0,
+      completionTokens: 0,
+      costUsd: null,
+      requests: 0,
+    });
+  });
+});

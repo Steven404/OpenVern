@@ -6,13 +6,14 @@ import { sniffAttachmentBytes } from '@shared/attachment-sniff';
 import { DEFAULT_MODEL, NEW_CHAT_TITLE } from '@shared/constants';
 import { type ErrorCode, errorInfo } from '@shared/errors';
 import type { AgentEvent } from '@shared/events';
-import { SAMPLE_MODELS } from '@shared/sample-data';
+import { SAMPLE_MODELS, SAMPLE_USAGE } from '@shared/sample-data';
 import type {
   AssistantMessage,
   AttachmentRef,
   Chat,
   ChatChanges,
   ChatSummary,
+  ChatUsage,
   FileChange,
   HomeFileTree,
   Id,
@@ -25,6 +26,7 @@ import type {
   PublicSettings,
   ToolCall,
   ToolMessage,
+  Usage,
   UserMessage,
 } from '@shared/types';
 import { type ApiClient, ApiError } from './api-client';
@@ -54,6 +56,31 @@ const clone = <T>(v: T): T => structuredClone(v);
 const now = () => new Date().toISOString();
 const minutesAgo = (n: number) => new Date(Date.now() - n * 60_000).toISOString();
 
+// ── F1: context usage, mirroring the server's storage rules (plan §4.4) ───────────────────────
+
+/** Per-chat cumulative counters; they survive a retry's truncation. */
+type UsageTotals = Omit<ChatUsage, 'contextTokens'>;
+
+const EMPTY_USAGE: ChatUsage = { contextTokens: 0, promptTokens: 0, completionTokens: 0, costUsd: null, requests: 0 };
+
+const addUsage = (totals: UsageTotals, usage: Usage): UsageTotals => ({
+  promptTokens: totals.promptTokens + usage.promptTokens,
+  completionTokens: totals.completionTokens + usage.completionTokens,
+  costUsd: usage.costUsd === undefined ? totals.costUsd : (totals.costUsd ?? 0) + usage.costUsd,
+  requests: totals.requests + 1,
+});
+
+const totalsFrom = (messages: readonly Message[]): UsageTotals =>
+  messages.reduce<UsageTotals>(
+    (totals, m) => (m.role === 'assistant' && m.usage ? addUsage(totals, m.usage) : totals),
+    { promptTokens: 0, completionTokens: 0, costUsd: null, requests: 0 },
+  );
+
+const usageFrom = (messages: readonly Message[], totals: UsageTotals): ChatUsage => {
+  const latest = messages.findLast((m): m is AssistantMessage => m.role === 'assistant' && m.usage !== undefined);
+  return { contextTokens: latest?.usage ? latest.usage.promptTokens + latest.usage.completionTokens : 0, ...totals };
+};
+
 const SAMPLE_CODE = [
   '```ts',
   'while (true) {',
@@ -80,6 +107,7 @@ export class MockApiClient implements ApiClient {
   private running = new Set<Id>();
   private changes = new Map<Id, { revision: number; messageId: Id; files: FileChange[] } | null>();
   private applied = new Map<Id, ChatChanges['applied']>();
+  private usageTotals = new Map<Id, UsageTotals>();
 
   constructor(opts: MockApiClientOptions = {}) {
     this.delayMs = opts.delayMs ?? 30;
@@ -159,8 +187,18 @@ export class MockApiClient implements ApiClient {
     return this.chats.find((c) => c.id === id) ?? fail('not_found', 404, 'Chat not found.');
   }
   private summary(c: Chat): ChatSummary {
-    const { messages: _messages, ...s } = c;
-    return clone(s);
+    const { messages, ...s } = c;
+    return clone({ ...s, usage: this.usageOf(c.id, messages) });
+  }
+
+  /** Totals are created on first use from the stored messages (as storage backfills old chat files). */
+  private usageOf(chatId: Id, messages: readonly Message[]): ChatUsage {
+    let totals = this.usageTotals.get(chatId);
+    if (!totals) {
+      totals = totalsFrom(messages);
+      this.usageTotals.set(chatId, totals);
+    }
+    return usageFrom(messages, totals);
   }
 
   async listChats() {
@@ -177,9 +215,11 @@ export class MockApiClient implements ApiClient {
       createdAt: t,
       updatedAt: t,
       archived: false,
+      usage: { ...EMPTY_USAGE },
       messages: [],
     };
     this.chats.push(chat);
+    this.usageTotals.set(chat.id, { promptTokens: 0, completionTokens: 0, costUsd: null, requests: 0 });
     return clone(chat);
   }
   async getChat(id: Id) {
@@ -210,6 +250,7 @@ export class MockApiClient implements ApiClient {
     this.chats = this.chats.filter((x) => x !== c);
     this.changes.delete(id);
     this.applied.delete(id);
+    this.usageTotals.delete(id);
     for (const m of c.messages) if (m.role === 'user') for (const a of m.attachments) this.dropAttachment(a.id);
   }
 
@@ -229,6 +270,8 @@ export class MockApiClient implements ApiClient {
     input?: { text: string; attachmentIds: Id[] },
   ): AsyncIterable<AgentEvent> {
     const chat = this.chat(chatId);
+    // Backfill the totals before a retry truncates the messages, so the discarded turn keeps counting.
+    this.usageOf(chatId, chat.messages);
     if (this.running.has(chatId)) fail('conflict', 409, 'A reply is already in progress.');
     if (!this.apiKey) fail('no_api_key', 400);
     const info = SAMPLE_MODELS.find((m) => m.id === model);
@@ -323,8 +366,15 @@ export class MockApiClient implements ApiClient {
         }
         if (signal.aborted) stopText();
         msg.toolCalls = step.toolCalls;
-        msg.usage = { promptTokens: 120, completionTokens: 48 };
+        const stepUsage: Usage = { promptTokens: 120, completionTokens: 48 };
+        msg.usage = stepUsage;
         chat.messages.push(msg);
+        const totals = this.usageTotals.get(chatId);
+        this.usageTotals.set(
+          chatId,
+          totals ? addUsage(totals, stepUsage) : totalsFrom(chat.messages), // the messages now include this step
+        );
+        chat.usage = this.usageOf(chatId, chat.messages);
         yield { type: 'assistant_end', message: clone(msg) };
 
         for (const [i, call] of step.toolCalls.entries()) {
@@ -546,16 +596,17 @@ export class MockApiClient implements ApiClient {
     this.projects = [openvern, notes, site];
 
     let age = 0;
-    const chat = (projectId: Id, title: string, messages: Message[] = []): Chat => {
+    const chat = (projectId: Id, title: string, messages: Message[] = [], model = DEFAULT_MODEL): Chat => {
       age += 45;
       return {
         id: crypto.randomUUID(),
         projectId,
         title,
-        model: DEFAULT_MODEL,
+        model,
         createdAt: minutesAgo(age + 30),
         updatedAt: minutesAgo(age),
         archived: false,
+        usage: { ...EMPTY_USAGE },
         messages,
       };
     };
@@ -598,16 +649,67 @@ export class MockApiClient implements ApiClient {
         text: `${SAMPLE_CODE}\n\nTwo guards are worth adding early: a maximum number of turns, so a confused model can't spin forever, and a confirmation step before any tool that writes to disk.`,
         toolCalls: [],
         status: 'complete',
+        usage: SAMPLE_USAGE.ok,
       },
     ];
 
+    /** A one-question, one-reply chat, so the seeded counter has a context figure to show. */
+    const exchange = (model: string, question: string, reply: string, usage: Usage): Message[] => {
+      const at = minutesAgo(age + 20);
+      return [
+        { id: crypto.randomUUID(), role: 'user', createdAt: at, text: question, attachments: [] },
+        {
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          createdAt: at,
+          model,
+          text: reply,
+          toolCalls: [],
+          status: 'complete',
+          usage,
+        },
+      ];
+    };
+
     this.chats = [
       chat(openvern.id, 'Agent loop and tool calls', turn),
-      chat(openvern.id, 'Streaming replies over SSE'),
+      chat(
+        openvern.id,
+        'Streaming replies over SSE',
+        exchange(
+          DEFAULT_MODEL,
+          'How should I stream replies to the UI?',
+          'Send `text/event-stream`, one JSON event per line, and close with `done`.',
+          SAMPLE_USAGE.high,
+        ),
+      ),
       chat(openvern.id, 'Settings: what goes in v1'),
       chat(notes.id, 'Sync conflict strategy'),
-      chat(notes.id, 'SQLite schema review'),
-      chat(site.id, 'Theme toggle transition'),
+      chat(
+        notes.id,
+        'SQLite schema review',
+        exchange(
+          DEFAULT_MODEL,
+          'Have a look at my tables.',
+          'Three tables is right; add an index on `notes.updated_at`.',
+          SAMPLE_USAGE.full,
+        ),
+      ),
+      chat(
+        site.id,
+        'Theme toggle transition',
+        exchange(
+          'openrouter/auto',
+          'Can I animate the theme toggle?',
+          'Transition colours over 150ms; skip it under reduced motion.',
+          SAMPLE_USAGE.unknown,
+        ),
+        'openrouter/auto',
+      ),
     ];
+
+    for (const c of this.chats) {
+      c.usage = this.usageOf(c.id, c.messages);
+    }
   }
 }

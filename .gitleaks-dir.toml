@@ -1,0 +1,22 @@
+# Gitleaks config for `gitleaks dir` (the working tree, including untracked and
+# gitignored files). Extends the git config so the fake-key allowlists stay in
+# one place, and adds path allowlists that must never apply to `gitleaks git`:
+# a force-added file under these paths has to be scanned.
+#
+# Source paths are never allowlisted. build/icon.svg and build/make-icon.mjs are
+# source and stay scanned.
+
+[extend]
+path = ".gitleaks.toml"
+
+[[allowlists]]
+description = "Build and vendor output (not tracked source)"
+paths = [
+  '''^node_modules/''',
+  '''^out/''',
+  '''^release/''',
+  '''^build/icon\.png$''',
+  '''(^|/)\.dev-data[^/]*/''',
+  '''^reports/''',
+  '''^research_notes/''',
+]

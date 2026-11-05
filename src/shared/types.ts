@@ -15,6 +15,22 @@ export interface ProjectListItem extends Project {
   chatCount: number;
 }
 
+/**
+ * What the chat's context holds and what it has cost (F1, plan §4.1). Built by storage from the chat's
+ * `usageTotals` and its messages; the trailing `chat_updated` of a run carries it.
+ */
+export interface ChatUsage {
+  /** prompt + completion tokens of the latest assistant message with usage; 0 when none. */
+  contextTokens: number;
+  /** Cumulative over every provider request in the chat, including retried and truncated ones. */
+  promptTokens: number;
+  completionTokens: number;
+  /** Sum of reported costs; null when no request has reported one. */
+  costUsd: number | null;
+  /** Number of provider requests counted. 0 = the counter is hidden. */
+  requests: number;
+}
+
 export interface ChatSummary {
   id: Id;
   projectId: Id | null; // null = loose chat ("Chats" section), no tools
@@ -24,6 +40,7 @@ export interface ChatSummary {
   updatedAt: IsoDate;
   /** Hidden under "Archived" in the sidebar. Only meaningful when `projectId === null`. */
   archived: boolean;
+  usage: ChatUsage;
 }
 export interface Chat extends ChatSummary {
   messages: Message[];

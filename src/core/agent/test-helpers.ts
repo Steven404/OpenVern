@@ -1,9 +1,20 @@
 // In-memory fakes of the S1/S2/S3 services, for testing the agent in isolation (test-only; not exported from index.ts).
 
 import type { AgentEvent } from '@shared/events';
-import type { AttachmentRef, Chat, ChatSummary, Id, Message, ModelInfo, Project, ProjectListItem } from '@shared/types';
+import type {
+  AttachmentRef,
+  Chat,
+  ChatSummary,
+  ChatUsage,
+  Id,
+  Message,
+  ModelInfo,
+  Project,
+  ProjectListItem,
+} from '@shared/types';
 import { CoreError } from '../errors';
 import { createFakeProvider, type FakeProvider, type FakeScript } from '../providers/fake';
+import { addUsage, totalsFromMessages, type UsageTotals, usageFromMessages } from '../storage/schemas';
 import type { Tool, ToolContext, ToolResult } from '../tools/types';
 import type {
   AgentService,
@@ -32,12 +43,22 @@ export interface FakeChats extends ChatsService {
   readonly store: Map<Id, Chat>;
 }
 
+/** F1: mirrors storage's cumulative counters, so `chat_updated.usage` is populated in agent tests. */
 export function createFakeChats(now: () => Date = createClock()): FakeChats {
   const store = new Map<Id, Chat>();
+  const totals = new Map<Id, UsageTotals>();
   const need = (id: Id): Chat => {
     const c = store.get(id);
     if (!c) throw new CoreError('not_found');
     return c;
+  };
+  const usageFor = (c: Chat): ChatUsage => {
+    let t = totals.get(c.id);
+    if (!t) {
+      t = totalsFromMessages(c.messages);
+      totals.set(c.id, t);
+    }
+    return usageFromMessages(c.messages, t);
   };
   const summary = (c: Chat): ChatSummary => ({
     id: c.id,
@@ -47,6 +68,7 @@ export function createFakeChats(now: () => Date = createClock()): FakeChats {
     createdAt: c.createdAt,
     updatedAt: c.updatedAt,
     archived: c.archived,
+    usage: usageFor(c),
   });
   return {
     store,
@@ -66,9 +88,11 @@ export function createFakeChats(now: () => Date = createClock()): FakeChats {
         createdAt: ts,
         updatedAt: ts,
         archived: false,
+        usage: { contextTokens: 0, promptTokens: 0, completionTokens: 0, costUsd: null, requests: 0 },
         messages: [],
       };
       store.set(chat.id, chat);
+      totals.set(chat.id, { promptTokens: 0, completionTokens: 0, costUsd: null, requests: 0 });
       return clone(chat);
     },
     async update(id, patch) {
@@ -87,7 +111,11 @@ export function createFakeChats(now: () => Date = createClock()): FakeChats {
     },
     async appendMessage(id, message: Message) {
       const c = need(id);
+      // Read the counters before the push so the new message is not counted twice.
+      const before = usageFor(c);
       c.messages.push(clone(message));
+      if (message.role === 'assistant' && message.usage) totals.set(id, addUsage(before, message.usage));
+      c.usage = usageFor(c);
       c.updatedAt = now().toISOString();
       return summary(c);
     },
@@ -95,6 +123,7 @@ export function createFakeChats(now: () => Date = createClock()): FakeChats {
       const c = need(id);
       const lastUser = c.messages.findLastIndex((m) => m.role === 'user');
       if (lastUser >= 0) c.messages.length = lastUser + 1;
+      c.usage = usageFor(c);
       return clone(c);
     },
     async detachProject(projectId) {

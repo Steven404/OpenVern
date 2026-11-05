@@ -1,4 +1,5 @@
 import { useProjects } from '@renderer/app/queries';
+import { ContextUsageButton } from '@renderer/features/context-usage';
 import { APP_NAME } from '@shared/constants';
 import type { ChatSummary } from '@shared/types';
 import { useEffect } from 'react';
@@ -34,6 +35,7 @@ export function ChatHeader({ chat }: { chat: ChatSummary }) {
         {chat.title}
       </h1>
       <ChatOptionsMenu chat={chat} />
+      <ContextUsageButton chat={chat} />
       <span aria-hidden="true" className="h-5 w-px shrink-0 bg-border" />
       <RightPanelToggle />
     </header>

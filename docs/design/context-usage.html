@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Context usage</title>
+<!--
+  Export of the "Context usage" artboard (claude.ai Design artifact LBiDZrEcuRYShHmNjEtjco, Components page).
+  Design reference only. Colours use the token names from src/renderer/styles/tokens.css (values copied
+  below so this file opens on its own). The script at the bottom drives the "Usage" preview slider and the
+  popover's open/close; its formatting functions are the number rules in the Rules section.
+  In the app: the counter goes in ChatHeader between <ChatOptionsMenu> and the divider before
+  <RightPanelToggle>, and the panel is the existing PopoverContent (align="end", sideOffset 8).
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&amp;family=Figtree:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+:root{
+  --color-bg:#0f1428;
+  --color-surface:#1a2142;
+  --color-surface-raised:#222a52;
+  --color-surface-raised-hover:#2c3666;
+  --color-bubble:#232c55;
+  --color-tool:#151b35;
+  --color-border:#20284a;
+  --color-border-header:#1c2343;
+  --color-border-tool:#29325c;
+  --color-border-bubble:#2f3a68;
+  --color-border-control:#343f72;
+  --color-text:#ecf0fa;
+  --color-text-body:#d8deef;
+  --color-text-secondary:#c3cbe3;
+  --color-text-muted:#9ba5c6;
+  --color-text-faint:#8792b6;
+  --color-accent:#f6bd60;
+  --color-accent-2:#e5865f;
+  --color-success:#9fd4b3;
+  --color-danger:#ff8f87;
+  --color-overlay-ghost:rgb(200 215 255 / 0.07);
+  --font-display:"Bricolage Grotesque Variable","Bricolage Grotesque",sans-serif;
+  --font-sans:"Figtree Variable","Figtree",system-ui,sans-serif;
+  --font-mono:"JetBrains Mono Variable","JetBrains Mono",ui-monospace,monospace;
+  --ease-out:cubic-bezier(.16,1,.3,1);
+}
+body{margin:0;background:var(--color-bg)}
+::selection{background:rgba(246,189,96,0.28);color:#fff4e0}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+/* ---------- Sheet scaffolding (not part of the component) ---------- */
+.sheet{width:1440px;min-height:2160px;box-sizing:border-box;padding:72px 80px 88px;display:flex;flex-direction:column;gap:64px;background:radial-gradient(90% 40% at 62% -8%,rgba(98,126,214,0.22),transparent 62%),linear-gradient(180deg,#121a38 0%,var(--color-bg) 22%,#0d1224 100%);color:var(--color-text);font-family:var(--font-sans);font-size:15px;line-height:1.5}
+.sheet h1{margin:0;font-family:var(--font-display);font-weight:700;font-size:44px;line-height:1.1;letter-spacing:-0.03em}
+.sheet h1 span{color:var(--color-accent)}
+.intro{margin:0;max-width:760px;font-size:17px;line-height:1.55;color:var(--color-text-secondary);text-wrap:pretty}
+.sec{display:flex;flex-direction:column;gap:20px}
+.sec-head{display:flex;align-items:baseline;gap:16px;flex-wrap:wrap}
+.sec-head h2{margin:0;font-size:20px;font-weight:600}
+.sec-head p{margin:0;font-size:14px;color:var(--color-text-muted)}
+.preview-control{display:inline-flex;align-items:center;gap:10px;font-size:13px;color:var(--color-text-muted)}
+.preview-control input{accent-color:var(--color-text-secondary);width:200px}
+.preview-control output{font-family:var(--font-mono);font-size:12px;color:var(--color-text-secondary);min-width:4ch}
+figure{margin:0}
+figcaption{display:flex;flex-direction:column;gap:2px}
+figcaption b{font-size:14px;font-weight:600}
+figcaption span{font-size:13px;color:var(--color-text-muted)}
+
+/* Mock of the chat view, matching ChatHeader */
+.stage{position:relative;height:560px;border:1px solid var(--color-border);border-radius:12px;overflow:hidden;display:flex;flex-direction:column;background:radial-gradient(90% 55% at 62% -12%,rgba(98,126,214,0.22),transparent 62%),linear-gradient(180deg,#121a38 0%,var(--color-bg) 38%,#0d1224 100%)}
+.chat-header{flex:none;display:flex;align-items:center;gap:12px;padding:12px 12px 12px 24px;min-height:64px;box-sizing:border-box;border-bottom:1px solid var(--color-border-header)}
+.crumb{font-family:var(--font-mono);font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:var(--color-text-muted);white-space:nowrap}
+.chat-title{flex:1;min-width:0;font-size:15px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.icon-btn{width:40px;height:40px;flex:none;display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:10px;background:transparent;color:var(--color-text-muted);cursor:pointer}
+.divider{width:1px;height:20px;flex:none;background:var(--color-border)}
+.convo{flex:1;min-height:0;overflow:hidden;padding:40px 24px 24px}
+.convo-col{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:32px}
+.bubble{align-self:flex-end;max-width:78%;background:var(--color-bubble);border:1px solid var(--color-border-bubble);border-radius:18px 18px 6px 18px;padding:12px 16px;font-size:15.5px}
+.reply{display:flex;flex-direction:column;gap:14px;color:var(--color-text-body);font-size:15.5px;line-height:1.65}
+.reply p{margin:0}
+.who{display:flex;align-items:center;gap:10px;font-weight:600;color:var(--color-text);font-size:14px}
+.avatar{width:26px;height:26px;border-radius:8px;background:var(--color-accent);color:var(--color-bg);display:inline-flex;align-items:center;justify-content:center}
+.tool{border:1px solid var(--color-border-tool);border-radius:12px;background:var(--color-tool);display:flex;align-items:center;gap:10px;padding:10px 14px;font-size:13.5px;color:var(--color-text-secondary)}
+.tool .name{font-family:var(--font-mono);font-size:12.5px}
+.tool .path{color:var(--color-text-muted);flex:1}
+.tool .time{font-family:var(--font-mono);font-size:11.5px;color:var(--color-text-faint)}
+.anchor{position:absolute;top:60px;right:77px} /* = Radix align="end", sideOffset 8 under the counter */
+.cell{height:64px;border:1px solid var(--color-border);border-radius:12px;background:var(--color-bg);display:flex;align-items:center;justify-content:center}
+.panel-cell{padding:28px;border:1px solid var(--color-border);border-radius:12px;background:var(--color-bg);display:flex;justify-content:center}
+.rules{margin:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:56px;row-gap:22px;max-width:1200px}
+.rules dt{font-size:15px;font-weight:600}
+.rules dd{margin:4px 0 0;font-size:14.5px;line-height:1.6;color:var(--color-text-secondary)}
+.rules code{font-family:var(--font-mono);font-size:13px}
+
+/* ================= THE COMPONENT ================= */
+
+/* Counter: a 40px ghost button, mono because it is a count */
+.ctx-btn{height:40px;flex:none;display:inline-flex;align-items:center;padding:0 10px;border:0;border-radius:10px;background:transparent;color:var(--color-text-secondary);cursor:pointer;white-space:nowrap;font-family:var(--font-mono);font-size:12.5px;font-variant-numeric:tabular-nums;transition:background-color .15s ease,color .15s ease,box-shadow .15s ease}
+.ctx-btn:hover,.ctx-btn.is-hover{background:var(--color-overlay-ghost);color:var(--color-text)}
+/* Open = same treatment as RightPanelToggle when pressed */
+.ctx-btn[aria-expanded="true"]{background:var(--color-surface-raised);color:var(--color-text);box-shadow:inset 0 0 0 1px var(--color-border-control)}
+.ctx-btn:focus-visible,.icon-btn:focus-visible{outline:2px solid var(--color-accent);outline-offset:2px}
+.icon-btn:hover{background:var(--color-overlay-ghost);color:var(--color-text)}
+.ctx-btn .limit{margin-left:0.4em;color:var(--color-text-faint)}
+/* Only the used figure changes colour */
+[data-level="high"] .used{color:var(--color-accent-2)}
+[data-level="full"] .used{color:var(--color-danger)}
+
+/* Panel: 352px popover on the Dusk surface (PopoverContent already gives radius 14, border-control, surface, shadow) */
+.ctx-pop{width:352px;box-sizing:border-box;padding:16px 18px 18px;background:var(--color-surface);border:1px solid var(--color-border-control);border-radius:14px;box-shadow:0 24px 48px -12px rgba(4,6,16,0.65),0 2px 6px rgba(4,6,16,0.35);display:flex;flex-direction:column;color:var(--color-text);font-family:var(--font-sans)}
+.ctx-pop.animate{transform-origin:top right;animation:ctx-in .18s var(--ease-out)}
+@keyframes ctx-in{from{opacity:0;transform:translateY(-4px) scale(.98)}to{opacity:1;transform:none}}
+.ctx-pop h3{margin:0;font-size:14px;font-weight:600}
+.ctx-top{margin-top:8px;display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.ctx-pct{font-size:22px;font-weight:600;line-height:1.2;letter-spacing:-0.01em;font-variant-numeric:tabular-nums;color:var(--color-text)}
+.ctx-count{font-family:var(--font-mono);font-size:12.5px;font-variant-numeric:tabular-nums;color:var(--color-text-faint);white-space:nowrap}
+.ctx-count .used{color:var(--color-text-body)}
+.ctx-count .tail{margin-left:0.35em}
+.ctx-bar{margin-top:10px;height:6px;border-radius:999px;background:var(--color-surface-raised-hover);overflow:hidden}
+.ctx-fill{height:100%;min-width:3px;border-radius:999px;background:var(--color-text-secondary);transition:width .35s var(--ease-out),background-color .2s ease}
+.ctx-fill[style*="width: 0%"]{min-width:0}
+[data-level="high"] .ctx-pct{color:var(--color-accent-2)}
+[data-level="high"] .ctx-fill{background:var(--color-accent-2)}
+[data-level="full"] .ctx-pct{color:var(--color-danger)}
+[data-level="full"] .ctx-fill{background:var(--color-danger)}
+[data-level="unknown"] .ctx-pct{color:var(--color-text-faint)}
+.ctx-pop[data-level] .ctx-count .used{color:var(--color-text-body)}
+.ctx-note{margin:10px 0 0;font-size:12.5px;color:var(--color-text-muted)}
+.ctx-rule{height:1px;margin:18px 0 16px;background:var(--color-border-tool)}
+.ctx-grid{margin:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:20px;row-gap:16px}
+.ctx-grid > div{min-width:0}
+.ctx-grid dt{font-size:12.5px;color:var(--color-text-muted)}
+.ctx-grid dd{margin:2px 0 0;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ctx-grid dd.num{font-family:var(--font-mono);font-size:13px;line-height:21px;font-variant-numeric:tabular-nums}
+
+@media (prefers-reduced-motion:reduce){.ctx-pop.animate{animation:none}.ctx-fill{transition:none}}
+</style>
+</head>
+<body>
+<div class="sheet">
+
+  <header style="display: flex; flex-direction: column; gap: 14px">
+    <h1>Context<span>.</span></h1>
+    <p class="intro">How full the chat is, read off the header at a glance. The counter sits between Chat options and the right panel toggle; click it for the model, what the chat has cost and when it was last used.</p>
+  </header>
+
+  <!-- In place -->
+  <section class="sec">
+    <div class="sec-head">
+      <h2>In place</h2>
+      <p>Click the counter to open or close the panel (Esc and a click outside also close it).</p>
+      <label class="preview-control">Usage (preview only) <input id="usage" type="range" min="0" max="100" step="1" value="38"><output id="usage-out" for="usage">38%</output></label>
+    </div>
+
+    <div class="stage">
+      <div class="chat-header">
+        <span class="crumb">stefanos-ai-harness /</span>
+        <span class="chat-title">Agent loop and tool calls</span>
+        <button class="icon-btn" type="button" aria-label="Chat options">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>
+        </button>
+        <button id="ctx-trigger" class="ctx-btn" type="button" aria-haspopup="dialog" aria-expanded="true" aria-controls="ctx-panel" title="Context used in this chat" data-level="ok">
+          <span class="sr">Context used: </span><span class="used" data-f="usedShort">97.3k</span><span class="limit">/ <span data-f="limitShort">256k</span></span>
+        </button>
+        <span class="divider" aria-hidden="true"></span>
+        <button class="icon-btn" type="button" aria-label="Toggle right panel" aria-pressed="false" title="Toggle right panel (Ctrl ])">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M15 4v16"/></svg>
+        </button>
+      </div>
+
+      <div class="convo">
+        <div class="convo-col">
+          <div class="bubble">How should the agent loop handle tool calls? I want it simple: send messages, run any tools the model asks for, feed the results back, repeat.</div>
+          <article class="reply">
+            <div class="who"><span class="avatar" aria-hidden="true"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8"/></svg></span>OpenVern</div>
+            <p>That shape is right. Keep the loop as one function that only stops when the model's reply contains no tool calls.</p>
+            <div class="tool">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9fd4b3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5L20 7"/></svg>
+              <span class="name">read_file</span><span class="path">src/agent/loop.ts</span><span class="time">0.2s</span>
+            </div>
+            <p>Two guards are worth adding early: a maximum number of turns, so a confused model can't spin forever, and a confirmation step before any tool that writes to disk.</p>
+          </article>
+        </div>
+      </div>
+
+      <div class="anchor" id="ctx-anchor">
+        <div id="ctx-panel" class="ctx-pop animate" role="dialog" aria-label="Context" data-level="ok">
+          <h3>Context</h3>
+          <div class="ctx-top">
+            <span class="ctx-pct" data-f="pctLabel">38%</span>
+            <span class="ctx-count" data-f-title="exact" title="97,280 / 256,000 tokens"><span class="used" data-f="usedShort">97.3k</span><span class="tail" data-f="tail">/ 256k</span></span>
+          </div>
+          <div class="ctx-bar" role="progressbar" aria-label="Context used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="38"><div class="ctx-fill" style="width: 38%"></div></div>
+          <div class="ctx-rule" aria-hidden="true"></div>
+          <dl class="ctx-grid">
+            <div><dt>Provider</dt><dd>OpenRouter</dd></div>
+            <div><dt>Model</dt><dd title="ChatGPT 6.1 Sol">ChatGPT 6.1 Sol</dd></div>
+            <div><dt>Total cost</dt><dd class="num" data-f="cost">$0.64</dd></div>
+            <div><dt>Total tokens used</dt><dd class="num" data-f="total">335,962</dd></div>
+            <div><dt>Created</dt><dd>Nov 5, 2026, 2:14 PM</dd></div>
+            <div><dt>Last activity</dt><dd data-f="last">Nov 5, 2026, 4:02 PM</dd></div>
+          </dl>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Counter states -->
+  <section class="sec">
+    <div class="sec-head">
+      <h2>Counter</h2>
+      <p>A 40px ghost button like its neighbours, set in mono because it is a count. Only the used figure changes colour.</p>
+    </div>
+    <div style="display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 16px">
+      <figure style="display: flex; flex-direction: column; gap: 12px">
+        <div class="cell"><button class="ctx-btn" type="button" aria-haspopup="dialog" aria-expanded="false" data-level="ok"><span class="sr">Context used: </span><span class="used">97.3k</span><span class="limit">/ 256k</span></button></div>
+        <figcaption><b>Rest</b><span>Below 80%.</span></figcaption>
+      </figure>
+      <figure style="display: flex; flex-direction: column; gap: 12px">
+        <div class="cell"><button class="ctx-btn is-hover" type="button" aria-haspopup="dialog" aria-expanded="false" data-level="ok"><span class="sr">Context used: </span><span class="used">97.3k</span><span class="limit">/ 256k</span></button></div>
+        <figcaption><b>Hover</b><span>Ghost overlay.</span></figcaption>
+      </figure>
+      <figure style="display: flex; flex-direction: column; gap: 12px">
+        <div class="cell"><button class="ctx-btn" type="button" aria-haspopup="dialog" aria-expanded="true" data-level="ok"><span class="sr">Context used: </span><span class="used">97.3k</span><span class="limit">/ 256k</span></button></div>
+        <figcaption><b>Open</b><span>Matches the pressed panel toggle.</span></figcaption>
+      </figure>
+      <figure style="display: flex; flex-direction: column; gap: 12px">
+        <div class="cell"><button class="ctx-btn" type="button" aria-haspopup="dialog" aria-expanded="false" data-level="high"><span class="sr">Context used: </span><span class="used">220.2k</span><span class="limit">/ 256k</span></button></div>
+        <figcaption><b>80% and over</b><span>Used figure in gable brick.</span></figcaption>
+      </figure>
+      <figure style="display: flex; flex-direction: column; gap: 12px">
+        <div class="cell"><button class="ctx-btn" type="button" aria-haspopup="dialog" aria-expanded="false" data-level="full"><span class="sr">Context used: </span><span class="used">248.8k</span><span class="limit">/ 256k</span></button></div>
+        <figcaption><b>95% and over</b><span>Used figure in signal coral.</span></figcaption>
+      </figure>
+      <figure style="display: flex; flex-direction: column; gap: 12px">
+        <div class="cell"><button class="ctx-btn" type="button" aria-haspopup="dialog" aria-expanded="false" data-level="unknown"><span class="sr">Context used: </span><span class="used">12.4k</span><span class="limit">/ —</span></button></div>
+        <figcaption><b>Limit unknown</b><span>The model reports none.</span></figcaption>
+      </figure>
+      <figure style="display: flex; flex-direction: column; gap: 12px">
+        <div class="cell"><button class="ctx-btn" type="button" aria-haspopup="dialog" aria-expanded="false" data-level="ok"><span class="sr">Context used: </span><span class="used">0</span><span class="limit">/ 256k</span></button></div>
+        <figcaption><b>New chat</b><span>Before the first reply.</span></figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- Panel variants -->
+  <section class="sec">
+    <div class="sec-head">
+      <h2>Panel</h2>
+      <p>352px wide, on the Dusk surface. The percentage and the bar carry the warning; the figures below never change colour.</p>
+    </div>
+    <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px">
+
+      <figure style="display: flex; flex-direction: column; gap: 14px">
+        <div class="panel-cell">
+          <div class="ctx-pop" role="dialog" aria-label="Context" data-level="high">
+            <h3>Context</h3>
+            <div class="ctx-top"><span class="ctx-pct">86%</span><span class="ctx-count" title="220,160 / 256,000 tokens"><span class="used">220.2k</span><span class="tail">/ 256k</span></span></div>
+            <div class="ctx-bar" role="progressbar" aria-label="Context used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="86"><div class="ctx-fill" style="width: 86%"></div></div>
+            <div class="ctx-rule" aria-hidden="true"></div>
+            <dl class="ctx-grid">
+              <div><dt>Provider</dt><dd>OpenRouter</dd></div>
+              <div><dt>Model</dt><dd>ChatGPT 6.1 Sol</dd></div>
+              <div><dt>Total cost</dt><dd class="num">$2.25</dd></div>
+              <div><dt>Total tokens used</dt><dd class="num">1,184,322</dd></div>
+              <div><dt>Created</dt><dd>Nov 5, 2026, 2:14 PM</dd></div>
+              <div><dt>Last activity</dt><dd>Nov 5, 2026, 4:02 PM</dd></div>
+            </dl>
+          </div>
+        </div>
+        <figcaption><b>80% and over</b><span>Gable brick on the percentage and the bar.</span></figcaption>
+      </figure>
+
+      <figure style="display: flex; flex-direction: column; gap: 14px">
+        <div class="panel-cell">
+          <div class="ctx-pop" role="dialog" aria-label="Context" data-level="full">
+            <h3>Context</h3>
+            <div class="ctx-top"><span class="ctx-pct">97%</span><span class="ctx-count" title="248,832 / 256,000 tokens"><span class="used">248.8k</span><span class="tail">/ 256k</span></span></div>
+            <div class="ctx-bar" role="progressbar" aria-label="Context used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="97"><div class="ctx-fill" style="width: 97.2%"></div></div>
+            <div class="ctx-rule" aria-hidden="true"></div>
+            <dl class="ctx-grid">
+              <div><dt>Provider</dt><dd>OpenRouter</dd></div>
+              <div><dt>Model</dt><dd>ChatGPT 6.1 Sol</dd></div>
+              <div><dt>Total cost</dt><dd class="num">$3.62</dd></div>
+              <div><dt>Total tokens used</dt><dd class="num">1,903,610</dd></div>
+              <div><dt>Created</dt><dd>Nov 5, 2026, 2:14 PM</dd></div>
+              <div><dt>Last activity</dt><dd>Nov 5, 2026, 4:02 PM</dd></div>
+            </dl>
+          </div>
+        </div>
+        <figcaption><b>95% and over</b><span>Signal coral, the same hue as errors.</span></figcaption>
+      </figure>
+
+      <figure style="display: flex; flex-direction: column; gap: 14px">
+        <div class="panel-cell">
+          <div class="ctx-pop" role="dialog" aria-label="Context" data-level="unknown">
+            <h3>Context</h3>
+            <div class="ctx-top"><span class="ctx-pct">—</span><span class="ctx-count" title="12,400 tokens"><span class="used">12.4k</span><span class="tail">used</span></span></div>
+            <div class="ctx-bar" role="progressbar" aria-label="Context used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="ctx-fill" style="width: 0%"></div></div>
+            <p class="ctx-note">This model doesn't report a context limit.</p>
+            <div class="ctx-rule" aria-hidden="true"></div>
+            <dl class="ctx-grid">
+              <div><dt>Provider</dt><dd>OpenRouter</dd></div>
+              <div><dt>Model</dt><dd>ChatGPT 6.1 Sol</dd></div>
+              <div><dt>Total cost</dt><dd class="num">$0.06</dd></div>
+              <div><dt>Total tokens used</dt><dd class="num">31,882</dd></div>
+              <div><dt>Created</dt><dd>Nov 5, 2026, 2:14 PM</dd></div>
+              <div><dt>Last activity</dt><dd>Nov 5, 2026, 4:02 PM</dd></div>
+            </dl>
+          </div>
+        </div>
+        <figcaption><b>Limit unknown</b><span>No percentage and an empty bar; one line says why.</span></figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- Rules -->
+  <section class="sec">
+    <h2 style="margin: 0; font-size: 20px; font-weight: 600">Rules</h2>
+    <dl class="rules">
+      <div><dt>Context used</dt><dd>The prompt and completion tokens of the latest reply: what the chat already fills of the model's window, and what the next turn builds on.</dd></div>
+      <div><dt>Total tokens used</dt><dd>Input plus output of every request in the chat, tool-call round trips included, so it outgrows the context figure quickly. Total cost sums the same requests.</dd></div>
+      <div><dt>Number format</dt><dd>Exact under 1,000, then thousands to one decimal (<code>97.3k</code>), dropping a trailing .0 (<code>12k</code>). Limits round to whole units (<code>256k</code>, <code>1M</code>). Exact counts sit in the tooltip.</dd></div>
+      <div><dt>Thresholds</dt><dd>Moonlit below 80%, gable brick from 80%, signal coral from 95%. The percentage always states the level, so colour is never the only cue. Above 0 but under 1% reads <code>&lt;1%</code>.</dd></div>
+      <div><dt>Opening</dt><dd>A popover aligned to the counter's right edge, 8px below it. Esc or a click outside closes it and focus returns to the counter.</dd></div>
+      <div><dt>Updating</dt><dd>The figures change when a reply finishes, not while it streams. Before the first reply the counter reads <code>0 / 256k</code> and Last activity equals Created.</dd></div>
+    </dl>
+  </section>
+</div>
+
+<script>
+// Reference formatting + preview wiring. The pure functions mirror the Rules section.
+const shortCount = (n) => (n < 1000 ? String(n) : (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k');
+const shortLimit = (n) => {
+  if (!n) return '—';
+  if (n >= 1e6) return (n / 1e6).toFixed(2).replace(/\.?0+$/, '') + 'M';
+  return Math.round(n / 1000) + 'k';
+};
+const exact = (n) => n.toLocaleString('en-US');
+const money = (c) => (c > 0 && c < 0.01 ? '<$0.01' : '$' + c.toFixed(2));
+function contextView(used, limit) {
+  const pct = limit ? (used / limit) * 100 : null;
+  const level = pct === null ? 'unknown' : pct >= 95 ? 'full' : pct >= 80 ? 'high' : 'ok';
+  return {
+    level,
+    pct,
+    pctLabel: pct === null ? '—' : pct > 0 && pct < 1 ? '<1%' : Math.floor(pct) + '%',
+    usedShort: shortCount(used),
+    limitShort: shortLimit(limit),
+    tail: limit ? '/ ' + shortLimit(limit) : 'used',
+    exact: exact(used) + (limit ? ' / ' + exact(limit) : '') + ' tokens',
+  };
+}
+
+// Preview only: the slider stands in for real usage data.
+const LIMIT = 256000;
+const trigger = document.getElementById('ctx-trigger');
+const anchor = document.getElementById('ctx-anchor');
+const panel = document.getElementById('ctx-panel');
+const slider = document.getElementById('usage');
+const out = document.getElementById('usage-out');
+
+function render() {
+  const used = Math.round((LIMIT * Number(slider.value)) / 100);
+  const total = used === 0 ? 0 : Math.round(used * 3.4 + 5210);
+  const v = contextView(used, LIMIT);
+  const f = { ...v, cost: money(total * 1.9e-6), total: exact(total), last: used === 0 ? 'Nov 5, 2026, 2:14 PM' : 'Nov 5, 2026, 4:02 PM' };
+  out.textContent = slider.value + '%';
+  for (const el of [trigger, panel]) {
+    el.dataset.level = v.level;
+    el.querySelectorAll('[data-f]').forEach((n) => (n.textContent = f[n.dataset.f]));
+    el.querySelectorAll('[data-f-title]').forEach((n) => (n.title = f[n.dataset.fTitle]));
+  }
+  const bar = panel.querySelector('.ctx-bar');
+  bar.setAttribute('aria-valuenow', String(Math.round(v.pct ?? 0)));
+  bar.firstElementChild.style.width = Math.min(v.pct ?? 0, 100) + '%';
+}
+
+function setOpen(open, { focus } = {}) {
+  trigger.setAttribute('aria-expanded', String(open));
+  anchor.hidden = !open;
+  if (open) { panel.classList.remove('animate'); void panel.offsetWidth; panel.classList.add('animate'); }
+  if (!open && focus) trigger.focus();
+}
+
+trigger.addEventListener('click', () => setOpen(trigger.getAttribute('aria-expanded') !== 'true'));
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !anchor.hidden) setOpen(false, { focus: true }); });
+document.addEventListener('pointerdown', (e) => { if (!anchor.hidden && !anchor.contains(e.target) && !trigger.contains(e.target)) setOpen(false); });
+slider.addEventListener('input', render);
+render();
+</script>
+</body>
+</html>
