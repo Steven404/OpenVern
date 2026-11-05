@@ -6,11 +6,17 @@ import { useEffect } from 'react';
 import { RightPanelToggle } from '../right-panel';
 import { ChatOptionsMenu } from './ChatOptionsMenu';
 
-/** D8 + D9: breadcrumb (`PROJECT /`, `Chats /` or `Archived /`), chat title, options menu. Also owns `document.title`. */
+/**
+ * D8 + D9: breadcrumb (`PROJECT /`, `PROJECT · ARCHIVED /`, `Chats /` or `Archived /`), chat title, options menu.
+ * Also owns `document.title`.
+ */
 export function ChatHeader({ chat }: { chat: ChatSummary }) {
   const projects = useProjects();
+  const projectName = chat.projectId ? projects.data?.find((p) => p.id === chat.projectId)?.name : undefined;
   const crumb = chat.projectId
-    ? projects.data?.find((p) => p.id === chat.projectId)?.name
+    ? projectName && chat.archived
+      ? `${projectName} · Archived`
+      : projectName
     : projects.isPending
       ? undefined
       : chat.archived

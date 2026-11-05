@@ -443,7 +443,6 @@ async function expectInSync(dataDir: string, id: string): Promise<void> {
 }
 
 const ids = (chats: { id: string }[]) => chats.map((c) => c.id);
-const NOT_ARCHIVABLE = 'Only chats without a project can be archived.';
 
 const NOW = '2026-01-01T00:00:00.000Z';
 const handChat = (id: string, extra: Record<string, unknown> = {}) => ({
@@ -508,44 +507,7 @@ describe('ChatsService archived flag', () => {
     expect(ids(await storage.chats.list())).toEqual(before);
   });
 
-  it('refuses to archive a project chat and writes nothing', async () => {
-    const { storage, dataDir } = await makeStorage();
-    const project = await storage.projects.create({ rootPath: await makeTempDir() });
-    const chat = await storage.chats.create({ projectId: project.id, model: 'm' });
-    const paths = dataPaths(dataDir);
-    const fileBefore = await fs.readFile(paths.chatFile(chat.id), 'utf8');
-    const indexBefore = await fs.readFile(paths.chatsIndex, 'utf8');
-
-    await expect(storage.chats.update(chat.id, { archived: true })).rejects.toMatchObject({
-      code: 'conflict',
-      message: NOT_ARCHIVABLE,
-    });
-    expect(await fs.readFile(paths.chatFile(chat.id), 'utf8')).toBe(fileBefore);
-    expect(await fs.readFile(paths.chatsIndex, 'utf8')).toBe(indexBefore);
-    expect((await storage.chats.get(chat.id)).archived).toBe(false);
-    await expectInSync(dataDir, chat.id);
-  });
-
-  it('update({ projectId, archived: true }) on a loose chat is a conflict and the chat stays loose and unarchived', async () => {
-    const { storage, dataDir } = await makeStorage();
-    const project = await storage.projects.create({ rootPath: await makeTempDir() });
-    const chat = await storage.chats.create({ projectId: null, model: 'm' });
-    const paths = dataPaths(dataDir);
-    const fileBefore = await fs.readFile(paths.chatFile(chat.id), 'utf8');
-    const indexBefore = await fs.readFile(paths.chatsIndex, 'utf8');
-
-    await expect(storage.chats.update(chat.id, { projectId: project.id, archived: true })).rejects.toMatchObject({
-      code: 'conflict',
-      message: NOT_ARCHIVABLE,
-    });
-    const after = await storage.chats.get(chat.id);
-    expect(after).toMatchObject({ projectId: null, archived: false });
-    expect(await fs.readFile(paths.chatFile(chat.id), 'utf8')).toBe(fileBefore);
-    expect(await fs.readFile(paths.chatsIndex, 'utf8')).toBe(indexBefore);
-    await expectInSync(dataDir, chat.id);
-  });
-
-  it('moving an archived chat into a project clears the flag; moving it out leaves a chat archived', async () => {
+  it('moving an archived chat into a project keeps the flag; moving it out keeps it too', async () => {
     const { storage, dataDir } = await makeStorage();
     const project = await storage.projects.create({ rootPath: await makeTempDir() });
     const chat = await storage.chats.create({ projectId: null, model: 'm' });
@@ -553,19 +515,18 @@ describe('ChatsService archived flag', () => {
     await expectInSync(dataDir, chat.id);
 
     const moved = await storage.chats.update(chat.id, { projectId: project.id });
-    expect(moved).toMatchObject({ projectId: project.id, archived: false });
-    expect((await storage.chats.get(chat.id)).archived).toBe(false);
-    expect((await readRawChat(dataDir, chat.id)).archived).toBe(false);
-    expect((await readRawEntry(dataDir, chat.id)).archived).toBe(false);
+    expect(moved).toMatchObject({ projectId: project.id, archived: true });
+    expect((await storage.chats.get(chat.id)).archived).toBe(true);
+    expect((await readRawChat(dataDir, chat.id)).archived).toBe(true);
+    expect((await readRawEntry(dataDir, chat.id)).archived).toBe(true);
     await expectInSync(dataDir, chat.id);
 
-    // Back to loose: unarchived stays unarchived.
+    // Back to loose: still archived.
     const loose = await storage.chats.update(chat.id, { projectId: null });
-    expect(loose).toMatchObject({ projectId: null, archived: false });
+    expect(loose).toMatchObject({ projectId: null, archived: true });
     await expectInSync(dataDir, chat.id);
 
     // An archived loose chat patched with projectId: null stays archived.
-    await storage.chats.update(chat.id, { archived: true });
     const stillArchived = await storage.chats.update(chat.id, { projectId: null });
     expect(stillArchived.archived).toBe(true);
     expect((await storage.chats.get(chat.id)).archived).toBe(true);
@@ -719,7 +680,7 @@ describe('ChatsService archived flag', () => {
     await expectInSync(dataDir, chat.id);
   });
 
-  it('detachProject leaves the moved chats unarchived', async () => {
+  it('detachProject keeps the archived flag of each moved chat', async () => {
     const { storage, dataDir } = await makeStorage();
     const project = await storage.projects.create({ rootPath: await makeTempDir() });
     const chat = await storage.chats.create({ projectId: null, model: 'm' });
@@ -728,11 +689,9 @@ describe('ChatsService archived flag', () => {
     const other = await storage.chats.create({ projectId: project.id, model: 'm' });
 
     await storage.chats.detachProject(project.id);
-    for (const id of [chat.id, other.id]) {
-      expect(await storage.chats.get(id)).toMatchObject({ projectId: null, archived: false });
-      await expectInSync(dataDir, id);
-    }
-    expect((await storage.chats.list()).every((c) => c.archived === false)).toBe(true);
+    expect(await storage.chats.get(chat.id)).toMatchObject({ projectId: null, archived: true });
+    expect(await storage.chats.get(other.id)).toMatchObject({ projectId: null, archived: false });
+    for (const id of [chat.id, other.id]) await expectInSync(dataDir, id);
   });
 });
 

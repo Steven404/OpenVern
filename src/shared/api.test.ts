@@ -37,13 +37,9 @@ describe('api schemas', () => {
     }
   });
 
-  it('updateChatBody rejects archiving into a project, reporting it on the archived path', () => {
+  it('updateChatBody accepts archived together with a projectId', () => {
     const result = updateChatBody.safeParse({ projectId: 'p1', archived: true });
-    expect(result.success).toBe(false);
-    if (result.success) return;
-    expect(result.error.issues).toHaveLength(1);
-    expect(result.error.issues[0]?.path).toEqual(['archived']);
-    expect(result.error.issues[0]?.message).toBe('A chat in a project cannot be archived.');
+    expect(result.success).toBe(true);
   });
 });
 

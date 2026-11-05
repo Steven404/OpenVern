@@ -191,11 +191,11 @@ describe('Archive in chat options (D9)', () => {
     expect(screen.queryByRole('menuitem', { name: 'Unarchive' })).toBeNull();
   });
 
-  it('a project chat has neither Archive nor Unarchive', async () => {
+  it('a project chat offers Archive (not Unarchive)', async () => {
     const { header } = await renderChat();
     openMenu(optionsButton(header));
     expect(await screen.findByRole('menuitem', { name: 'Rename' })).toBeTruthy();
-    expect(screen.queryByRole('menuitem', { name: 'Archive' })).toBeNull();
+    expect(screen.getByRole('menuitem', { name: 'Archive' })).toBeTruthy();
     expect(screen.queryByRole('menuitem', { name: 'Unarchive' })).toBeNull();
   });
 

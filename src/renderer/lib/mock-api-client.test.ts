@@ -91,27 +91,7 @@ describe('MockApiClient', () => {
     expect((await api.getChat(chat.id)).archived).toBe(false);
   });
 
-  it('rejects archiving a project chat with a conflict and changes nothing', async () => {
-    const api = new MockApiClient({ delayMs: 0 });
-    const [project] = await api.listProjects();
-    const inProject = await api.createChat({ projectId: project?.id ?? null, model: 'm' });
-    const err = await api.updateChat(inProject.id, { title: 'Nope', archived: true }).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(ApiError);
-    expect(err).toMatchObject({ status: 409, info: { code: 'conflict' } });
-    expect((err as ApiError).message).toBe('Only chats without a project can be archived.');
-    expect(await api.getChat(inProject.id)).toMatchObject({ title: inProject.title, archived: false });
-
-    // Archiving while moving into a project is also rejected, with no half-applied move or rename.
-    const loose = await api.createChat({ projectId: null, model: 'm' });
-    const both = await api
-      .updateChat(loose.id, { title: 'Renamed', projectId: project?.id ?? null, archived: true })
-      .catch((e: unknown) => e);
-    expect(both).toBeInstanceOf(ApiError);
-    expect(both).toMatchObject({ info: { code: 'invalid_request' } });
-    expect(await api.getChat(loose.id)).toMatchObject({ title: loose.title, projectId: null, archived: false });
-  });
-
-  it('moving an archived chat into a project clears the flag; moving it out leaves it archived', async () => {
+  it('moving an archived chat into a project and out again keeps it archived', async () => {
     const api = new MockApiClient({ delayMs: 0 });
     const [project] = await api.listProjects();
     const chat = await api.createChat({ projectId: null, model: 'm' });
@@ -121,8 +101,8 @@ describe('MockApiClient', () => {
     expect(stillArchived.archived).toBe(true);
 
     const moved = await api.updateChat(chat.id, { projectId: project?.id ?? null });
-    expect(moved).toMatchObject({ projectId: project?.id, archived: false });
-    expect((await api.getChat(chat.id)).archived).toBe(false);
+    expect(moved).toMatchObject({ projectId: project?.id, archived: true });
+    expect((await api.getChat(chat.id)).archived).toBe(true);
   });
 
   it('archive changes during a run throw conflict without applying anything; other edits still work', async () => {
@@ -148,7 +128,9 @@ describe('MockApiClient', () => {
     const looseBefore = await api.getChat(loose.id);
     await conflict(api.updateChat(loose.id, { title: 'Renamed', archived: true }));
     await conflict(api.updateChat(archivedChat.id, { archived: false }));
-    await conflict(api.updateChat(archivedChat.id, { title: 'Moved', projectId: project?.id ?? null }));
+    await conflict(
+      api.updateChat(archivedChat.id, { title: 'Moved', projectId: project?.id ?? null, archived: false }),
+    );
     const archivedNow = await api.getChat(archivedChat.id);
     expect(archivedNow).toMatchObject({ archived: true, projectId: null, title: archivedChat.title });
     expect((await api.getChat(loose.id)).archived).toBe(false);

@@ -241,46 +241,17 @@ describe('change set lifecycle', () => {
 
     await expectWait(await patch(loose.id, { archived: true }));
     await expectWait(await patch(archivedChat.id, { archived: false }));
-    await expectWait(await patch(archivedChat.id, { projectId: p.id }));
+    await expectWait(await patch(archivedChat.id, { projectId: p.id, archived: false }));
     expect(await stored(loose.id)).toEqual(looseBefore);
     expect(await stored(archivedChat.id)).toEqual(archivedBefore);
 
-    // Other patches are not blocked by a running chat.
+    // Other patches are not blocked by a running chat; a move keeps the flag.
     const renamed = await patch(loose.id, { title: 'Renamed while running' });
     expect(renamed.status).toBe(200);
     expect((await json<Chat>(renamed)).title).toBe('Renamed while running');
-  });
-
-  it('rejects a move that would clear archive when a run starts after the first read', async () => {
-    const p = await newProject();
-    const chat = await newChat(null);
-    let running = false;
-    let reads = 0;
-    const get = h.core.chats.get.bind(h.core.chats);
-    h.core.chats.get = async (id) => {
-      const current = await get(id);
-      if (id !== chat.id) return current;
-      reads += 1;
-      // The route's first read is the snapshot. The second read is under the run claim:
-      // archive the chat and start a reply before that snapshot is trusted.
-      if (reads === 2) {
-        await h.core.chats.update(id, { archived: true });
-        running = true;
-      }
-      return get(id);
-    };
-    h.core.agent = { runTurn: async () => {}, isRunning: () => running, abort: () => {} } satisfies AgentService;
-
-    const res = await h.call(`/api/chats/${chat.id}`, { method: 'PATCH', json: { projectId: p.id } });
-    expect(res.status).toBe(409);
-    const body = (await res.json()) as { error: { code: string; message: string } };
-    expect(body.error).toMatchObject({
-      code: 'conflict',
-      message: 'Wait for the response to finish before archiving or unarchiving this chat.',
-    });
-    const stored = await get(chat.id);
-    expect(stored.archived).toBe(true);
-    expect(stored.projectId).toBeNull();
+    const moved = await patch(archivedChat.id, { projectId: p.id });
+    expect(moved.status).toBe(200);
+    expect(await json<Chat>(moved)).toMatchObject({ projectId: p.id, archived: true });
   });
 
   it('refuses moving a chat that has pending edits, allows other patches', async () => {

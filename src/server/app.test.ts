@@ -229,36 +229,24 @@ describe('chats', () => {
       expect(((await (await h.call(`/api/chats/${chat.id}`)).json()) as Chat).archived).toBe(false);
     });
 
-    it('errors: project chat 409, unknown chat 404, bad value 400, archived into a project 400', async () => {
-      const project = await makeProject();
-      const inProject = await makeChat(project.id);
-      const body = await expectError(await patch(inProject.id, { archived: true }), 409, 'conflict');
-      expect(body.error.message).toBe('Only chats without a project can be archived.');
-      expect((await listed(inProject.id))?.archived).toBe(false);
-
+    it('errors: unknown chat 404, bad value 400', async () => {
       await expectError(await patch('nope', { archived: true }), 404, 'not_found');
 
       const loose = await makeChat();
       const bad = await expectError(await patch(loose.id, { archived: 'yes' }), 400, 'invalid_request');
       expect(bad.error.message).toMatch(/archived/);
-      const both = await expectError(
-        await patch(loose.id, { projectId: project.id, archived: true }),
-        400,
-        'invalid_request',
-      );
-      expect(both.error.message).toMatch(/archived/);
       expect(await listed(loose.id)).toMatchObject({ projectId: null, archived: false });
     });
 
-    it('moving an archived chat into a project unarchives it', async () => {
+    it('moving an archived chat into a project keeps it archived', async () => {
       const project = await makeProject();
       const chat = await makeChat();
       await patch(chat.id, { archived: true });
 
       const moved = await patch(chat.id, { projectId: project.id });
       expect(moved.status).toBe(200);
-      expect(await moved.json()).toMatchObject({ id: chat.id, projectId: project.id, archived: false });
-      expect(await listed(chat.id)).toMatchObject({ projectId: project.id, archived: false });
+      expect(await moved.json()).toMatchObject({ id: chat.id, projectId: project.id, archived: true });
+      expect(await listed(chat.id)).toMatchObject({ projectId: project.id, archived: true });
     });
   });
 });

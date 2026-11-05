@@ -3,10 +3,11 @@ import { Button, cx, IconButton, Kbd } from '@renderer/components/ui';
 import { useUiStore } from '@renderer/stores/ui';
 import { APP_NAME } from '@shared/constants';
 import type { ChatSummary } from '@shared/types';
-import { useEffect, useId, useMemo, useState } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useMatch, useNavigate } from 'react-router';
+import { ArchivedGroup, useArchivedGroupOpen } from './ArchivedGroup';
 import { ChatLink } from './ChatLink';
-import { ChevronIcon, GearIcon, PanelIcon, PlusIcon } from './icons';
+import { GearIcon, PanelIcon, PlusIcon } from './icons';
 import { ProjectRow } from './ProjectRow';
 
 export const SIDEBAR_COLLAPSE_BUTTON_ID = 'sidebar-collapse';
@@ -14,6 +15,13 @@ export const SIDEBAR_COLLAPSE_BUTTON_ID = 'sidebar-collapse';
 const sectionLabel = 'm-0 font-mono text-[11px] font-medium tracking-[0.12em] text-text-muted uppercase';
 
 const byNewest = (a: ChatSummary, b: ChatSummary) => b.updatedAt.localeCompare(a.updatedAt);
+
+/** A project's chats, newest first, split into the listed ones and those under its "Archived" toggle. */
+interface ProjectChats {
+  active: ChatSummary[];
+  archived: ChatSummary[];
+}
+const NO_CHATS: ProjectChats = { active: [], archived: [] };
 
 /** D1–D7 plus the "CHATS" section (with its collapsible "Archived" list). `onCollapse` hides the sidebar (desktop collapse, or closing the overlay). */
 export function Sidebar({ onCollapse, className }: { onCollapse: () => void; className?: string }) {
@@ -28,12 +36,17 @@ export function Sidebar({ onCollapse, className }: { onCollapse: () => void; cla
   const expandProject = useUiStore((s) => s.expandProject);
 
   const { byProject, loose, archived } = useMemo(() => {
-    const byProject = new Map<string, ChatSummary[]>();
+    const byProject = new Map<string, ProjectChats>();
     const loose: ChatSummary[] = [];
     const archived: ChatSummary[] = [];
     for (const chat of [...(chats.data ?? [])].sort(byNewest)) {
-      if (chat.projectId === null) (chat.archived ? archived : loose).push(chat);
-      else byProject.set(chat.projectId, [...(byProject.get(chat.projectId) ?? []), chat]);
+      if (chat.projectId === null) {
+        (chat.archived ? archived : loose).push(chat);
+        continue;
+      }
+      const group = byProject.get(chat.projectId) ?? { active: [], archived: [] };
+      byProject.set(chat.projectId, group);
+      (chat.archived ? group.archived : group.active).push(chat);
     }
     return { byProject, loose, archived };
   }, [chats.data]);
@@ -45,12 +58,7 @@ export function Sidebar({ onCollapse, className }: { onCollapse: () => void; cla
   }, [currentProjectId, expandProject]);
 
   // "Archived" starts collapsed and expands when the chat on screen is an archived loose chat.
-  const [archivedOpen, setArchivedOpen] = useState(false);
-  const archivedListId = useId();
-  const currentArchivedId = archived.find((c) => c.id === currentChatId)?.id ?? null;
-  useEffect(() => {
-    if (currentArchivedId) setArchivedOpen(true);
-  }, [currentArchivedId]);
+  const [archivedOpen, setArchivedOpen] = useArchivedGroupOpen(archived, currentChatId);
 
   return (
     <aside
@@ -115,14 +123,20 @@ export function Sidebar({ onCollapse, className }: { onCollapse: () => void; cla
           </div>
         ) : (
           <div className="flex flex-col gap-0.5">
-            {(projects.data ?? []).map((project) => (
-              <ProjectRow
-                key={project.id}
-                project={project}
-                chats={byProject.get(project.id) ?? []}
-                currentChatId={currentChatId}
-              />
-            ))}
+            {(projects.data ?? []).map((project) => {
+              const { active, archived } = byProject.get(project.id) ?? NO_CHATS;
+              return (
+                <ProjectRow
+                  key={project.id}
+                  project={project}
+                  chats={active}
+                  archivedChats={archived}
+                  // Active chats only, once the chat list is in; the server's count (archived included) until then.
+                  chatCount={chats.data ? active.length : project.chatCount}
+                  currentChatId={currentChatId}
+                />
+              );
+            })}
           </div>
         )}
 
@@ -142,33 +156,12 @@ export function Sidebar({ onCollapse, className }: { onCollapse: () => void; cla
                 ))}
               </ul>
             ) : null}
-            {archived.length > 0 ? (
-              <div>
-                <button
-                  type="button"
-                  aria-expanded={archivedOpen}
-                  aria-controls={archivedOpen ? archivedListId : undefined}
-                  onClick={() => setArchivedOpen((open) => !open)}
-                  className="flex min-h-9 w-full cursor-pointer items-center gap-2 rounded-[9px] px-2 text-left text-sm font-medium text-text hover:bg-overlay-row"
-                >
-                  <ChevronIcon
-                    className="shrink-0 text-text-faint transition-transform duration-150 ease-in-out"
-                    style={{ transform: `rotate(${archivedOpen ? 90 : 0}deg)` }}
-                  />
-                  <span className="flex-1 truncate">Archived</span>
-                  <span className="font-mono text-[11px] text-text-faint">{archived.length}</span>
-                </button>
-                {archivedOpen ? (
-                  <ul id={archivedListId} className="m-0 flex list-none flex-col gap-px p-0">
-                    {archived.map((chat) => (
-                      <li key={chat.id}>
-                        <ChatLink chat={chat} current={chat.id === currentChatId} />
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
-              </div>
-            ) : null}
+            <ArchivedGroup
+              chats={archived}
+              currentChatId={currentChatId}
+              open={archivedOpen}
+              onOpenChange={setArchivedOpen}
+            />
           </section>
         ) : null}
       </nav>

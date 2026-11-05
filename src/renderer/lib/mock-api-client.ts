@@ -227,22 +227,15 @@ export class MockApiClient implements ApiClient {
   }
   async updateChat(id: Id, patch: { title?: string; projectId?: Id | null; archived?: boolean }) {
     // Same rules as `PATCH /chats/:id`. Everything is validated before anything is mutated.
-    if (patch.archived === true && typeof patch.projectId === 'string')
-      fail('invalid_request', 400, 'A chat in a project cannot be archived.');
     const c = this.chat(id);
-    const changesArchived = patch.archived !== undefined || (c.archived && typeof patch.projectId === 'string');
-    if (changesArchived && this.running.has(id))
+    if (patch.archived !== undefined && this.running.has(id))
       fail('conflict', 409, 'Wait for the response to finish before archiving or unarchiving this chat.');
     if (patch.projectId && !this.projects.some((p) => p.id === patch.projectId)) fail('not_found', 404);
-    const projectId = patch.projectId !== undefined ? patch.projectId : c.projectId;
-    if (projectId !== null && patch.archived === true)
-      fail('conflict', 409, 'Only chats without a project can be archived.');
 
     if (patch.title !== undefined) c.title = patch.title.trim();
-    c.projectId = projectId;
-    // Moving into a project clears the flag; a chat without a project keeps it unless the patch sets it.
-    if (projectId !== null) c.archived = false;
-    else if (patch.archived !== undefined) c.archived = patch.archived;
+    if (patch.projectId !== undefined) c.projectId = patch.projectId;
+    // Any chat can be archived; a move keeps the flag.
+    if (patch.archived !== undefined) c.archived = patch.archived;
     return this.summary(c);
   }
   async deleteChat(id: Id) {

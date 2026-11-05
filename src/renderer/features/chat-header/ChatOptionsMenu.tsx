@@ -27,7 +27,7 @@ import { RenameDialog } from './RenameDialog';
 /** Radio value for "No project" (Radix radio values must be strings). */
 const NO_PROJECT = '__none__';
 
-/** D9: the "…" button in the chat header — Rename · Move to project ▸ · Archive (no project only) · Delete. */
+/** D9: the "…" button in the chat header — Rename · Move to project ▸ · Archive / Unarchive · Delete. */
 export function ChatOptionsMenu({ chat }: { chat: ChatSummary }) {
   const api = useApiClient();
   const queryClient = useQueryClient();
@@ -114,15 +114,13 @@ export function ChatOptionsMenu({ chat }: { chat: ChatSummary }) {
               </MenuRadioGroup>
             </MenuSubContent>
           </MenuSub>
-          {chat.projectId === null ? (
-            <MenuItem
-              icon={chat.archived ? <ArchiveRestore size={15} /> : <Archive size={15} />}
-              disabled={streaming || archive.isPending}
-              onSelect={() => archive.mutate(!chat.archived)}
-            >
-              {chat.archived ? 'Unarchive' : 'Archive'}
-            </MenuItem>
-          ) : null}
+          <MenuItem
+            icon={chat.archived ? <ArchiveRestore size={15} /> : <Archive size={15} />}
+            disabled={streaming || archive.isPending}
+            onSelect={() => archive.mutate(!chat.archived)}
+          >
+            {chat.archived ? 'Unarchive' : 'Archive'}
+          </MenuItem>
           <MenuSeparator />
           <MenuItem danger icon={<Trash2 size={15} />} onSelect={() => setDeleteOpen(true)}>
             Delete
