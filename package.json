@@ -22,6 +22,7 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "lint": "biome check .",
+    "secrets:scan": "gitleaks git --config .gitleaks.toml --redact --no-banner && gitleaks dir --config .gitleaks.toml --redact --no-banner .",
     "e2e": "bash scripts/e2e/run-web.sh && bash scripts/e2e/run-electron.sh",
     "e2e:web": "bash scripts/e2e/run-web.sh",
     "e2e:electron": "bash scripts/e2e/run-electron.sh",

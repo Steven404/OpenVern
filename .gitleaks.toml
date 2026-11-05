@@ -1,0 +1,57 @@
+# Gitleaks config for OpenVern. Run with: npm run secrets:scan
+#
+# Default gitleaks rules stay on (useDefault). The allowlists below cover only
+# the FAKE OpenRouter keys and placeholders used by tests, mocks, e2e scripts
+# and docs. Each fake is matched as an anchored, exact value, so a real key
+# added to the same file is still reported. Source paths are never allowlisted.
+
+[extend]
+useDefault = true
+
+# Fake OpenRouter-style keys used in tests, the mock client, e2e scripts and
+# docs. Exact anchored matches only.
+[[allowlists]]
+description = "Fake OpenRouter keys used in tests, mocks, e2e scripts and docs"
+regexes = [
+  '''^sk-or-v1-0123456789abcdefa1b2$''',
+  '''^sk-or-v1-0123456789abcdefWXYZ$''',
+  '''^sk-or-v1-0123456789abcdef$''',
+  '''^sk-or-v1-mock0000000000000000a1b2$''',
+  '''^sk-or-v1-abcdefghijklmnopqrstuvwxyz0123456789abcdef$''',
+  '''^sk-or-v1-abcdef0123456789abcdef0123456789a1b2$''',
+  '''^sk-or-v1-abcdef1234$''',
+  '''^sk-or-v1-abcdefghijklmnop$''',
+  '''^sk-or-v1-DATADIRSECRET0000$''',
+  '''^sk-or-v1-supersecret$''',
+  '''^sk-or-v1-secretsecret$''',
+  '''^sk-or-v1-abc$''',
+  '''^sk-or-v1-test$''',
+  '''^sk-or-SECRET$''',
+  '''^sk-or-OTHERSECRET$''',
+]
+
+# Fixture in src/core/security/redact.test.ts: a PEM block whose body is
+# built with rep('<fake base64>', 70), not a real key. Scoped to the
+# private-key rule only.
+[[allowlists]]
+description = "Synthetic PEM fixture built with rep() in redact.test.ts"
+rules = ["private-key"]
+regexes = [
+  '''rep\('b3BlbnNzaC1rZXktdjEAAAAA', 70\)''',
+]
+
+# Build and vendor output, not tracked source. These are local, gitignored
+# paths. Gitleaks 8.30 cannot scope an allowlist to dir mode only, so this
+# also applies to git mode. Those files are untracked, so this is acceptable.
+# build/icon.svg and build/make-icon.mjs are source and stay scanned.
+[[allowlists]]
+description = "Build and vendor output (not tracked source)"
+paths = [
+  '''^node_modules/''',
+  '''^out/''',
+  '''^release/''',
+  '''^build/icon\.png$''',
+  '''(^|/)\.dev-data[^/]*/''',
+  '''^reports/''',
+  '''^research_notes/''',
+]
