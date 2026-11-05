@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { NEW_CHAT_TITLE } from '@shared/constants';
 import type { AssistantMessage, Message, Usage, UserMessage } from '@shared/types';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createStorage } from './index';
 import { dataPaths } from './paths';
 import { cleanupTempDirs, MemorySecretStore, makeStorage, makeTempDir, recordingLogger } from './test-helpers';
@@ -254,6 +254,40 @@ describe('ChatsService', () => {
     expect(ids(await fresh.chats.list()).sort()).toEqual([good.id, flaky.id, other.id].sort());
     const rewritten = JSON.parse(await fs.readFile(paths.chatsIndex, 'utf8')) as { usageBackfilled?: boolean };
     expect(rewritten.usageBackfilled).toBe(true);
+  });
+
+  it('after a partial rebuild, mutations reuse it instead of re-scanning; only list() retries', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const good = await storage.chats.create({ projectId: null, model: 'm' });
+    const paths = dataPaths(dataDir);
+    await fs.mkdir(path.join(paths.chatsDir, 'x.json'));
+    await fs.rm(paths.chatsIndex);
+
+    const logger = recordingLogger();
+    const fresh = await createStorage({ dataDir, secretStore: new MemorySecretStore(), logger });
+    expect(ids(await fresh.chats.list())).toEqual([good.id]);
+    const readdir = vi.spyOn(fs, 'readdir');
+    try {
+      const other = await fresh.chats.create({ projectId: null, model: 'm' });
+      for (let i = 0; i < 5; i++) await fresh.chats.appendMessage(good.id, user(`u${i}`));
+      await fresh.chats.update(other.id, { title: 'Renamed' });
+      // No mutation re-scanned chats/; they all worked from the in-memory partial index.
+      expect(readdir).not.toHaveBeenCalled();
+      const onDisk = JSON.parse(await fs.readFile(paths.chatsIndex, 'utf8')) as {
+        chats: { id: string; title: string }[];
+        usageBackfilled?: boolean;
+      };
+      expect(onDisk.usageBackfilled).toBeUndefined();
+      expect(onDisk.chats.map((c) => c.id).sort()).toEqual([good.id, other.id].sort());
+      expect(onDisk.chats.find((c) => c.id === other.id)?.title).toBe('Renamed');
+
+      // list() retries the rebuild, but the still-unreadable entry is only logged once.
+      expect(ids(await fresh.chats.list()).sort()).toEqual([good.id, other.id].sort());
+      expect(readdir).toHaveBeenCalledTimes(1);
+    } finally {
+      readdir.mockRestore();
+    }
+    expect(logger.messages.filter((m) => m.includes('x.json'))).toHaveLength(1);
   });
 });
 

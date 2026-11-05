@@ -1,7 +1,8 @@
 // F1: the context counter in the chat header (plan §5.1). Hidden until the chat has a finished request, then
 // reads `used / limit`; clicking it opens the Context popover. When idle the figures come from `chat.usage`; while
 // a run is active they come from the usage the runs store captured when it started, so they change only when the
-// run ends (plan §2), whatever the cached summary does in between.
+// run has settled (plan §2: after the trailing `chat_updated` and the settle refetch), whatever the cached summary
+// does in between.
 
 import { cx } from '@renderer/components/ui';
 import { modelName } from '@renderer/features/composer/models';
@@ -13,9 +14,13 @@ import { contextView } from './format';
 
 export function ContextUsageButton({ chat }: { chat: ChatSummary }) {
   const models = useModels();
-  const run = useRunsStore((s) => s.runs[chat.id]);
-  const active = run?.status === 'running' || run?.status === 'settling';
-  const usage = active ? run.usageBefore : chat.usage;
+  // Two narrow selectors: the run object changes on every stream event, these values don't.
+  const active = useRunsStore((s) => {
+    const status = s.runs[chat.id]?.status;
+    return status === 'running' || status === 'settling';
+  });
+  const usageBefore = useRunsStore((s) => s.runs[chat.id]?.usageBefore ?? null);
+  const usage = active ? usageBefore : chat.usage;
 
   // Before the first reply the counter has nothing to say (the board's "New chat" state is dropped, plan §2).
   // During a new chat's first reply `usageBefore` has 0 requests, so the counter stays hidden (acceptance C1).

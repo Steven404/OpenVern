@@ -72,6 +72,14 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
 
   const writeChat = (chat: StoredChat) => chatFile(chat.id).write(toFile(chat));
 
+  /**
+   * The summaries of the last rebuild that skipped an unreadable chat file, kept in step by mutations. Mutations
+   * use them instead of re-scanning every chat file on each write; only `list()` retries the full rebuild.
+   */
+  let partial: ChatSummary[] | null = null;
+  /** Unreadable entries already logged, so a file that stays unreadable is reported once per process. */
+  const warned = new Set<string>();
+
   async function rebuildIndex(): Promise<LoadedIndex> {
     const names = await fs.readdir(paths.chatsDir).catch(() => [] as string[]);
     const summaries: ChatSummary[] = [];
@@ -86,7 +94,8 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
       } catch (err) {
         // One unreadable entry must not make every list() fail; skip it and say which one.
         const reason = err instanceof Error ? err.message : String(err);
-        logger.warn(`chats/${name} could not be read (${reason}); skipped.`);
+        if (!warned.has(name)) logger.warn(`chats/${name} could not be read (${reason}); skipped.`);
+        warned.add(name);
         skipped = true;
         continue;
       }
@@ -95,17 +104,32 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
     summaries.sort(byRecency);
     // The error may be transient (EACCES, EMFILE, EBUSY…): persisting this index would hide the skipped chat for
     // good, so only a clean rebuild is written; otherwise the next list() retries.
-    if (!skipped) await index.write(writeIndexFile(summaries, true));
+    if (!skipped) {
+      warned.clear();
+      await index.write(writeIndexFile(summaries, true));
+    }
+    partial = skipped ? [...summaries] : null;
     return { chats: summaries, complete: !skipped };
   }
 
-  /** Index entries, rebuilding from disk if the index is missing, corrupt or predates F1's `usage`. */
-  async function loadIndex(): Promise<LoadedIndex> {
+  /**
+   * Index entries, rebuilding from disk if the index is missing, corrupt or predates F1's `usage`. After a partial
+   * rebuild, mutations reuse the in-memory result; `retry` (used by `list()`) rebuilds again instead.
+   */
+  async function loadIndex({ retry = false }: { retry?: boolean } = {}): Promise<LoadedIndex> {
     const current = await index.read();
-    return current?.usageBackfilled ? { chats: current.chats, complete: true } : rebuildIndex();
+    if (current?.usageBackfilled) {
+      partial = null;
+      return { chats: current.chats, complete: true };
+    }
+    if (partial && !retry) return { chats: [...partial], complete: false };
+    return rebuildIndex();
   }
 
-  const saveIndex = ({ chats, complete }: LoadedIndex) => index.write(writeIndexFile(chats, complete));
+  const saveIndex = async ({ chats, complete }: LoadedIndex) => {
+    await index.write(writeIndexFile(chats, complete));
+    partial = complete ? null : [...chats];
+  };
 
   async function upsertIndex(summary: ChatSummary): Promise<void> {
     const loaded = await loadIndex();
@@ -125,7 +149,7 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
   return {
     async list() {
       // Rebuilding writes, so serialise with mutations; the common path is a plain read.
-      const { chats } = await lock.run(loadIndex);
+      const { chats } = await lock.run(() => loadIndex({ retry: true }));
       return [...chats].sort(byRecency);
     },
 
