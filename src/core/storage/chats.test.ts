@@ -289,6 +289,62 @@ describe('ChatsService', () => {
     }
     expect(logger.messages.filter((m) => m.includes('x.json'))).toHaveLength(1);
   });
+
+  it('recovers from a partial rebuild: remove and detach keep it in step, then a clean list() writes the marker', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const project = await storage.projects.create({ rootPath: await makeTempDir() });
+    const keep = await storage.chats.create({ projectId: project.id, model: 'm' });
+    const gone = await storage.chats.create({ projectId: null, model: 'm' });
+    const paths = dataPaths(dataDir);
+    await fs.mkdir(path.join(paths.chatsDir, 'x.json'));
+    await fs.rm(paths.chatsIndex);
+
+    const logger = recordingLogger();
+    const fresh = await createStorage({ dataDir, secretStore: new MemorySecretStore(), logger });
+    expect(ids(await fresh.chats.list()).sort()).toEqual([keep.id, gone.id].sort());
+    await fresh.chats.remove(gone.id);
+    await fresh.chats.detachProject(project.id);
+    const unmarked = JSON.parse(await fs.readFile(paths.chatsIndex, 'utf8')) as {
+      chats: { id: string; projectId: string | null }[];
+      usageBackfilled?: boolean;
+    };
+    expect(unmarked.usageBackfilled).toBeUndefined();
+    expect(unmarked.chats).toEqual([expect.objectContaining({ id: keep.id, projectId: null })]);
+
+    // The bad entry goes away: the next list() rebuilds cleanly and marks the index.
+    await fs.rmdir(path.join(paths.chatsDir, 'x.json'));
+    expect(ids(await fresh.chats.list())).toEqual([keep.id]);
+    const marked = JSON.parse(await fs.readFile(paths.chatsIndex, 'utf8')) as { usageBackfilled?: boolean };
+    expect(marked.usageBackfilled).toBe(true);
+
+    // A later unreadable entry is reported again (the warning set was cleared by the clean rebuild).
+    await fs.mkdir(path.join(paths.chatsDir, 'y.json'));
+    await fs.rm(paths.chatsIndex);
+    await fresh.chats.list();
+    expect(logger.messages.filter((m) => m.includes('y.json'))).toHaveLength(1);
+  });
+
+  it('a failing readdir (not ENOENT) does not write a complete, empty index', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const chat = await storage.chats.create({ projectId: null, model: 'm' });
+    const paths = dataPaths(dataDir);
+    await fs.rm(paths.chatsIndex);
+
+    const fresh = await createStorage({ dataDir, secretStore: new MemorySecretStore(), logger: recordingLogger() });
+    const readdir = vi
+      .spyOn(fs, 'readdir')
+      .mockRejectedValueOnce(Object.assign(new Error('EMFILE: too many open files'), { code: 'EMFILE' }));
+    try {
+      expect(await fresh.chats.list()).toEqual([]);
+      await expect(fs.access(paths.chatsIndex)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      readdir.mockRestore();
+    }
+    // Once listing works again the chat is back and the index is complete.
+    expect(ids(await fresh.chats.list())).toEqual([chat.id]);
+    const marked = JSON.parse(await fs.readFile(paths.chatsIndex, 'utf8')) as { usageBackfilled?: boolean };
+    expect(marked.usageBackfilled).toBe(true);
+  });
 });
 
 type RawTotals = { promptTokens: number; completionTokens: number; costUsd: number | null; requests: number };

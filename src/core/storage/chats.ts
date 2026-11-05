@@ -7,7 +7,7 @@ import { NEW_CHAT_TITLE } from '@shared/constants';
 import type { Chat, ChatSummary, Id } from '@shared/types';
 import { CoreError } from '../errors';
 import type { ChatsService } from '../types';
-import { consoleLogger, JsonFile, type StorageLogger } from './json-file';
+import { consoleLogger, isNotFound, JsonFile, type StorageLogger } from './json-file';
 import { createMutex } from './mutex';
 import { type DataPaths, dataPaths } from './paths';
 import {
@@ -73,6 +73,8 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
   const writeChat = (chat: StoredChat) => chatFile(chat.id).write(toFile(chat));
 
   /**
+   * Assumes one ChatsService per data dir (createStorage builds one per process); an unmarked index written by
+   * someone else is ignored in favour of this until the next list() rebuild.
    * The summaries of the last rebuild that skipped an unreadable chat file, kept in step by mutations. Mutations
    * use them instead of re-scanning every chat file on each write; only `list()` retries the full rebuild.
    */
@@ -81,9 +83,20 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
   const warned = new Set<string>();
 
   async function rebuildIndex(): Promise<LoadedIndex> {
-    const names = await fs.readdir(paths.chatsDir).catch(() => [] as string[]);
     const summaries: ChatSummary[] = [];
     let skipped = false;
+    let names: string[] = [];
+    try {
+      names = await fs.readdir(paths.chatsDir);
+    } catch (err) {
+      // A missing dir is a clean, empty data dir. Any other error (EACCES, EMFILE…) must not produce a "complete"
+      // empty index, which would hide every chat for good: treat it as a partial rebuild so list() retries.
+      if (!isNotFound(err)) {
+        const reason = err instanceof Error ? err.message : String(err);
+        logger.warn(`chats/ could not be listed (${reason}); the chat list may be incomplete.`);
+        skipped = true;
+      }
+    }
     for (const name of names) {
       if (!name.endsWith('.json') || name === 'index.json') continue;
       const id = name.slice(0, -'.json'.length);
@@ -104,11 +117,12 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
     summaries.sort(byRecency);
     // The error may be transient (EACCES, EMFILE, EBUSY…): persisting this index would hide the skipped chat for
     // good, so only a clean rebuild is written; otherwise the next list() retries.
+    // Set before the write, so a failed write can't leave an older partial index in place.
+    partial = skipped ? [...summaries] : null;
     if (!skipped) {
       warned.clear();
       await index.write(writeIndexFile(summaries, true));
     }
-    partial = skipped ? [...summaries] : null;
     return { chats: summaries, complete: !skipped };
   }
 
