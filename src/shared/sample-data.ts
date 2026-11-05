@@ -59,7 +59,8 @@ export const SAMPLE_MODELS: ModelInfo[] = [
     completionPricePerMTok: 0.1,
   },
   {
-    // The router reports no context window, which is the Context popover's "limit unknown" state (F1).
+    // The router reports no context window. `contextLength: null` here is deliberate: it shows the Context
+    // popover's "limit unknown" state (F1). Don't change the data.
     id: 'openrouter/auto',
     name: 'OpenRouter: Auto Router',
     contextLength: null,

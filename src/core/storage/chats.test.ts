@@ -214,9 +214,29 @@ describe('ChatsService', () => {
     const fresh = await createStorage({ dataDir, secretStore: new MemorySecretStore() });
     expect(await fresh.chats.list()).toEqual([]);
   });
+
+  it('the rebuild skips and logs an unreadable entry (a directory named x.json)', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const good = await storage.chats.create({ projectId: null, model: 'm' });
+    const paths = dataPaths(dataDir);
+    await fs.mkdir(path.join(paths.chatsDir, 'x.json'));
+    await fs.rm(paths.chatsIndex);
+
+    const logger = recordingLogger();
+    const fresh = await createStorage({ dataDir, secretStore: new MemorySecretStore(), logger });
+    expect((await fresh.chats.list()).map((c) => c.id)).toEqual([good.id]);
+    expect(logger.messages.some((m) => m.includes('x.json'))).toBe(true);
+  });
 });
 
-type RawChat = { archived?: unknown; projectId: string | null; version?: number; messages?: { id: string }[] };
+type RawTotals = { promptTokens: number; completionTokens: number; costUsd: number | null; requests: number };
+type RawChat = {
+  archived?: unknown;
+  projectId: string | null;
+  version?: number;
+  messages?: { id: string }[];
+  usageTotals?: RawTotals;
+};
 
 async function readRawChat(dataDir: string, id: string): Promise<RawChat> {
   return JSON.parse(await fs.readFile(dataPaths(dataDir).chatFile(id), 'utf8'));
@@ -557,6 +577,33 @@ describe('ChatsService usage (F1)', () => {
     expect((await storage.chats.list())[0]?.usage).toEqual(zero);
   });
 
+  it('create, get and truncate hide the internal usageTotals; the file keeps it', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const chat = await storage.chats.create({ projectId: null, model: 'm' });
+    expect(chat).not.toHaveProperty('usageTotals');
+    expect(await storage.chats.get(chat.id)).not.toHaveProperty('usageTotals');
+    expect((await readRawChat(dataDir, chat.id)).usageTotals).toEqual({
+      promptTokens: 0,
+      completionTokens: 0,
+      costUsd: null,
+      requests: 0,
+    });
+
+    await storage.chats.appendMessage(chat.id, user('u1'));
+    await storage.chats.appendMessage(chat.id, withUsage(assistant('a1'), { promptTokens: 100, completionTokens: 10 }));
+    await storage.chats.appendMessage(chat.id, user('u2'));
+    await storage.chats.appendMessage(chat.id, withUsage(assistant('a2'), { promptTokens: 200, completionTokens: 20 }));
+    const cut = await storage.chats.truncateAfterLastUser(chat.id);
+    expect(cut).not.toHaveProperty('usageTotals');
+    expect(cut.usage).toMatchObject({ contextTokens: 110, requests: 2 });
+    expect((await readRawChat(dataDir, chat.id)).usageTotals).toEqual({
+      promptTokens: 300,
+      completionTokens: 30,
+      costUsd: null,
+      requests: 2,
+    });
+  });
+
   it('totals add up across the steps of a tool turn', async () => {
     const { storage } = await makeStorage();
     const chat = await storage.chats.create({ projectId: null, model: 'm' });
@@ -609,6 +656,57 @@ describe('ChatsService usage (F1)', () => {
       requests: 3,
     });
     expect((await storage.chats.get(chat.id)).usage).toEqual(retried.usage);
+  });
+
+  it('truncateAfterLastUser refreshes the index, so list() shows the new contextTokens', async () => {
+    const { storage } = await makeStorage();
+    const chat = await storage.chats.create({ projectId: null, model: 'm' });
+    await storage.chats.appendMessage(chat.id, user('u1'));
+    await storage.chats.appendMessage(chat.id, withUsage(assistant('a1'), { promptTokens: 100, completionTokens: 10 }));
+    await storage.chats.appendMessage(chat.id, user('u2'));
+    await storage.chats.appendMessage(chat.id, withUsage(assistant('a2'), { promptTokens: 200, completionTokens: 20 }));
+    expect((await storage.chats.list())[0]?.usage.contextTokens).toBe(220);
+
+    const cut = await storage.chats.truncateAfterLastUser(chat.id);
+    expect(cut.usage.contextTokens).toBe(110);
+    expect((await storage.chats.list())[0]?.usage).toEqual(cut.usage);
+  });
+
+  it('rename, move and detachProject keep the totals after a truncate; they are never re-backfilled', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const project = await storage.projects.create({ rootPath: await makeTempDir() });
+    const chat = await storage.chats.create({ projectId: null, model: 'm' });
+    await storage.chats.appendMessage(chat.id, user('u1'));
+    await storage.chats.appendMessage(chat.id, withUsage(assistant('a1'), { promptTokens: 100, completionTokens: 10 }));
+    await storage.chats.appendMessage(chat.id, user('u2'));
+    await storage.chats.appendMessage(chat.id, withUsage(assistant('a2'), { promptTokens: 200, completionTokens: 20 }));
+    await storage.chats.truncateAfterLastUser(chat.id);
+    const expectedTotals = { promptTokens: 300, completionTokens: 30, costUsd: null, requests: 2 };
+
+    await storage.chats.update(chat.id, { title: 'Renamed' });
+    expect((await readRawChat(dataDir, chat.id)).usageTotals).toEqual(expectedTotals);
+    expect((await storage.chats.list())[0]?.usage).toMatchObject({ contextTokens: 110, ...expectedTotals });
+
+    await storage.chats.update(chat.id, { projectId: project.id });
+    expect((await readRawChat(dataDir, chat.id)).usageTotals).toEqual(expectedTotals);
+    expect((await storage.chats.list())[0]?.usage).toMatchObject({ contextTokens: 110, ...expectedTotals });
+
+    await storage.chats.detachProject(project.id);
+    expect((await readRawChat(dataDir, chat.id)).usageTotals).toEqual(expectedTotals);
+    expect((await storage.chats.list())[0]?.usage).toMatchObject({ contextTokens: 110, ...expectedTotals });
+
+    // Later replies add to the kept totals rather than restarting them from the remaining messages.
+    const next = await storage.chats.appendMessage(
+      chat.id,
+      withUsage(assistant('a3'), { promptTokens: 150, completionTokens: 15 }),
+    );
+    expect(next.usage).toEqual({
+      contextTokens: 165,
+      promptTokens: 450,
+      completionTokens: 45,
+      costUsd: null,
+      requests: 3,
+    });
   });
 
   it('a stopped reply counts when it reported usage; one without usage does not', async () => {
@@ -696,6 +794,42 @@ describe('ChatsService usage (F1)', () => {
       completionTokens: 93,
       costUsd: 0.01,
       requests: 3,
+    });
+  });
+
+  it('a malformed usageTotals is backfilled from the messages, not quarantined', async () => {
+    const { dataDir } = await makeStorage();
+    const paths = dataPaths(dataDir);
+    await fs.mkdir(paths.chatsDir, { recursive: true });
+    const malformed = handChat('odd', {
+      usageTotals: 'not an object',
+      messages: [
+        user('odd-u'),
+        withUsage(assistant('odd-a'), { promptTokens: 120, completionTokens: 48, costUsd: 0.01 }),
+      ],
+    });
+    await fs.writeFile(paths.chatFile('odd'), JSON.stringify(malformed));
+    await fs.rm(paths.chatsIndex, { force: true });
+
+    const logger = recordingLogger();
+    const fresh = await createStorage({ dataDir, secretStore: new MemorySecretStore(), logger });
+    const expected = { contextTokens: 168, promptTokens: 120, completionTokens: 48, costUsd: 0.01, requests: 1 };
+    expect((await fresh.chats.get('odd')).usage).toEqual(expected);
+    expect((await fresh.chats.list())[0]?.usage).toEqual(expected);
+    expect((await names(dataDir)).some((n) => n.includes('.corrupt-'))).toBe(false);
+    expect(logger.messages).toEqual([]);
+
+    // A later write replaces the malformed value with the backfilled object.
+    const next = await fresh.chats.appendMessage(
+      'odd',
+      withUsage(assistant('odd-a2'), { promptTokens: 10, completionTokens: 5 }),
+    );
+    expect(next.usage).toMatchObject({ promptTokens: 130, completionTokens: 53, requests: 2 });
+    expect((await readRawChat(dataDir, 'odd')).usageTotals).toEqual({
+      promptTokens: 130,
+      completionTokens: 53,
+      costUsd: 0.01,
+      requests: 2,
     });
   });
 

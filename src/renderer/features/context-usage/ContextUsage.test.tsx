@@ -2,10 +2,11 @@ import { AppProviders } from '@renderer/app/App';
 import { renderApp, resetUi, seededClient } from '@renderer/app/test-utils';
 import { MockApiClient } from '@renderer/lib/mock-api-client';
 import { queryKeys } from '@renderer/lib/query-keys';
+import { createRun, useRunsStore } from '@renderer/stores/runs';
 import { NEW_CHAT_TITLE } from '@shared/constants';
 import type { ChatSummary, ChatUsage, ModelInfo } from '@shared/types';
 import { QueryClient } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ContextUsageButton } from './ContextUsageButton';
 
@@ -47,11 +48,19 @@ function chatWith(usage: Partial<ChatUsage> = {}, model = MODEL_ID): ChatSummary
 function renderCounter(chat: ChatSummary, models: ModelInfo[] = [SONNET_256K]) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   queryClient.setQueryData(queryKeys.models, models);
-  return render(
-    <AppProviders client={new MockApiClient({ delayMs: 0 })} queryClient={queryClient}>
+  const client = new MockApiClient({ delayMs: 0 });
+  const view = render(
+    <AppProviders client={client} queryClient={queryClient}>
       <ContextUsageButton chat={chat} />
     </AppProviders>,
   );
+  const rerenderCounter = (next: ChatSummary) =>
+    view.rerender(
+      <AppProviders client={client} queryClient={queryClient}>
+        <ContextUsageButton chat={next} />
+      </AppProviders>,
+    );
+  return { ...view, rerenderCounter };
 }
 
 const counter = () => screen.getByRole('button', { name: /Context used/ });
@@ -68,7 +77,10 @@ function field(dialog: HTMLElement, label: string): string | null {
   return dt.nextElementSibling?.textContent?.replace(/ /g, ' ') ?? null;
 }
 
-beforeEach(resetUi);
+beforeEach(() => {
+  resetUi();
+  useRunsStore.setState({ runs: {}, chatModels: {} });
+});
 
 describe('ContextUsageButton', () => {
   it('renders nothing while the chat has no finished request', () => {
@@ -107,6 +119,72 @@ describe('ContextUsageButton', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     await waitFor(() => expect(document.activeElement).toBe(trigger));
   });
+
+  it('an outside click closes the popover', async () => {
+    renderCounter(chatWith({ contextTokens: 97_280 }));
+    await openPopover();
+    // Radix attaches its document pointerdown listener on a timer and dismisses deferred pointer events on click.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+      fireEvent.pointerDown(document.body);
+      fireEvent.click(document.body);
+    });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it.each(['running', 'settling'] as const)(
+    'shows the usage captured before the run while it is %s, then the new summary',
+    async (status) => {
+      const before = chatWith({ contextTokens: 10_000, promptTokens: 10_000, completionTokens: 0, requests: 1 });
+      const during = chatWith({ contextTokens: 97_280, promptTokens: 150_000, completionTokens: 5_000, requests: 4 });
+      const { rerenderCounter } = renderCounter(before);
+      expect(within(counter()).getByText('10k')).toBeTruthy();
+
+      act(() => useRunsStore.setState({ runs: { [before.id]: { ...createRun(1), status } }, chatModels: {} }));
+      rerenderCounter(during);
+      expect(within(counter()).getByText('10k')).toBeTruthy();
+      expect(within(counter()).queryByText('97.3k')).toBeNull();
+      const dialog = await openPopover();
+      expect(field(dialog, 'Total tokens used')).toBe('10,000');
+
+      act(() => useRunsStore.setState({ runs: {}, chatModels: {} }));
+      rerenderCounter(during);
+      expect(within(counter()).getByText('97.3k')).toBeTruthy();
+      expect(field(dialog, 'Total tokens used')).toBe('155,000');
+    },
+  );
+
+  it('keeps the pre-run usage across a remount during the run', () => {
+    const before = chatWith({ contextTokens: 10_000, promptTokens: 10_000, completionTokens: 0, requests: 1 });
+    const during = chatWith({ contextTokens: 97_280, promptTokens: 150_000, completionTokens: 5_000, requests: 4 });
+    const first = renderCounter(before);
+    first.unmount();
+
+    act(() => useRunsStore.setState({ runs: { [before.id]: createRun(1) }, chatModels: {} }));
+    renderCounter(during);
+    expect(within(counter()).getByText('10k')).toBeTruthy();
+    expect(within(counter()).queryByText('97.3k')).toBeNull();
+  });
+
+  it('stays hidden through a new chat’s first reply', () => {
+    const empty = chatWith({ contextTokens: 0, promptTokens: 0, completionTokens: 0, requests: 0 });
+    const firstReply = chatWith({
+      contextTokens: 1_000,
+      promptTokens: 1_000,
+      completionTokens: 0,
+      requests: 1,
+    });
+    const { rerenderCounter } = renderCounter(empty);
+    expect(screen.queryByRole('button', { name: /Context used/ })).toBeNull();
+
+    act(() => useRunsStore.setState({ runs: { [empty.id]: createRun(1) }, chatModels: {} }));
+    rerenderCounter(firstReply);
+    expect(screen.queryByRole('button', { name: /Context used/ })).toBeNull();
+
+    act(() => useRunsStore.setState({ runs: {}, chatModels: {} }));
+    rerenderCounter(firstReply);
+    expect(counter()).toBeTruthy();
+  });
 });
 
 describe('Context popover', () => {
@@ -120,22 +198,55 @@ describe('Context popover', () => {
   });
 
   it.each([
-    [97_280, '38'],
-    [243_200, '95'],
-  ])('the progressbar reports the rounded percentage (%s tokens → aria-valuenow %s)', async (contextTokens, now) => {
-    renderCounter(chatWith({ contextTokens, costUsd: 0.64 }));
+    [97_280, '38', '38%'],
+    [243_200, '95', '95%'],
+  ])(
+    'the progressbar reports the rounded percentage (%s tokens → aria-valuenow %s)',
+    async (contextTokens, now, text) => {
+      renderCounter(chatWith({ contextTokens, costUsd: 0.64 }));
+      const dialog = await openPopover();
+      const bar = within(dialog).getByRole('progressbar');
+      expect(bar.getAttribute('aria-valuenow')).toBe(now);
+      expect(bar.getAttribute('aria-valuetext')).toBe(text);
+    },
+  );
+
+  it('rounds aria-valuenow while the visible percentage floors (79.6% → 80 vs 79%)', async () => {
+    renderCounter(chatWith({ contextTokens: 203_776 }));
     const dialog = await openPopover();
-    expect(within(dialog).getByRole('progressbar').getAttribute('aria-valuenow')).toBe(now);
+    expect(within(dialog).getByText('79%')).toBeTruthy();
+    const bar = within(dialog).getByRole('progressbar');
+    expect(bar.getAttribute('aria-valuenow')).toBe('80');
+    expect(bar.getAttribute('aria-valuetext')).toBe('79%');
   });
 
-  it('an unknown limit reads — and used, shows the note, and sets the progressbar to 0', async () => {
+  it('clamps aria-valuenow to 100 when the used figure exceeds the limit', async () => {
+    renderCounter(chatWith({ contextTokens: 300_000 }));
+    const dialog = await openPopover();
+    expect(within(dialog).getByText('117%')).toBeTruthy();
+    expect(within(dialog).getByRole('progressbar').getAttribute('aria-valuenow')).toBe('100');
+  });
+
+  it('an unknown limit reads — and used, shows the note, and omits aria-valuenow', async () => {
     renderCounter(chatWith({ contextTokens: 97_280, costUsd: 0.64 }, 'openrouter/auto'), [UNLIMITED]);
     const dialog = await openPopover();
+    expect(counter().textContent).toContain('/ —');
     expect(within(dialog).getByText('—')).toBeTruthy();
     expect(within(dialog).getByText('used')).toBeTruthy();
     expect(within(dialog).getByText("This model doesn't report a context limit.")).toBeTruthy();
-    expect(within(dialog).getByRole('progressbar').getAttribute('aria-valuenow')).toBe('0');
+    const bar = within(dialog).getByRole('progressbar');
+    expect(bar.getAttribute('aria-valuenow')).toBeNull();
+    expect(bar.getAttribute('aria-valuetext')).toBe('—');
     expect(within(dialog).getByTitle('97,280 tokens')).toBeTruthy();
+  });
+
+  it('says the limit is unavailable when the model is missing, not that it reports none', async () => {
+    renderCounter(chatWith({ contextTokens: 97_280, costUsd: 0.64 }), []);
+    const dialog = await openPopover();
+    expect(counter().textContent).toContain('/ —');
+    expect(within(dialog).getByText('Context limit unavailable.')).toBeTruthy();
+    expect(within(dialog).queryByText(/doesn't report a context limit/)).toBeNull();
+    expect(within(dialog).getByRole('progressbar').getAttribute('aria-valuenow')).toBeNull();
   });
 
   it('does not show the unknown-limit note when the limit is known', async () => {

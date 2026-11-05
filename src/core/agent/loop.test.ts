@@ -845,6 +845,60 @@ describe('usage (F1)', () => {
     });
   });
 
+  it('a stopped reply that reported usage counts in the trailing chat_updated', async () => {
+    const h = await createHarness({
+      script: scriptFromTurns([
+        [
+          ...textDeltas('Partial answer', 5),
+          reports(),
+          { type: 'delay', ms: 60_000 },
+          { type: 'finish', reason: 'stop' },
+        ],
+      ]),
+    });
+    const controller = new AbortController();
+    const run = h.run({ signal: controller.signal });
+    await new Promise((r) => setTimeout(r, 20));
+    controller.abort();
+    const events = await run;
+
+    expect(find(events, 'assistant_end')[0]?.message).toMatchObject({
+      status: 'stopped',
+      usage: { promptTokens: 120, completionTokens: 48 },
+    });
+    expect(find(events, 'chat_updated').at(-1)?.chat.usage).toEqual({
+      contextTokens: 168,
+      promptTokens: 120,
+      completionTokens: 48,
+      costUsd: null,
+      requests: 1,
+    });
+  });
+
+  it('a retry keeps the discarded turn and adds the new reply in chat_updated.usage', async () => {
+    const h = await createHarness({ script: scriptFromTurns([reply('Second try'), TITLE_TURN]) });
+    const question: UserMessage = { id: 'u1', role: 'user', createdAt: 't', text: 'Question', attachments: [] };
+    const failed: AssistantMessage = {
+      id: 'a1',
+      role: 'assistant',
+      createdAt: 't',
+      model: MODEL,
+      text: 'oops',
+      toolCalls: [],
+      status: 'error',
+      usage: { promptTokens: 100, completionTokens: 10 },
+    };
+    for (const m of [question, failed]) await h.chats.appendMessage(h.chatId, m);
+
+    const events = await h.run({ newUserMessage: undefined });
+    const expected = { contextTokens: 15, promptTokens: 110, completionTokens: 15, costUsd: null, requests: 2 };
+    const updates = find(events, 'chat_updated');
+    expect(updates).toHaveLength(2); // the turn's, then the title's
+    expect(updates[0]?.chat.usage).toEqual(expected);
+    expect(updates.at(-1)?.chat.usage).toEqual(expected);
+    expect((await h.chats.get(h.chatId)).usage).toEqual(expected);
+  });
+
   it('a reply that reports no usage is not counted, so the counter stays hidden', async () => {
     const h = await createHarness({
       script: scriptFromTurns([[...textDeltas('Hi!', 5), { type: 'finish', reason: 'stop' }], TITLE_TURN]),

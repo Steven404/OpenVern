@@ -39,19 +39,3 @@ rules = ["private-key"]
 regexes = [
   '''rep\('b3BlbnNzaC1rZXktdjEAAAAA', 70\)''',
 ]
-
-# Build and vendor output, not tracked source. These are local, gitignored
-# paths. Gitleaks 8.30 cannot scope an allowlist to dir mode only, so this
-# also applies to git mode. Those files are untracked, so this is acceptable.
-# build/icon.svg and build/make-icon.mjs are source and stay scanned.
-[[allowlists]]
-description = "Build and vendor output (not tracked source)"
-paths = [
-  '''^node_modules/''',
-  '''^out/''',
-  '''^release/''',
-  '''^build/icon\.png$''',
-  '''(^|/)\.dev-data[^/]*/''',
-  '''^reports/''',
-  '''^research_notes/''',
-]

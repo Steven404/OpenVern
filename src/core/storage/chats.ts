@@ -4,10 +4,10 @@
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { NEW_CHAT_TITLE } from '@shared/constants';
-import type { ChatSummary, Id } from '@shared/types';
+import type { Chat, ChatSummary, Id } from '@shared/types';
 import { CoreError } from '../errors';
 import type { ChatsService } from '../types';
-import { JsonFile, type StorageLogger } from './json-file';
+import { consoleLogger, JsonFile, type StorageLogger } from './json-file';
 import { createMutex } from './mutex';
 import { type DataPaths, dataPaths } from './paths';
 import {
@@ -39,11 +39,14 @@ const byRecency = (a: ChatSummary, b: ChatSummary) =>
 /** On-disk shape of a chat file. */
 type ChatFile = StoredChat & { version: 1 };
 const toFile = (chat: StoredChat): ChatFile => ({ version: 1, ...chat });
+/** What the API returns: the stored chat without the internal cumulative counters (plan §4.3). */
+const toChat = ({ usageTotals: _usageTotals, ...chat }: StoredChat): Chat => chat;
 const writeIndexFile = (chats: ChatSummary[]): ChatIndexFile => ({ version: 1, chats, usageBackfilled: true });
 
 export function createChatsService(opts: ChatsServiceOptions): ChatsService {
   const paths: DataPaths = dataPaths(opts.dataDir);
-  const fileOpts = { logger: opts.logger };
+  const logger = opts.logger ?? consoleLogger;
+  const fileOpts = { logger };
   const index = new JsonFile<ChatIndexFile>(paths.chatsIndex, chatIndexSchema, fileOpts);
   // One lock for every mutation: chat file + index must change together, and contention is negligible.
   const lock = createMutex();
@@ -68,7 +71,15 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
       if (!name.endsWith('.json') || name === 'index.json') continue;
       const id = name.slice(0, -'.json'.length);
       if (!isChatId(id)) continue;
-      const chat = await chatFile(id).read();
+      let chat: StoredChat | null;
+      try {
+        chat = await chatFile(id).read();
+      } catch (err) {
+        // One unreadable entry must not make every list() fail; skip it and say which one.
+        const reason = err instanceof Error ? err.message : String(err);
+        logger.warn(`chats/${name} could not be read (${reason}); skipped.`);
+        continue;
+      }
       if (chat && chat.id === id) summaries.push(summarize(chat));
     }
     summaries.sort(byRecency);
@@ -105,7 +116,9 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
       return [...chats].sort(byRecency);
     },
 
-    get: readChat,
+    async get(id) {
+      return toChat(await readChat(id));
+    },
 
     async create(input) {
       await assertProject(input.projectId);
@@ -123,7 +136,7 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
       return lock.run(async () => {
         await writeChat(chat);
         await upsertIndex(summarize(chat));
-        return chat;
+        return toChat(chat);
       });
     },
 
@@ -188,10 +201,11 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
       return lock.run(async () => {
         const chat = await readChat(chatId);
         const lastUser = chat.messages.findLastIndex((m) => m.role === 'user');
-        if (lastUser < 0 || lastUser === chat.messages.length - 1) return chat;
+        if (lastUser < 0 || lastUser === chat.messages.length - 1) return toChat(chat);
         const next = withUsage({ ...chat, messages: chat.messages.slice(0, lastUser + 1) });
         await writeChat(next);
-        return next;
+        await upsertIndex(summarize(next));
+        return toChat(next);
       });
     },
 

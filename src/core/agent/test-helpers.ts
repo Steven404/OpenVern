@@ -11,10 +11,10 @@ import type {
   ModelInfo,
   Project,
   ProjectListItem,
-  Usage,
 } from '@shared/types';
 import { CoreError } from '../errors';
 import { createFakeProvider, type FakeProvider, type FakeScript } from '../providers/fake';
+import { addUsage, totalsFromMessages, type UsageTotals, usageFromMessages } from '../storage/schemas';
 import type { Tool, ToolContext, ToolResult } from '../tools/types';
 import type {
   AgentService,
@@ -44,28 +44,6 @@ export interface FakeChats extends ChatsService {
 }
 
 /** F1: mirrors storage's cumulative counters, so `chat_updated.usage` is populated in agent tests. */
-type UsageTotals = Omit<ChatUsage, 'contextTokens'>;
-
-const addUsage = (totals: UsageTotals, usage: Usage): UsageTotals => ({
-  promptTokens: totals.promptTokens + usage.promptTokens,
-  completionTokens: totals.completionTokens + usage.completionTokens,
-  costUsd: usage.costUsd === undefined ? totals.costUsd : (totals.costUsd ?? 0) + usage.costUsd,
-  requests: totals.requests + 1,
-});
-
-const totalsOf = (messages: readonly Message[]): UsageTotals =>
-  messages.reduce<UsageTotals>(
-    (totals, m) => (m.role === 'assistant' && m.usage ? addUsage(totals, m.usage) : totals),
-    { promptTokens: 0, completionTokens: 0, costUsd: null, requests: 0 },
-  );
-
-const usageOf = (messages: readonly Message[], totals: UsageTotals): ChatUsage => {
-  const latest = messages.findLast(
-    (m): m is Extract<Message, { role: 'assistant' }> => m.role === 'assistant' && m.usage !== undefined,
-  );
-  return { contextTokens: latest?.usage ? latest.usage.promptTokens + latest.usage.completionTokens : 0, ...totals };
-};
-
 export function createFakeChats(now: () => Date = createClock()): FakeChats {
   const store = new Map<Id, Chat>();
   const totals = new Map<Id, UsageTotals>();
@@ -77,10 +55,10 @@ export function createFakeChats(now: () => Date = createClock()): FakeChats {
   const usageFor = (c: Chat): ChatUsage => {
     let t = totals.get(c.id);
     if (!t) {
-      t = totalsOf(c.messages);
+      t = totalsFromMessages(c.messages);
       totals.set(c.id, t);
     }
-    return usageOf(c.messages, t);
+    return usageFromMessages(c.messages, t);
   };
   const summary = (c: Chat): ChatSummary => ({
     id: c.id,

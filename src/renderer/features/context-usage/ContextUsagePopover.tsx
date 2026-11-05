@@ -3,7 +3,7 @@
 
 import { cx, Popover, PopoverContent, PopoverTrigger } from '@renderer/components/ui';
 import { PROVIDER_LABEL } from '@shared/constants';
-import type { ChatSummary } from '@shared/types';
+import type { ChatSummary, ChatUsage } from '@shared/types';
 import type { ReactNode } from 'react';
 import { type ContextLevel, type ContextView, exact, formatDate, money } from './format';
 
@@ -23,15 +23,20 @@ const fillTone: Record<ContextLevel, string> = {
 
 export interface ContextUsagePopoverProps {
   chat: ChatSummary;
+  /** The figures to show: the chat's usage, or the run-start snapshot while a run is active. */
+  usage: ChatUsage;
   /** The model's display name (`modelName()`), falling back to the id. */
   modelName: string;
   view: ContextView;
+  /** The unknown-limit note; null when the limit is known. */
+  limitNote: string | null;
   /** The counter button; it is the popover's trigger. */
   children: ReactNode;
 }
 
-export function ContextUsagePopover({ chat, modelName, view, children }: ContextUsagePopoverProps) {
-  const fill = Math.min(view.pct ?? 0, 100);
+export function ContextUsagePopover({ chat, usage, modelName, view, limitNote, children }: ContextUsagePopoverProps) {
+  const pct = view.pct === null ? null : Math.min(Math.max(view.pct, 0), 100);
+  const fill = pct ?? 0;
   return (
     <Popover>
       <PopoverTrigger asChild>{children}</PopoverTrigger>
@@ -67,7 +72,8 @@ export function ContextUsagePopover({ chat, modelName, view, children }: Context
           aria-label="Context used"
           aria-valuemin={0}
           aria-valuemax={100}
-          aria-valuenow={Math.round(view.pct ?? 0)}
+          aria-valuenow={pct === null ? undefined : Math.round(pct)}
+          aria-valuetext={view.pctLabel}
           className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-surface-raised-hover"
         >
           <div
@@ -79,9 +85,7 @@ export function ContextUsagePopover({ chat, modelName, view, children }: Context
             style={{ width: `${fill}%` }}
           />
         </div>
-        {view.level === 'unknown' ? (
-          <p className="mt-2.5 text-[12.5px] text-text-muted">This model doesn't report a context limit.</p>
-        ) : null}
+        {limitNote ? <p className="mt-2.5 text-[12.5px] text-text-muted">{limitNote}</p> : null}
         <div aria-hidden="true" className="mt-[18px] mb-4 h-px bg-border-tool" />
         <dl className="m-0 grid grid-cols-2 gap-x-5 gap-y-4">
           <Field label="Provider">{PROVIDER_LABEL}</Field>
@@ -89,10 +93,10 @@ export function ContextUsagePopover({ chat, modelName, view, children }: Context
             {modelName}
           </Field>
           <Field label="Total cost" numeric>
-            {money(chat.usage.costUsd)}
+            {money(usage.costUsd)}
           </Field>
           <Field label="Total tokens used" numeric>
-            {exact(chat.usage.promptTokens + chat.usage.completionTokens)}
+            {exact(usage.promptTokens + usage.completionTokens)}
           </Field>
           <Field label="Created">{formatDate(chat.createdAt)}</Field>
           <Field label="Last activity">{formatDate(chat.updatedAt)}</Field>

@@ -112,7 +112,7 @@ const chatSummaryShape = {
   // `.catch`, not `.default`: a missing or malformed flag loads as false instead of quarantining the file.
   archived: z.boolean().catch(false),
   // Same idea: an index entry or chat file written before F1 loads as "no usage" instead of being quarantined.
-  usage: usageSchema.catch(emptyUsage()),
+  usage: usageSchema.catch(() => emptyUsage()),
 };
 const chatSummarySchema: z.ZodType<ChatSummary> = z.object(chatSummaryShape);
 export const chatIndexSchema = z.object({
