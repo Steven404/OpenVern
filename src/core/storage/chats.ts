@@ -49,8 +49,8 @@ const writeIndexFile = (chats: ChatSummary[], complete: boolean): ChatIndexFile 
   complete ? { version: 1, chats, usageBackfilled: true } : { version: 1, chats };
 
 /**
- * Index entries; `complete` is false when a rebuild had to skip an unreadable chat file. `listingFailed` means
- * `chats/` itself couldn't be listed, so `chats` may be missing any number of chats.
+ * Index entries; `complete` is false when a rebuild had to skip an unreadable chat file. `listingFailed` (set only
+ * by a fresh rebuild) means `chats/` itself couldn't be listed, so `chats` may be missing any number of chats.
  */
 type LoadedIndex = { chats: ChatSummary[]; complete: boolean; listingFailed?: boolean };
 
@@ -75,13 +75,15 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
 
   const writeChat = (chat: StoredChat) => chatFile(chat.id).write(toFile(chat));
 
+  // Callers must not run two ChatsServices on the same data dir at once: an unmarked index written by another
+  // instance is ignored in favour of `partial` until the next list() rebuild (the index diverges, no chat is lost).
+
   /**
-   * Callers must not run two ChatsServices on the same data dir at once: an unmarked index written by another
-   * instance is ignored in favour of this until the next list() rebuild (the index diverges, no chat is lost).
-   * The summaries of the last rebuild that skipped an unreadable chat file, kept in step by mutations. Mutations
-   * use them instead of re-scanning every chat file on each write; only `list()` retries the full rebuild.
+   * The summaries of the last rebuild that skipped an unreadable chat file or couldn't list `chats/`, kept in step
+   * by mutations. Mutations use them instead of re-scanning every chat file on each write; `list()` and
+   * `detachProject` retry the full rebuild (which is the only place `listingFailed` is computed).
    */
-  let partial: LoadedIndex | null = null;
+  let partial: ChatSummary[] | null = null;
   /** Unreadable entries already logged, so a file that stays unreadable is reported once per process. */
   const warned = new Set<string>();
   let warnedListing = false;
@@ -125,7 +127,7 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
     // The error may be transient (EACCES, EMFILE, EBUSY…): persisting this index would hide the skipped chat for
     // good, so only a clean rebuild is written; otherwise the next list() retries.
     // Set before the write, so a failed write can't leave an older partial index in place.
-    partial = skipped ? { chats: [...summaries], complete: false, listingFailed } : null;
+    partial = skipped ? [...summaries] : null;
     if (!skipped) {
       warned.clear();
       warnedListing = false;
@@ -144,13 +146,13 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
       partial = null;
       return { chats: current.chats, complete: true };
     }
-    if (partial && !retry) return { ...partial, chats: [...partial.chats] };
+    if (partial && !retry) return { chats: [...partial], complete: false };
     return rebuildIndex();
   }
 
-  const saveIndex = async ({ chats, complete, listingFailed }: LoadedIndex) => {
+  const saveIndex = async ({ chats, complete }: LoadedIndex) => {
     await index.write(writeIndexFile(chats, complete));
-    partial = complete ? null : { chats: [...chats], complete: false, listingFailed };
+    partial = complete ? null : [...chats];
   };
 
   async function upsertIndex(summary: ChatSummary): Promise<void> {
