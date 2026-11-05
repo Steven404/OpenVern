@@ -60,6 +60,9 @@ fi
 # v0.2 edit / review flow (G7.1).
 if [ "${E2E_SKIP_EDITS:-0}" != 1 ]; then node scripts/e2e/edits.mjs || RC=1; fi
 
+# F2 archive project chats (plan §6 F2.6).
+node scripts/e2e/archive.mjs || RC=1
+
 # S9.3 screenshots (after the persistence check: they add their own project and chat).
 if [ "${E2E_SHOTS:-0}" = 1 ]; then node scripts/e2e/shots.mjs || RC=1; fi
 
