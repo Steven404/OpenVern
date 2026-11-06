@@ -1,7 +1,9 @@
 import { DEFAULT_MODEL, IMAGE_ACCEPT, TEXT_ACCEPT } from '@shared/constants';
 import { ERROR_DEFAULTS, errorInfo } from '@shared/errors';
-import type { ChatSummary } from '@shared/types';
+import { SAMPLE_MODELS } from '@shared/sample-data';
+import type { ChatSummary, ModelInfo } from '@shared/types';
 import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { useState } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../../lib/api-client';
 import { MockApiClient } from '../../lib/mock-api-client';
@@ -62,7 +64,12 @@ describe('send keys', () => {
     fireEvent.keyDown(textarea(), { key: 'Enter' });
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0]?.[0]).toBe(chat.id);
-    expect(send.mock.calls[0]?.[1]).toEqual({ text: 'hello there', attachmentIds: [], model: chat.model });
+    expect(send.mock.calls[0]?.[1]).toEqual({
+      text: 'hello there',
+      attachmentIds: [],
+      model: chat.model,
+      effort: chat.effort,
+    });
     expect(textarea().value).toBe('');
     await waitForIdle(chat.id);
   });
@@ -397,5 +404,293 @@ describe('notices (S7.14)', () => {
     expect(textarea().rows).toBe(2);
     expect(screen.getByText('Enter to send · Shift + Enter for a new line')).toBeTruthy();
     void DEFAULT_MODEL;
+  });
+});
+
+// ── F3: reasoning effort picker ──
+
+const effortTrigger = () => screen.queryByRole('button', { name: /^Effort:/ });
+
+/** Opens the effort menu from the keyboard (jsdom has no pointer events), like `openMenu` in the app tests. */
+function openEffortMenu() {
+  const trigger = screen.getByRole('button', { name: /^Effort:/ });
+  trigger.focus();
+  fireEvent.keyDown(trigger, { key: 'Enter' });
+}
+
+async function chooseEffort(name: string | RegExp) {
+  openEffortMenu();
+  fireEvent.click(await screen.findByRole('menuitemradio', { name }));
+}
+
+/** Two chats in one mounted composer, switched with "Next chat" (the composer stays mounted across chats). */
+function Switcher({ chats }: { chats: ChatSummary[] }) {
+  const [index, setIndex] = useState(0);
+  const chat = chats[index] as ChatSummary;
+  return (
+    <>
+      <button type="button" onClick={() => setIndex((i) => (i + 1) % chats.length)}>
+        Next chat
+      </button>
+      <ReplyComposer chat={chat} />
+    </>
+  );
+}
+
+describe('effort picker (F3)', () => {
+  it('is shown for a model with reasoning and hidden for one without, and follows a model switch', async () => {
+    const { api, chat } = await setup();
+    renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    await screen.findByRole('button', { name: `Model: ${VISION}` });
+    expect(await screen.findByRole('button', { name: /^Effort:/ })).toBeTruthy();
+
+    await pickModel(NO_VISION);
+    await waitFor(() => expect(effortTrigger()).toBeNull());
+
+    await pickModel(VISION);
+    expect(await screen.findByRole('button', { name: /^Effort:/ })).toBeTruthy();
+  });
+
+  it('a chat on a model without reasoning never shows the picker', async () => {
+    const { api } = await setup();
+    const plain = await api.createChat({ projectId: null, model: 'deepseek/deepseek-v3.2' });
+    renderWithProviders(<ReplyComposer chat={plain} />, { api });
+    await screen.findByRole('button', { name: `Model: ${NO_VISION}` });
+    expect(effortTrigger()).toBeNull();
+  });
+
+  it('lists Default plus the model’s published levels in order, with Default checked first', async () => {
+    const { api, chat } = await setup();
+    renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    await screen.findByRole('button', { name: /^Effort:/ });
+    openEffortMenu();
+    const items = await screen.findAllByRole('menuitemradio');
+    // Claude Sonnet 5.5 publishes low…max (no none/minimal); Default is prepended.
+    expect(items).toHaveLength(6);
+    // Name and description are asserted separately: joined text would break Radix's typeahead.
+    const [def, low, medium, high, xhigh, max] = items;
+    expect(within(def as HTMLElement).getByText('Default')).toBeTruthy();
+    expect(within(def as HTMLElement).getByText('Model default: High')).toBeTruthy();
+    expect([low, medium, high, xhigh, max].map((i) => i?.textContent)).toEqual([
+      'Low',
+      'Medium',
+      'High',
+      'Extra high',
+      'Max',
+    ]);
+    expect(items[0]?.getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('the trigger title is "Reasoning effort" and the menu is described by the hint', async () => {
+    const { api, chat } = await setup();
+    renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    const trigger = await screen.findByRole('button', { name: /^Effort:/ });
+    expect(trigger.getAttribute('title')).toBe('Reasoning effort');
+
+    openEffortMenu();
+    const menu = await screen.findByRole('menu');
+    const hint = screen.getByText('Higher effort thinks longer and costs more.');
+    expect(menu.getAttribute('aria-describedby')).toBe(hint.id);
+    expect(document.getElementById(hint.id)).toBe(hint);
+  });
+
+  it('is hidden while the model list is still missing', async () => {
+    const { api, chat } = await setup();
+    vi.spyOn(api, 'listModels').mockReturnValue(new Promise(() => {}));
+    renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    await screen.findByRole('button', { name: /^Model:/ });
+    expect(effortTrigger()).toBeNull();
+  });
+
+  it('is hidden when the model list fails to load', async () => {
+    const { api, chat } = await setup();
+    vi.spyOn(api, 'listModels').mockRejectedValue(new Error('boom'));
+    renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    fireEvent.click(await screen.findByRole('button', { name: /^Model:/ }));
+    expect(await screen.findByText('boom')).toBeTruthy();
+    expect(effortTrigger()).toBeNull();
+  });
+
+  it('is hidden for a listed model that lacks supportsReasoning', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const chat = await api.createChat({ projectId: null, model: 'openai/gpt-5.5' });
+    renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    await screen.findByRole('button', { name: 'Model: GPT-5.5' });
+    expect(effortTrigger()).toBeNull();
+  });
+
+  it('selecting High shows "Effort: High", and the next send carries effort: high', async () => {
+    const { api, chat } = await setup();
+    const send = vi.spyOn(api, 'sendMessage');
+    renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    await screen.findByRole('button', { name: /^Effort:/ });
+    await chooseEffort('High');
+    expect(await screen.findByRole('button', { name: 'Effort: High' })).toBeTruthy();
+
+    type('hello');
+    fireEvent.keyDown(textarea(), { key: 'Enter' });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]?.[1]).toMatchObject({ effort: 'high' });
+    await waitForIdle(chat.id);
+  });
+
+  it('choosing an effort persists it as lastEffort, and choosing Default persists null', async () => {
+    const { api, chat } = await setup();
+    const update = vi.spyOn(api, 'updateSettings');
+    renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    await screen.findByRole('button', { name: /^Effort:/ });
+    await chooseEffort('Max');
+    expect(update).toHaveBeenLastCalledWith({ lastEffort: 'max' });
+    await chooseEffort(/^Default/);
+    expect(update).toHaveBeenLastCalledWith({ lastEffort: null });
+  });
+
+  it('a chat starts from its stored effort, and the send carries it', async () => {
+    const { api, chat } = await setup();
+    const send = vi.spyOn(api, 'sendMessage');
+    renderWithProviders(<ReplyComposer chat={{ ...chat, effort: 'low' }} />, { api });
+    expect(await screen.findByRole('button', { name: 'Effort: Low' })).toBeTruthy();
+    type('hello');
+    fireEvent.keyDown(textarea(), { key: 'Enter' });
+    expect(send.mock.calls[0]?.[1]).toMatchObject({ effort: 'low' });
+    await waitForIdle(chat.id);
+  });
+
+  it('the choice stays with its chat and does not leak when switching chats', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const [a, b] = (await api.listChats()) as ChatSummary[];
+    if (!a || !b) throw new Error('seed missing');
+    const send = vi.spyOn(api, 'sendMessage');
+    renderWithProviders(<Switcher chats={[a, b]} />, { api });
+
+    await screen.findByRole('button', { name: /^Effort:/ });
+    await chooseEffort('High'); // chat A
+    expect(await screen.findByRole('button', { name: 'Effort: High' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next chat' })); // chat B has its own, untouched effort
+    expect(await screen.findByRole('button', { name: 'Effort: Default' })).toBeTruthy();
+    await chooseEffort('Low');
+    expect(await screen.findByRole('button', { name: 'Effort: Low' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next chat' })); // back to chat A
+    expect(await screen.findByRole('button', { name: 'Effort: High' })).toBeTruthy();
+    type('for A');
+    fireEvent.keyDown(textarea(), { key: 'Enter' });
+    expect(send.mock.calls[0]?.[0]).toBe(a.id);
+    expect(send.mock.calls[0]?.[1]).toMatchObject({ effort: 'high' });
+    await waitForIdle(a.id);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next chat' })); // chat B again
+    expect(await screen.findByRole('button', { name: 'Effort: Low' })).toBeTruthy();
+    type('for B');
+    fireEvent.keyDown(textarea(), { key: 'Enter' });
+    expect(send.mock.calls[1]?.[0]).toBe(b.id);
+    expect(send.mock.calls[1]?.[1]).toMatchObject({ effort: 'low' });
+    await waitForIdle(b.id);
+  });
+});
+
+// ── F3 follow-up: per-model levels ──
+
+/** A model the sample list does not have, with the levels and default the test needs. */
+const customModel = (id: string, name: string, extra: Partial<ModelInfo> = {}): ModelInfo => ({
+  id,
+  name,
+  contextLength: 1000,
+  supportsTools: true,
+  supportsImages: false,
+  supportsReasoning: true,
+  promptPricePerMTok: null,
+  completionPricePerMTok: null,
+  ...extra,
+});
+
+/** The sample list plus `extra`, so a test can switch to a model with other levels. */
+function withModels(api: MockApiClient, extra: ModelInfo[]) {
+  vi.spyOn(api, 'listModels').mockResolvedValue([...SAMPLE_MODELS, ...extra]);
+}
+
+describe('effort picker per model (F3 follow-up)', () => {
+  it('lists Default, then only the levels the model publishes, in order; no default note without defaultEffort', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const chat = await api.createChat({ projectId: null, model: 'test/three' });
+    withModels(api, [
+      customModel('test/three', 'Test: Three Levels', { reasoningEfforts: ['none', 'minimal', 'low'] }),
+    ]);
+    renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    await screen.findByRole('button', { name: 'Model: Three Levels' });
+    openEffortMenu();
+    const items = await screen.findAllByRole('menuitemradio');
+    // The name is the first `.truncate` span; the description (if any) is a second one.
+    expect(items.map((item) => item.querySelector('.truncate')?.textContent)).toEqual([
+      'Default',
+      'None',
+      'Minimal',
+      'Low',
+    ]);
+    expect(within(items[0] as HTMLElement).getByText("The model's own setting")).toBeTruthy();
+    expect(screen.queryByText(/Model default/)).toBeNull();
+  });
+
+  it('the Default note reads "Model default: …" when the model publishes a default level', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const chat = await api.createChat({ projectId: null, model: 'test/def' });
+    withModels(api, [
+      customModel('test/def', 'Test: Defaulted', { reasoningEfforts: ['low', 'max'], defaultEffort: 'low' }),
+    ]);
+    renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    await screen.findByRole('button', { name: 'Model: Defaulted' });
+    openEffortMenu();
+    const items = await screen.findAllByRole('menuitemradio');
+    expect(within(items[0] as HTMLElement).getByText('Model default: Low')).toBeTruthy();
+    expect(screen.queryByText("The model's own setting")).toBeNull();
+  });
+
+  it('is hidden for a model that reasons but publishes no levels', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const chat = await api.createChat({ projectId: null, model: 'test/none' });
+    withModels(api, [customModel('test/none', 'Test: No Levels', { reasoningEfforts: undefined })]);
+    renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    await screen.findByRole('button', { name: 'Model: No Levels' });
+    expect(effortTrigger()).toBeNull();
+  });
+
+  it('a stored effort that the model does not list shows as Default when the chat opens', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const chat = await api.createChat({ projectId: null, model: 'test/low-max' });
+    withModels(api, [customModel('test/low-max', 'Test: Low and Max', { reasoningEfforts: ['low', 'max'] })]);
+    renderWithProviders(<ReplyComposer chat={{ ...chat, effort: 'high' }} />, { api });
+    expect(await screen.findByRole('button', { name: 'Effort: Default' })).toBeTruthy();
+    openEffortMenu();
+    const items = await screen.findAllByRole('menuitemradio');
+    expect(items[0]?.getAttribute('aria-checked')).toBe('true');
+    for (const item of items.slice(1)) expect(item.getAttribute('aria-checked')).toBe('false');
+  });
+
+  it('shows Default, sends the raw choice', async () => {
+    const { api, chat } = await setup();
+    withModels(api, [customModel('test/low-max', 'Test: Low and Max', { reasoningEfforts: ['low', 'max'] })]);
+    const send = vi.spyOn(api, 'sendMessage');
+    const update = vi.spyOn(api, 'updateSettings');
+    renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    await screen.findByRole('button', { name: /^Effort:/ });
+    await chooseEffort('High'); // on Claude Sonnet 5.5
+    expect(await screen.findByRole('button', { name: 'Effort: High' })).toBeTruthy();
+    update.mockClear();
+
+    await pickModel('Low and Max');
+    expect(await screen.findByRole('button', { name: 'Effort: Default' })).toBeTruthy();
+    type('hello');
+    fireEvent.keyDown(textarea(), { key: 'Enter' });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]?.[1]).toMatchObject({ model: 'test/low-max' });
+    expect(send.mock.calls[0]?.[1]).toHaveProperty('effort', 'high');
+    await waitForIdle(chat.id);
+
+    await pickModel(VISION);
+    expect(await screen.findByRole('button', { name: 'Effort: High' })).toBeTruthy();
+    // The clamp is not a choice: it never writes lastEffort, and the stored setting is still High.
+    expect(update.mock.calls.filter(([patch]) => 'lastEffort' in patch)).toEqual([]);
+    expect((await api.getSettings()).lastEffort).toBe('high');
   });
 });

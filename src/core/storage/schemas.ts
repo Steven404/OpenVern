@@ -1,13 +1,20 @@
 // zod schemas for the files in plan §3.5. Message-level validation is deliberately loose so that a small
 // shape drift never makes a whole chat unreadable; the TypeScript types are the real contract.
 
+import { REASONING_EFFORTS } from '@shared/constants';
 import type { AssistantMessage, Chat, ChatSummary, ChatUsage, Message, Project, Usage } from '@shared/types';
 import { z } from 'zod';
 import type { StoredAttachment } from '../types';
 
+/** F3: `null` is Default (no `reasoning` field). */
+const reasoningEffortSchema = z.enum(REASONING_EFFORTS).nullable();
+
 export const settingsFileSchema = z.object({
   version: z.literal(1),
   lastModel: z.string().nullable().default(null),
+  // `.catch`, not `.default`: a missing key (pre-F3 file) and a malformed value (future level, downgrade, hand
+  // edit) both load as null instead of quarantining the file and losing `lastModel` with it.
+  lastEffort: reasoningEffortSchema.catch(null),
 });
 export type SettingsFile = z.infer<typeof settingsFileSchema>;
 
@@ -113,6 +120,8 @@ const chatSummaryShape = {
   archived: z.boolean().catch(false),
   // Same idea: an index entry or chat file written before F1 loads as "no usage" instead of being quarantined.
   usage: usageSchema.catch(() => emptyUsage()),
+  // F3: `.catch(null)` keeps a malformed effort from quarantining the whole chat; missing = Default.
+  effort: reasoningEffortSchema.catch(null),
 };
 const chatSummarySchema: z.ZodType<ChatSummary> = z.object(chatSummaryShape);
 export const chatIndexSchema = z.object({
@@ -165,5 +174,6 @@ export function summarize(chat: ChatRecord): ChatSummary {
     updatedAt: chat.updatedAt,
     archived: chat.archived,
     usage: withUsage(chat).usage,
+    effort: chat.effort,
   };
 }

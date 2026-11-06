@@ -76,14 +76,22 @@ describe('FileSecretStore', () => {
 describe('SettingsService', () => {
   it('starts unconfigured with no last model', async () => {
     const { storage } = await makeStorage();
-    expect(await storage.settings.get()).toEqual({ openRouter: { configured: false, keyHint: null }, lastModel: null });
+    expect(await storage.settings.get()).toEqual({
+      openRouter: { configured: false, keyHint: null },
+      lastModel: null,
+      lastEffort: null,
+    });
     expect(await storage.settings.getApiKey()).toBeNull();
   });
 
   it('stores, masks and clears the key; never exposes it in PublicSettings', async () => {
     const { storage, secrets } = await makeStorage();
     const after = await storage.settings.setApiKey(`  ${KEY}  `);
-    expect(after).toEqual({ openRouter: { configured: true, keyHint: 'sk-or-v1-…a1b2' }, lastModel: null });
+    expect(after).toEqual({
+      openRouter: { configured: true, keyHint: 'sk-or-v1-…a1b2' },
+      lastModel: null,
+      lastEffort: null,
+    });
     expect(JSON.stringify(after)).not.toContain(KEY);
     expect(await storage.settings.getApiKey()).toBe(KEY);
     expect(secrets.data.get('openrouter')).toBe(KEY);
@@ -106,7 +114,47 @@ describe('SettingsService', () => {
     expect(JSON.parse(await fs.readFile(dataPaths(dataDir).settings, 'utf8'))).toEqual({
       version: 1,
       lastModel: 'a/b',
+      lastEffort: null,
     });
+  });
+
+  it('lastEffort defaults to null, round-trips across instances, and null clears it (F3)', async () => {
+    const { storage, dataDir, secrets } = await makeStorage();
+    expect((await storage.settings.get()).lastEffort).toBeNull();
+    expect((await storage.settings.update({ lastEffort: 'high' })).lastEffort).toBe('high');
+    const again = createSettingsService({ filePath: dataPaths(dataDir).settings, secretStore: secrets });
+    expect((await again.get()).lastEffort).toBe('high');
+    expect((await again.update({ lastEffort: null })).lastEffort).toBeNull();
+    expect((await again.get()).lastEffort).toBeNull();
+  });
+
+  it('a lastModel patch keeps lastEffort, and a lastEffort patch keeps lastModel (F3)', async () => {
+    const { storage } = await makeStorage();
+    await storage.settings.update({ lastModel: 'a/b', lastEffort: 'medium' });
+    expect(await storage.settings.update({ lastModel: 'c/d' })).toMatchObject({
+      lastModel: 'c/d',
+      lastEffort: 'medium',
+    });
+    expect(await storage.settings.update({ lastEffort: 'max' })).toMatchObject({ lastModel: 'c/d', lastEffort: 'max' });
+  });
+
+  it('a settings file from before F3 (no lastEffort) reads as null, keeping lastModel (F3)', async () => {
+    const { dataDir, secrets } = await makeStorage();
+    await fs.writeFile(dataPaths(dataDir).settings, JSON.stringify({ version: 1, lastModel: 'a/b' }));
+    const old = createSettingsService({ filePath: dataPaths(dataDir).settings, secretStore: secrets });
+    expect(await old.get()).toMatchObject({ lastModel: 'a/b', lastEffort: null });
+    expect((await fs.readdir(dataDir)).some((n) => n.startsWith('settings.json.corrupt-'))).toBe(false);
+  });
+
+  it('an out-of-enum lastEffort reads as null, keeps lastModel and does not quarantine the file (F3)', async () => {
+    const { dataDir, secrets } = await makeStorage();
+    await fs.writeFile(
+      dataPaths(dataDir).settings,
+      JSON.stringify({ version: 1, lastModel: 'a/b', lastEffort: 'bogus' }),
+    );
+    const settings = createSettingsService({ filePath: dataPaths(dataDir).settings, secretStore: secrets });
+    expect(await settings.get()).toMatchObject({ lastModel: 'a/b', lastEffort: null });
+    expect((await fs.readdir(dataDir)).some((n) => n.startsWith('settings.json.corrupt-'))).toBe(false);
   });
 
   it('works end to end with a FileSecretStore', async () => {

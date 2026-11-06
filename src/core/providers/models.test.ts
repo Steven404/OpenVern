@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ModelInfo } from '@shared/types';
@@ -80,11 +80,11 @@ describe('createModelCatalog', () => {
     expect(p.calls).toBe(3);
   });
 
-  it('writes the cache file atomically ({ fetchedAt, models }) and leaves no tmp files', async () => {
+  it('writes the cache file atomically ({ version, fetchedAt, models }) and leaves no tmp files', async () => {
     const p = fakeProvider([[A, B]]);
     await createModelCatalog({ provider: p.provider, cacheFile, now }).list();
     const saved = JSON.parse(await readFile(cacheFile, 'utf8'));
-    expect(saved).toEqual({ fetchedAt: '2026-10-31T12:00:00.000Z', models: [A, B] });
+    expect(saved).toEqual({ version: 2, fetchedAt: '2026-10-31T12:00:00.000Z', models: [A, B] });
     expect(await readdir(join(dir, 'cache'))).toEqual(['models.json']);
   });
 
@@ -96,6 +96,18 @@ describe('createModelCatalog', () => {
     const cat = createModelCatalog({ provider: second.provider, cacheFile, now });
     expect(await cat.list()).toEqual([A, B]);
     expect(second.calls).toBe(0);
+  });
+
+  it('an old cache entry without a version is refetched, but still serves as the stale fallback', async () => {
+    // Exactly the shape the catalog wrote before the F3 follow-up: no `version`, no reasoning levels.
+    const { mkdir } = await import('node:fs/promises');
+    await mkdir(join(dir, 'cache'), { recursive: true });
+    await writeFile(cacheFile, JSON.stringify({ fetchedAt: new Date(clock).toISOString(), models: [A] }));
+    const p = fakeProvider([new ProviderError('no_api_key', 'no key')]);
+    const cat = createModelCatalog({ provider: p.provider, cacheFile, now });
+    expect(await cat.list()).toEqual([A]); // old format → tries a fetch first
+    expect(p.calls).toBe(1);
+    expect((await cat.get('a/one')).supportsReasoning).not.toBe(true);
   });
 
   it('serves the stale cache (disk or memory) when the fetch fails', async () => {
@@ -193,6 +205,7 @@ describe('createModelCatalog', () => {
         contextLength: null,
         supportsTools: true,
         supportsImages: false,
+        supportsReasoning: false,
         promptPricePerMTok: null,
         completionPricePerMTok: null,
       });
@@ -203,5 +216,112 @@ describe('createModelCatalog', () => {
       const cat = createModelCatalog({ provider: p.provider, cacheFile, now });
       expect(await cat.get('x/y')).toMatchObject({ id: 'x/y', supportsTools: true, supportsImages: false });
     });
+  });
+});
+
+describe('createModelCatalog: cache format version and effort fields (F3 follow-up)', () => {
+  const iso = () => new Date(clock).toISOString();
+  /** Writes `<dir>/cache/models.json` with the given body, as an older or newer build would have. */
+  async function writeCacheFile(body: unknown) {
+    await mkdir(join(dir, 'cache'), { recursive: true });
+    await writeFile(cacheFile, JSON.stringify(body));
+  }
+  const SONNET = model('anthropic/sonnet', {
+    supportsReasoning: true,
+    reasoningEfforts: ['low', 'high', 'max'],
+    defaultEffort: 'high',
+  });
+
+  it('a version-2 cache within the TTL is served from disk without a fetch, effort fields included', async () => {
+    await writeCacheFile({ version: 2, fetchedAt: iso(), models: [SONNET, B] });
+    const p = fakeProvider([new ProviderError('no_api_key', 'no key')]);
+    const cat = createModelCatalog({ provider: p.provider, cacheFile, now });
+    expect(await cat.list()).toEqual([SONNET, B]);
+    expect(p.calls).toBe(0);
+    expect(await cat.get('anthropic/sonnet')).toEqual(SONNET);
+  });
+
+  it('a version-2 cache past the TTL is refetched', async () => {
+    await writeCacheFile({ version: 2, fetchedAt: iso(), models: [A] });
+    clock += MODEL_CACHE_TTL_MS;
+    const p = fakeProvider([[SONNET]]);
+    const cat = createModelCatalog({ provider: p.provider, cacheFile, now });
+    expect(await cat.list()).toEqual([SONNET]);
+    expect(p.calls).toBe(1);
+  });
+
+  it('a cache without a version is refetched on a non-forced call, and the fresh list replaces it on disk', async () => {
+    await writeCacheFile({ fetchedAt: iso(), models: [A] });
+    const p = fakeProvider([[SONNET]]);
+    const cat = createModelCatalog({ provider: p.provider, cacheFile, now });
+    expect(await cat.list()).toEqual([SONNET]);
+    expect(p.calls).toBe(1);
+    expect(JSON.parse(await readFile(cacheFile, 'utf8'))).toMatchObject({ version: 2, models: [SONNET] });
+  });
+
+  it('a cache entry with bad effort fields loads with only those fields dropped; the rest stays intact', async () => {
+    await writeCacheFile({
+      version: 2,
+      fetchedAt: iso(),
+      models: [
+        {
+          ...A,
+          id: 'x/mixed',
+          supportsReasoning: true,
+          reasoningEfforts: ['high', 7, 'max', 'bogus'],
+          defaultEffort: 'ultra',
+        },
+        { ...A, id: 'x/string', supportsReasoning: true, reasoningEfforts: 'high', defaultEffort: 3 },
+        { ...A, id: 'x/ok', supportsReasoning: true, reasoningEfforts: ['max', 'low', 'low'], defaultEffort: 'max' },
+        B,
+      ],
+    });
+    const p = fakeProvider([new ProviderError('no_api_key', 'no key')]);
+    const list = await createModelCatalog({ provider: p.provider, cacheFile, now }).list();
+    expect(p.calls).toBe(0);
+    expect(list.map((m) => m.id)).toEqual(['x/mixed', 'x/string', 'x/ok', 'b/two']);
+    const [mixed, str, ok, b] = list;
+
+    // Unknown entries dropped from the list, known ones kept in none→max order; the bad default is dropped.
+    expect(mixed).toMatchObject({
+      name: A.name,
+      contextLength: A.contextLength,
+      supportsTools: true,
+      supportsImages: true,
+      supportsReasoning: true,
+      reasoningEfforts: ['high', 'max'],
+    });
+    expect(mixed).not.toHaveProperty('defaultEffort');
+
+    // Wrong types for both fields: both dropped, the rest of the model kept.
+    expect(str).toMatchObject({ id: 'x/string', supportsReasoning: true, promptPricePerMTok: 1 });
+    expect(str).not.toHaveProperty('reasoningEfforts');
+    expect(str).not.toHaveProperty('defaultEffort');
+
+    // Valid data survives sanitising: deduped and in order, default kept.
+    expect(ok).toMatchObject({ reasoningEfforts: ['low', 'max'], defaultEffort: 'max' });
+
+    // A model with no effort fields at all is untouched.
+    expect(b).toEqual(B);
+  });
+
+  it('a cached model with effort fields but supportsReasoning false or absent loads without them', async () => {
+    await writeCacheFile({
+      version: 2,
+      fetchedAt: iso(),
+      models: [
+        { ...A, id: 'x/false', supportsReasoning: false, reasoningEfforts: ['low', 'high'], defaultEffort: 'high' },
+        { ...A, id: 'x/absent', reasoningEfforts: ['low', 'high'], defaultEffort: 'high' },
+      ],
+    });
+    const p = fakeProvider([new ProviderError('no_api_key', 'no key')]);
+    const list = await createModelCatalog({ provider: p.provider, cacheFile, now }).list();
+    expect(p.calls).toBe(0);
+    const [noReasoning, absent] = list;
+    expect(noReasoning).toMatchObject({ id: 'x/false', supportsReasoning: false });
+    expect(noReasoning).not.toHaveProperty('reasoningEfforts');
+    expect(noReasoning).not.toHaveProperty('defaultEffort');
+    expect(absent).not.toHaveProperty('reasoningEfforts');
+    expect(absent).not.toHaveProperty('defaultEffort');
   });
 });

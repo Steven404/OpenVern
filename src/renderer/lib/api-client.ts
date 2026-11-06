@@ -16,6 +16,7 @@ import type {
   ProjectFileTree,
   ProjectListItem,
   PublicSettings,
+  ReasoningEffort,
 } from '@shared/types';
 
 export interface ApiClient {
@@ -23,7 +24,7 @@ export interface ApiClient {
   getSettings(): Promise<PublicSettings>;
   setOpenRouterKey(apiKey: string): Promise<PublicSettings>;
   removeOpenRouterKey(): Promise<PublicSettings>;
-  updateSettings(patch: { lastModel?: string }): Promise<PublicSettings>;
+  updateSettings(patch: { lastModel?: string; lastEffort?: ReasoningEffort | null }): Promise<PublicSettings>;
   listModels(opts?: { refresh?: boolean }): Promise<ModelInfo[]>;
   listProjects(): Promise<ProjectListItem[]>;
   createProject(input: { rootPath: string; name?: string }): Promise<Project>;
@@ -36,10 +37,14 @@ export interface ApiClient {
   deleteChat(id: Id): Promise<void>;
   sendMessage(
     chatId: Id,
-    input: { text: string; attachmentIds: Id[]; model: string },
+    input: { text: string; attachmentIds: Id[]; model: string; effort?: ReasoningEffort | null },
     signal: AbortSignal,
   ): AsyncIterable<AgentEvent>;
-  retry(chatId: Id, input: { model: string }, signal: AbortSignal): AsyncIterable<AgentEvent>;
+  retry(
+    chatId: Id,
+    input: { model: string; effort?: ReasoningEffort | null },
+    signal: AbortSignal,
+  ): AsyncIterable<AgentEvent>;
   uploadAttachment(file: File): Promise<AttachmentRef>;
   deleteAttachment(id: Id): Promise<void>;
   attachmentUrl(id: Id): string;

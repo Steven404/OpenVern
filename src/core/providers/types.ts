@@ -1,7 +1,7 @@
 // Provider interface (plan §4.6). One adapter per provider; messages are normalised.
 
 import type { ErrorCode } from '@shared/errors';
-import type { ModelInfo, ToolCall, Usage } from '@shared/types';
+import type { ModelInfo, ReasoningEffort, ToolCall, Usage } from '@shared/types';
 
 export interface Provider {
   readonly id: string; // 'openrouter' | 'fake'
@@ -16,6 +16,8 @@ export interface ProviderRequest {
   messages: ProviderMessage[];
   tools?: ToolSpec[]; // omitted or empty = no tools
   maxTokens?: number;
+  /** F3: set only when the model supports reasoning and the chat's effort is not null. */
+  effort?: ReasoningEffort;
 }
 
 export type ProviderMessage =

@@ -1,4 +1,4 @@
-import type { ChatSummary } from '@shared/types';
+import type { ChatSummary, ReasoningEffort } from '@shared/types';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
@@ -44,6 +44,9 @@ export function NewChatScreen() {
 
   const [picked, setPicked] = useState<string | null>(null);
   const model = picked ?? resolveDefaultModel(settings.data?.lastModel, modelsQuery.data);
+  // F3: a new chat starts from `lastEffort`, until the picker is used here.
+  const [pickedEffort, setPickedEffort] = useState<ReasoningEffort | null | undefined>(undefined);
+  const effort = pickedEffort === undefined ? (settings.data?.lastEffort ?? null) : pickedEffort;
 
   const onProjectChange = useCallback(
     (id: string | null) => {
@@ -66,9 +69,9 @@ export function NewChatScreen() {
       usePanelStore.getState().moveChat(DRAFT_PANEL_CHAT_ID, chat.id);
       // The run lives in the store, so it keeps going after this screen unmounts.
       navigate(paths.chat(chat.id));
-      void send(deps, chat.id, { text, attachments, model });
+      void send(deps, chat.id, { text, attachments, model, effort });
     },
-    [api, projectId, model, queryClient, navigate, send, deps],
+    [api, projectId, model, effort, queryClient, navigate, send, deps],
   );
 
   return (
@@ -85,6 +88,8 @@ export function NewChatScreen() {
             variant="new"
             model={model}
             onModelChange={setPicked}
+            effort={effort}
+            onEffortChange={setPickedEffort}
             projectId={projectId}
             onSend={onSend}
             autoFocus

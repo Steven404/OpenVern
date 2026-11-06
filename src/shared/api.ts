@@ -2,7 +2,7 @@
 // All routes are under `/api`, JSON unless noted, and require `X-OpenVern-Client: 1`.
 
 import { z } from 'zod';
-import { LIMITS } from './constants';
+import { LIMITS, REASONING_EFFORTS } from './constants';
 import type { AppliedBatch, ChatChanges } from './types';
 
 export const API_PREFIX = '/api';
@@ -40,11 +40,16 @@ export interface HealthResponse {
 
 const id = z.string().min(1);
 const modelId = z.string().trim().min(1);
+/** F3: `null` is Default (no `reasoning` field); omitted means "keep what the chat already has". */
+const reasoningEffort = z.enum(REASONING_EFFORTS);
 
 /** `PUT /settings/openrouter-key` */
 export const setOpenRouterKeyBody = z.object({ apiKey: z.string().trim().min(1) });
 /** `PATCH /settings` */
-export const updateSettingsBody = z.object({ lastModel: modelId.optional() });
+export const updateSettingsBody = z.object({
+  lastModel: modelId.optional(),
+  lastEffort: reasoningEffort.nullable().optional(),
+});
 /** `POST /projects` */
 export const createProjectBody = z.object({
   rootPath: z.string().trim().min(1),
@@ -63,12 +68,18 @@ export const updateChatBody = z.object({
 });
 /** `POST /chats/:id/messages` → `text/event-stream` of `AgentEvent` */
 export const sendMessageBody = z
-  .object({ text: z.string(), attachmentIds: z.array(id).max(LIMITS.attachmentsPerMessage), model: modelId })
+  .object({
+    text: z.string(),
+    attachmentIds: z.array(id).max(LIMITS.attachmentsPerMessage),
+    model: modelId,
+    /** F3: omitted = keep the chat's stored effort. */
+    effort: reasoningEffort.nullable().optional(),
+  })
   .refine((b) => b.text.trim().length > 0 || b.attachmentIds.length > 0, {
     message: 'A message needs text or at least one attachment.',
   });
 /** `POST /chats/:id/retry` → `text/event-stream` of `AgentEvent` */
-export const retryBody = z.object({ model: modelId });
+export const retryBody = z.object({ model: modelId, effort: reasoningEffort.nullable().optional() });
 /** `POST /projects/:id/files/attach` → `AttachmentRef` */
 export const attachProjectFileBody = z.object({ path: z.string().min(1) });
 /** `POST /chats/:id/changes/apply` */

@@ -1,5 +1,6 @@
 // In-memory fakes of the S1/S2/S3 services, for testing the agent in isolation (test-only; not exported from index.ts).
 
+import { REASONING_EFFORTS } from '@shared/constants';
 import type { AgentEvent } from '@shared/events';
 import type {
   AttachmentRef,
@@ -11,6 +12,7 @@ import type {
   ModelInfo,
   Project,
   ProjectListItem,
+  ReasoningEffort,
 } from '@shared/types';
 import { CoreError } from '../errors';
 import { createFakeProvider, type FakeProvider, type FakeScript } from '../providers/fake';
@@ -69,6 +71,7 @@ export function createFakeChats(now: () => Date = createClock()): FakeChats {
     updatedAt: c.updatedAt,
     archived: c.archived,
     usage: usageFor(c),
+    effort: c.effort,
   });
   return {
     store,
@@ -89,6 +92,7 @@ export function createFakeChats(now: () => Date = createClock()): FakeChats {
         updatedAt: ts,
         archived: false,
         usage: { contextTokens: 0, promptTokens: 0, completionTokens: 0, costUsd: null, requests: 0 },
+        effort: null,
         messages: [],
       };
       store.set(chat.id, chat);
@@ -101,6 +105,11 @@ export function createFakeChats(now: () => Date = createClock()): FakeChats {
       if (patch.projectId !== undefined) c.projectId = patch.projectId;
       if (patch.model !== undefined && patch.model !== c.model) {
         c.model = patch.model;
+        c.updatedAt = now().toISOString();
+      }
+      // F3: mirrors storage's effort branch.
+      if (patch.effort !== undefined && patch.effort !== c.effort) {
+        c.effort = patch.effort;
         c.updatedAt = now().toISOString();
       }
       if (patch.archived !== undefined) c.archived = patch.archived;
@@ -231,13 +240,28 @@ export function createFakeProjects(projects: Project[] = []): ProjectsService & 
   };
 }
 
-export function model(id: string, caps: { tools?: boolean; images?: boolean } = {}): ModelInfo {
+export function model(
+  id: string,
+  caps: {
+    tools?: boolean;
+    images?: boolean;
+    reasoning?: boolean;
+    /** F3: levels the model accepts. Default: every level when `reasoning` is true, none otherwise. */
+    efforts?: ReasoningEffort[];
+    defaultEffort?: ReasoningEffort;
+  } = {},
+): ModelInfo {
+  const reasoning = caps.reasoning ?? false;
+  const efforts = caps.efforts ? [...caps.efforts] : reasoning ? [...REASONING_EFFORTS] : [];
   return {
     id,
     name: id,
     contextLength: 100_000,
     supportsTools: caps.tools ?? true,
     supportsImages: caps.images ?? false,
+    supportsReasoning: reasoning,
+    ...(efforts.length > 0 ? { reasoningEfforts: efforts } : {}),
+    ...(caps.defaultEffort !== undefined ? { defaultEffort: caps.defaultEffort } : {}),
     promptPricePerMTok: null,
     completionPricePerMTok: null,
   };

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { createChatBody, sendMessageBody, updateChatBody } from './api';
-import { LIMITS } from './constants';
+import { createChatBody, retryBody, sendMessageBody, updateChatBody, updateSettingsBody } from './api';
+import { LIMITS, REASONING_EFFORTS } from './constants';
 import { ERROR_DEFAULTS, ERROR_STATUS, errorInfo, isApiErrorBody } from './errors';
 
 describe('api schemas', () => {
@@ -44,6 +44,49 @@ describe('api schemas', () => {
 
   it('updateChatBody keeps both fields of a combined body', () => {
     expect(updateChatBody.parse({ projectId: 'p1', archived: true })).toEqual({ projectId: 'p1', archived: true });
+  });
+});
+
+describe('effort (F3)', () => {
+  const send = { text: 'hi', attachmentIds: [], model: 'm' };
+  const sendWith = (effort: unknown) => sendMessageBody.safeParse({ ...send, effort });
+  const retryWith = (effort: unknown) => retryBody.safeParse({ model: 'm', effort });
+  const settingsWith = (lastEffort: unknown) => updateSettingsBody.safeParse({ lastEffort });
+
+  it('rejects values outside the enum in every body, including the wrong case', () => {
+    for (const bad of ['bogus', 'NONE']) {
+      expect(sendWith(bad).success).toBe(false);
+      expect(retryWith(bad).success).toBe(false);
+      expect(settingsWith(bad).success).toBe(false);
+    }
+  });
+
+  it('accepts none and null, and an omitted effort, in sendMessageBody and retryBody', () => {
+    for (const effort of ['none', null]) {
+      expect(sendWith(effort).success).toBe(true);
+      expect(retryWith(effort).success).toBe(true);
+    }
+    expect(sendMessageBody.safeParse(send).success).toBe(true);
+    expect(retryBody.safeParse({ model: 'm' }).success).toBe(true);
+  });
+
+  it('accepts none and null, and an omitted lastEffort, in updateSettingsBody', () => {
+    expect(settingsWith('none').success).toBe(true);
+    expect(settingsWith(null).success).toBe(true);
+    expect(updateSettingsBody.safeParse({}).success).toBe(true);
+  });
+
+  it.each(REASONING_EFFORTS)('accepts every level in the list (%s) in all three bodies', (effort) => {
+    expect(sendWith(effort).success).toBe(true);
+    expect(retryWith(effort).success).toBe(true);
+    expect(settingsWith(effort).success).toBe(true);
+  });
+
+  it('an omitted effort stays absent after parsing, so the loop keeps the stored effort', () => {
+    expect(sendMessageBody.parse(send)).not.toHaveProperty('effort');
+    expect(retryBody.parse({ model: 'm' })).not.toHaveProperty('effort');
+    expect(updateSettingsBody.parse({})).not.toHaveProperty('lastEffort');
+    expect(retryBody.parse({ model: 'm', effort: null }).effort).toBeNull();
   });
 });
 

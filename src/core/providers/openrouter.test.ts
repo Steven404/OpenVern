@@ -165,6 +165,28 @@ describe('request mapping', () => {
     expect(calls[0]?.body.tools).toBeUndefined();
   });
 
+  // ── F3: reasoning effort ──
+  it.each(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const)(
+    'sends reasoning.effort = %s when the request has that effort',
+    async (effort) => {
+      const { provider, calls } = make(() => sseResponse(fixture('text-stream.sse')));
+      await collect(provider, { ...REQ, effort });
+      expect(calls[0]?.body.reasoning).toEqual({ effort });
+    },
+  );
+
+  it('sends no reasoning key at all when the request has no effort (Default)', async () => {
+    const { provider, calls } = make(() => sseResponse(fixture('text-stream.sse')));
+    await collect(provider, REQ);
+    expect(calls[0]?.body).not.toHaveProperty('reasoning');
+  });
+
+  it('sends no reasoning key when effort is null (a cleared setting, cast past the optional type)', async () => {
+    const { provider, calls } = make(() => sseResponse(fixture('text-stream.sse')));
+    await collect(provider, { ...REQ, effort: null as unknown as ProviderRequest['effort'] });
+    expect(calls[0]?.body).not.toHaveProperty('reasoning');
+  });
+
   it('throws no_api_key without calling fetch when there is no key', async () => {
     const { provider, calls } = make(() => sseResponse(''), null);
     const err = await caught(collect(provider));
@@ -475,6 +497,30 @@ describe('error mapping (pre-stream HTTP errors)', () => {
     const err = await caught(collect(provider));
     expect(err.message).toBe('The model provider returned an error: Provider returned error');
   });
+
+  // ── F3: reasoning effort errors ──
+  it('"Reasoning is mandatory" (400) → invalid_request with the effort hint, not retryable', async () => {
+    const { provider } = make(() =>
+      jsonResponse(400, {
+        error: { code: 400, message: 'Reasoning is mandatory for this endpoint and cannot be disabled.' },
+      }),
+    );
+    const err = await caught(collect(provider, { ...REQ, effort: 'none' }));
+    expect(err.code).toBe('invalid_request');
+    expect(err.message).toBe("This model can't turn reasoning off. Pick another effort.");
+    expect(err.retryable).toBe(false);
+    expect(err.status).toBe(400);
+  });
+
+  it('a different 400 that mentions reasoning keeps its own message, not the effort hint', async () => {
+    const { provider } = make(() =>
+      jsonResponse(400, { error: { code: 400, message: 'Invalid reasoning.effort value for this model.' } }),
+    );
+    const err = await caught(collect(provider, { ...REQ, effort: 'low' }));
+    expect(err.code).toBe('invalid_request');
+    expect(err.message).toBe('Invalid reasoning.effort value for this model.');
+    expect(err.message).not.toBe("This model can't turn reasoning off. Pick another effort.");
+  });
 });
 
 // ── S2.6: abort ────────────────────────────────────────────────────────────────────────────────
@@ -662,6 +708,7 @@ describe('listModels', () => {
       contextLength: 1000000,
       supportsTools: true,
       supportsImages: true,
+      supportsReasoning: true,
       promptPricePerMTok: 3,
       completionPricePerMTok: 15,
     });
@@ -685,6 +732,160 @@ describe('listModels', () => {
       promptPricePerMTok: 0,
       completionPricePerMTok: 0,
     });
+  });
+
+  // ── F3: supportsReasoning comes from supported_parameters ──
+  it('mapModels sets supportsReasoning from "reasoning" in supported_parameters', () => {
+    const byId = Object.fromEntries(mapModels(models.data).map((m) => [m.id, m]));
+    expect(byId['anthropic/claude-sonnet-4.5']?.supportsReasoning).toBe(true);
+    expect(byId['deepseek/deepseek-chat-v3.1']?.supportsReasoning).toBe(false);
+    // Lists tools and max_tokens but not reasoning.
+    expect(byId['openrouter/auto']?.supportsReasoning).toBe(false);
+  });
+
+  // ── F3 follow-up: per-model effort levels ──
+  it('mapModels sorts supported_efforts ascending, dedupes and drops unknown levels', () => {
+    const [m] = mapModels([
+      {
+        id: 'a/b',
+        name: 'B',
+        architecture: {},
+        supported_parameters: ['reasoning'],
+        reasoning: { supported_efforts: ['max', 'high', 'bogus', 'low', 'high'], default_effort: 'high' },
+      },
+    ]);
+    expect(m?.reasoningEfforts).toEqual(['low', 'high', 'max']);
+    expect(m?.defaultEffort).toBe('high');
+  });
+
+  it('mapModels omits empty/absent efforts and an unknown default_effort', () => {
+    const [empty, absent, badDefault] = mapModels([
+      {
+        id: 'a/empty',
+        name: 'Empty',
+        architecture: {},
+        supported_parameters: ['reasoning'],
+        reasoning: { supported_efforts: [] },
+      },
+      { id: 'a/absent', name: 'Absent', architecture: {} },
+      {
+        id: 'a/bad-default',
+        name: 'Bad default',
+        architecture: {},
+        supported_parameters: ['reasoning'],
+        reasoning: { supported_efforts: ['none', 'max'], default_effort: 'ultra' },
+      },
+    ]);
+    expect(empty).not.toHaveProperty('reasoningEfforts');
+    expect(absent).not.toHaveProperty('reasoningEfforts');
+    expect(badDefault?.reasoningEfforts).toEqual(['none', 'max']);
+    expect(badDefault).not.toHaveProperty('defaultEffort');
+  });
+
+  it('mapModels keeps a fully descending list ascending and complete (none→max)', () => {
+    const [m] = mapModels([
+      {
+        id: 'a/b',
+        name: 'B',
+        architecture: {},
+        supported_parameters: ['reasoning'],
+        reasoning: { supported_efforts: ['max', 'xhigh', 'high', 'medium', 'minimal', 'low', 'none'] },
+      },
+    ]);
+    expect(m?.reasoningEfforts).toEqual(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+  });
+
+  it('mapModels drops levels of any type that are not known levels, such as "ultra" and 42', () => {
+    const [m, allUnknown] = mapModels([
+      {
+        id: 'a/mixed',
+        name: 'Mixed',
+        architecture: {},
+        supported_parameters: ['reasoning'],
+        reasoning: { supported_efforts: ['ultra', 42, null, {}, 'low', 'extreme'] },
+      },
+      {
+        id: 'a/all-unknown',
+        name: 'All unknown',
+        architecture: {},
+        supported_parameters: ['reasoning'],
+        reasoning: { supported_efforts: ['ultra', 42] },
+      },
+    ]);
+    expect(m?.reasoningEfforts).toEqual(['low']);
+    expect(allUnknown).not.toHaveProperty('reasoningEfforts');
+  });
+
+  it('mapModels gives neither field, and does not throw, for a missing or non-object reasoning value', () => {
+    const list = [
+      { id: 'a/none', name: 'N', architecture: {}, supported_parameters: ['reasoning'] },
+      { id: 'a/string', name: 'S', architecture: {}, supported_parameters: ['reasoning'], reasoning: 'high' },
+      { id: 'a/array', name: 'A', architecture: {}, supported_parameters: ['reasoning'], reasoning: ['high', 'max'] },
+      { id: 'a/null', name: 'U', architecture: {}, supported_parameters: ['reasoning'], reasoning: null },
+      { id: 'a/number', name: 'M', architecture: {}, supported_parameters: ['reasoning'], reasoning: 3 },
+      {
+        id: 'a/string-levels',
+        name: 'T',
+        architecture: {},
+        supported_parameters: ['reasoning'],
+        reasoning: { supported_efforts: 'high' },
+      },
+    ];
+    let out: ReturnType<typeof mapModels> = [];
+    expect(() => {
+      out = mapModels(list);
+    }).not.toThrow();
+    expect(out.map((m) => m.id)).toEqual(['a/none', 'a/string', 'a/array', 'a/null', 'a/number', 'a/string-levels']);
+    for (const m of out) {
+      expect(m).not.toHaveProperty('reasoningEfforts');
+      expect(m).not.toHaveProperty('defaultEffort');
+    }
+  });
+
+  it('mapModels gives no defaultEffort for a non-string or unrecognised default_effort', () => {
+    const defaults: unknown[] = [42, ['high'], null, { level: 'high' }, true, 'HIGH', ''];
+    const out = mapModels(
+      defaults.map((d, i) => ({
+        id: `a/${i}`,
+        name: `N${i}`,
+        architecture: {},
+        supported_parameters: ['reasoning'],
+        reasoning: { supported_efforts: ['low', 'high'], default_effort: d },
+      })),
+    );
+    expect(out).toHaveLength(defaults.length);
+    for (const m of out) {
+      expect(m).not.toHaveProperty('defaultEffort');
+      expect(m.reasoningEfforts).toEqual(['low', 'high']);
+    }
+  });
+
+  it('mapModels gives no effort fields when the model does not list "reasoning" in supported_parameters', () => {
+    const [m] = mapModels([
+      {
+        id: 'a/no-reasoning',
+        name: 'No reasoning',
+        architecture: {},
+        supported_parameters: ['tools', 'max_tokens'],
+        reasoning: { supported_efforts: ['low', 'high'], default_effort: 'high' },
+      },
+    ]);
+    expect(m?.supportsReasoning).toBe(false);
+    expect(m).not.toHaveProperty('reasoningEfforts');
+    expect(m).not.toHaveProperty('defaultEffort');
+  });
+
+  it('mapModels drops "none" when reasoning is mandatory', () => {
+    const [m] = mapModels([
+      {
+        id: 'a/mandatory',
+        name: 'Mandatory',
+        architecture: {},
+        supported_parameters: ['reasoning'],
+        reasoning: { supported_efforts: ['none', 'low', 'high'], mandatory: true },
+      },
+    ]);
+    expect(m?.reasoningEfforts).toEqual(['low', 'high']);
   });
 
   it('does not produce float noise when scaling prices', () => {

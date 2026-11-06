@@ -17,17 +17,21 @@ export function ReplyComposer({ chat }: ReplyComposerProps) {
 function ReplyComposerInner({ chat }: ReplyComposerProps) {
   const deps = useRunDeps();
   const remembered = useRunsStore((s) => s.chatModels[chat.id]);
+  const rememberedEffort = useRunsStore((s) => s.chatEfforts[chat.id]);
   const run = useRunsStore(selectRun(chat.id));
   const send = useRunsStore((s) => s.send);
   const stop = useRunsStore((s) => s.stop);
   const setChatModel = useRunsStore((s) => s.setChatModel);
+  const setChatEffort = useRunsStore((s) => s.setChatEffort);
   const model = remembered ?? chat.model;
+  // F3: the choice is per chat; until it is changed here, the chat's stored effort (the last turn's) applies.
+  const effort = rememberedEffort === undefined ? chat.effort : rememberedEffort;
 
   const onSend = useCallback(
     ({ text, attachments }: ComposerSendInput) => {
-      void send(deps, chat.id, { text, attachments, model });
+      void send(deps, chat.id, { text, attachments, model, effort });
     },
-    [send, deps, chat.id, model],
+    [send, deps, chat.id, model, effort],
   );
 
   return (
@@ -37,6 +41,8 @@ function ReplyComposerInner({ chat }: ReplyComposerProps) {
           variant="reply"
           model={model}
           onModelChange={(id) => setChatModel(chat.id, id)}
+          effort={effort}
+          onEffortChange={(next) => setChatEffort(chat.id, next)}
           projectId={chat.projectId}
           running={run?.status === 'running'}
           busy={run?.status === 'settling'}

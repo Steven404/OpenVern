@@ -26,7 +26,7 @@ export function installDomStubs() {
 }
 
 export function resetStores() {
-  useRunsStore.setState({ runs: {}, chatModels: {} });
+  useRunsStore.setState({ runs: {}, chatModels: {}, chatEfforts: {} });
   useUiStore.setState({ settingsOpen: false, newProjectOpen: false });
 }
 

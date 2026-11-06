@@ -1,5 +1,5 @@
 import { IMAGE_ACCEPT, TEXT_ACCEPT } from '@shared/constants';
-import type { AttachmentRef, Id } from '@shared/types';
+import type { AttachmentRef, Id, ReasoningEffort } from '@shared/types';
 import { useQueryClient } from '@tanstack/react-query';
 import { ArrowUp, Square } from 'lucide-react';
 import {
@@ -21,6 +21,7 @@ import { useUiStore } from '../../stores/ui';
 import { AttachMenu } from './AttachMenu';
 import { ComposerAttachmentChips } from './AttachmentChips';
 import { IMAGE_UNSUPPORTED_MESSAGE, registerAttachmentSink, useDraftAttachments } from './attachments';
+import { EffortPicker } from './EffortPicker';
 import { ModelPicker } from './ModelPicker';
 import { useModels, useSettings } from './queries';
 
@@ -36,6 +37,9 @@ export interface ComposerProps {
   /** Selected model id. */
   model: string;
   onModelChange: (id: string) => void;
+  /** F3: reasoning effort for this composer; `null` = Default. */
+  effort: ReasoningEffort | null;
+  onEffortChange: (effort: ReasoningEffort | null) => void;
   /** Project the message will belong to (drives the "can't use tools" notice). */
   projectId: Id | null;
   /** A stream is open: the send button becomes Stop. */
@@ -61,6 +65,8 @@ export function Composer({
   variant,
   model,
   onModelChange,
+  effort,
+  onEffortChange,
   projectId,
   running = false,
   busy = false,
@@ -84,6 +90,11 @@ export function Composer({
   // Unknown capabilities (list not loaded yet): do not block; the server still validates.
   const supportsImages = info ? info.supportsImages : true;
   const supportsTools = info ? info.supportsTools : true;
+  // F3 follow-up: the picker only makes sense for a model that publishes the levels it accepts. Missing/empty
+  // means no picker, and any stored effort behaves as Default.
+  const efforts = info?.reasoningEfforts ?? [];
+  const showEffortPicker = efforts.length > 0;
+  const effectiveEffort = effort !== null && efforts.includes(effort) ? effort : null;
   const accept = supportsImages ? `${TEXT_ACCEPT},${IMAGE_ACCEPT}` : TEXT_ACCEPT;
 
   const [text, setText] = useState('');
@@ -172,6 +183,15 @@ export function Composer({
       .catch(() => {});
   };
 
+  // F3.4: `lastEffort` is remembered for new chats wherever `lastModel` is (picking an effort).
+  const changeEffort = (next: ReasoningEffort | null) => {
+    onEffortChange(next);
+    api
+      .updateSettings({ lastEffort: next })
+      .then((s) => queryClient.setQueryData(queryKeys.settings, s))
+      .catch(() => {});
+  };
+
   const modelsError =
     modelsQuery.error && !noKey
       ? modelsQuery.error instanceof Error && modelsQuery.error.message
@@ -225,6 +245,14 @@ export function Composer({
           />
           {projectSlot}
           <span className="flex-1" />
+          {showEffortPicker && !noKey && (
+            <EffortPicker
+              value={effectiveEffort}
+              efforts={efforts}
+              defaultEffort={info?.defaultEffort}
+              onChange={changeEffort}
+            />
+          )}
           <ModelPicker
             value={model}
             models={modelsQuery.data}

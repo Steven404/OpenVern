@@ -20,6 +20,7 @@ import type {
   ProjectFileTree,
   ProjectListItem,
   PublicSettings,
+  ReasoningEffort,
 } from '@shared/types';
 import type { Provider } from './providers/types';
 import type { ToolChanges } from './tools/types';
@@ -49,7 +50,7 @@ export interface SettingsService {
   /** Stores only; the route validates the key with the provider first. */
   setApiKey(apiKey: string): Promise<PublicSettings>;
   clearApiKey(): Promise<PublicSettings>;
-  update(patch: { lastModel?: string }): Promise<PublicSettings>;
+  update(patch: { lastModel?: string; lastEffort?: ReasoningEffort | null }): Promise<PublicSettings>;
 }
 
 export interface ProjectsService {
@@ -75,13 +76,19 @@ export interface ChatsService {
   /** Title `NEW_CHAT_TITLE`, no messages. Throws `not_found` if `projectId` is unknown. */
   create(input: { projectId: Id | null; model: string }): Promise<Chat>;
   /**
-   * Bumps `updatedAt` only when `model` changes (renames, moves and archive changes don't reorder the sidebar).
-   * `archived` applies to any chat, in a project or not. Only `archived` changes the flag: moving a chat between
-   * projects, or to and from `projectId: null`, keeps it.
+   * Bumps `updatedAt` only when `model` or `effort` changes (renames, moves and archive changes don't reorder the
+   * sidebar). `archived` applies to any chat, in a project or not. Only `archived` changes the flag: moving a chat
+   * between projects, or to and from `projectId: null`, keeps it.
    */
   update(
     id: Id,
-    patch: { title?: string; projectId?: Id | null; model?: string; archived?: boolean },
+    patch: {
+      title?: string;
+      projectId?: Id | null;
+      model?: string;
+      archived?: boolean;
+      effort?: ReasoningEffort | null;
+    },
   ): Promise<ChatSummary>;
   /** Deletes the chat file and its index entry (attachments are removed by the caller). */
   remove(id: Id): Promise<void>;
@@ -131,6 +138,8 @@ export interface RunTurnInput {
   /** Absent = retry (truncate after the last user message, then rerun). */
   newUserMessage?: { text: string; attachmentIds: Id[] };
   model: string;
+  /** F3: omitted = the chat's stored effort. `null` = Default (no `reasoning` field sent). */
+  effort?: ReasoningEffort | null;
   signal: AbortSignal;
   /** Awaited by the agent (back-pressure for SSE writes). Must not throw. */
   emit: (event: AgentEvent) => void | Promise<void>;

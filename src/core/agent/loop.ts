@@ -94,6 +94,7 @@ export function toChatSummary(chat: ChatSummary | Chat): ChatSummary {
     updatedAt: chat.updatedAt,
     archived: chat.archived,
     usage: chat.usage,
+    effort: chat.effort,
   };
 }
 
@@ -206,9 +207,22 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
       await chats.update(chatId, { model });
       state.modified = true;
     }
+    // F3: the body's effort wins; omitted = the chat's stored effort (a retry keeps it). Stored even when the model
+    // doesn't support reasoning: it is only dropped from the request (plan §2).
+    const effort = input.effort === undefined ? chat.effort : input.effort;
+    if (chat.effort !== effort) {
+      await chats.update(chatId, { effort });
+      state.modified = true;
+    }
 
     // Context for the requests.
+    // F3 follow-up: only send a level the model actually publishes. Default (`null`), a model with no published
+    // levels, or one that does not list this level all send no `reasoning` field; the chat still stores the choice.
     const modelInfo = await models.get(model);
+    const reasoningEffort =
+      modelInfo.supportsReasoning === true && effort !== null && modelInfo.reasoningEfforts?.includes(effort)
+        ? effort
+        : undefined;
     let project: Project | undefined;
     if (chat.projectId) {
       try {
@@ -288,7 +302,13 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
 
       try {
         const stream = provider.stream(
-          { model, system, messages: history, ...(toolSpecs.length > 0 ? { tools: toolSpecs } : {}) },
+          {
+            model,
+            system,
+            messages: history,
+            ...(toolSpecs.length > 0 ? { tools: toolSpecs } : {}),
+            ...(reasoningEffort !== undefined ? { effort: reasoningEffort } : {}),
+          },
           signal,
         );
         for await (const ev of stream) {

@@ -22,7 +22,7 @@ export interface FakeProviderOptions {
 }
 
 export interface FakeProvider extends Provider {
-  /** Requests received by `stream()`, in order. */
+  /** Requests received by `stream()`, in order. Each keeps the `effort` (F3) and `maxTokens` it was given. */
   readonly calls: ProviderRequest[];
 }
 

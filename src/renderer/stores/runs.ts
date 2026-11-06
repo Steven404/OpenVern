@@ -15,6 +15,7 @@ import type {
   ChatUsage,
   Id,
   Message,
+  ReasoningEffort,
   UserMessage,
 } from '@shared/types';
 import type { QueryClient } from '@tanstack/react-query';
@@ -30,6 +31,8 @@ export interface UnsentMessage {
   text: string;
   attachments: AttachmentRef[];
   model: string;
+  /** F3: omitted = keep the chat's stored effort. */
+  effort?: ReasoningEffort | null;
 }
 
 export interface RunState {
@@ -179,6 +182,8 @@ export interface SendInput {
   text: string;
   attachments: AttachmentRef[];
   model: string;
+  /** F3: omitted = keep the chat's stored effort (`null` = Default). */
+  effort?: ReasoningEffort | null;
 }
 
 export interface RunsState {
@@ -186,13 +191,16 @@ export interface RunsState {
   /** Model last chosen in each chat's composer (survives navigation; `retry` uses it). */
   chatModels: Record<Id, string>;
   setChatModel(chatId: Id, model: string): void;
+  /** F3: effort last chosen in each chat's composer (survives navigation; `retry` uses it). */
+  chatEfforts: Record<Id, ReasoningEffort | null>;
+  setChatEffort(chatId: Id, effort: ReasoningEffort | null): void;
   /**
    * Starts a run with a new user message. Resolves when the run has ended and the chat was refetched; never
    * rejects (failures become `run.error`). Ignored while a run is active for the chat.
    */
   send(deps: RunDeps, chatId: Id, input: SendInput): Promise<void>;
   /** Re-runs the last user message (after an error or a stop); resends the typed text if it never persisted. */
-  retry(deps: RunDeps, chatId: Id, model: string): Promise<void>;
+  retry(deps: RunDeps, chatId: Id, model: string, effort?: ReasoningEffort | null): Promise<void>;
   /** Aborts the fetch; the server saves the partial reply as `stopped`. */
   stop(chatId: Id): void;
   /** Hides the run-level error card. */
@@ -339,6 +347,8 @@ export const useRunsStore = create<RunsState>()((set, get) => {
     runs: {},
     chatModels: {},
     setChatModel: (chatId, model) => set((s) => ({ chatModels: { ...s.chatModels, [chatId]: model } })),
+    chatEfforts: {},
+    setChatEffort: (chatId, effort) => set((s) => ({ chatEfforts: { ...s.chatEfforts, [chatId]: effort } })),
 
     async send(deps, chatId, input) {
       if (isActive(chatId)) return;
@@ -352,16 +362,22 @@ export const useRunsStore = create<RunsState>()((set, get) => {
       const usageBefore = cachedUsage(deps.queryClient, chatId);
       const { token, controller } = start(chatId, (t) => createRun(t, pending, input, usageBefore));
       get().setChatModel(chatId, input.model);
+      if (input.effort !== undefined) get().setChatEffort(chatId, input.effort);
       await consume(deps, chatId, token, controller, () =>
         deps.api.sendMessage(
           chatId,
-          { text: input.text, attachmentIds: input.attachments.map((a) => a.id), model: input.model },
+          {
+            text: input.text,
+            attachmentIds: input.attachments.map((a) => a.id),
+            model: input.model,
+            ...(input.effort !== undefined ? { effort: input.effort } : {}),
+          },
           controller.signal,
         ),
       );
     },
 
-    async retry(deps, chatId, model) {
+    async retry(deps, chatId, model, effort) {
       if (isActive(chatId)) return;
       const unsent = get().runs[chatId]?.unsent;
       if (unsent) {
@@ -369,7 +385,11 @@ export const useRunsStore = create<RunsState>()((set, get) => {
           const { [chatId]: _old, ...rest } = s.runs;
           return { runs: rest };
         });
-        return get().send(deps, chatId, { ...unsent, model });
+        return get().send(deps, chatId, {
+          ...unsent,
+          model,
+          ...(effort !== undefined ? { effort } : {}),
+        });
       }
       const usageBefore = cachedUsage(deps.queryClient, chatId);
       // The server drops the trailing assistant/tool messages; mirror that in the cache straight away.
@@ -380,7 +400,10 @@ export const useRunsStore = create<RunsState>()((set, get) => {
       });
       const { token, controller } = start(chatId, (t) => createRun(t, undefined, undefined, usageBefore));
       get().setChatModel(chatId, model);
-      await consume(deps, chatId, token, controller, () => deps.api.retry(chatId, { model }, controller.signal));
+      if (effort !== undefined) get().setChatEffort(chatId, effort);
+      await consume(deps, chatId, token, controller, () =>
+        deps.api.retry(chatId, { model, ...(effort !== undefined ? { effort } : {}) }, controller.signal),
+      );
     },
 
     stop(chatId) {

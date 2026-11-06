@@ -1,5 +1,7 @@
 // App-wide constants (plan §4.5).
 
+import type { ReasoningEffort } from './types';
+
 export const APP_NAME = 'OpenVern';
 /** Lower-case form for paths, the protocol host, storage keys and env vars. */
 export const APP_SLUG = 'openvern';
@@ -10,6 +12,25 @@ export const NEW_CHAT_TITLE = 'New chat';
 export const MAX_AGENT_STEPS = 25; // model calls per user turn
 /** F1: OpenRouter is the only provider; the Context popover shows this label. */
 export const PROVIDER_LABEL = 'OpenRouter';
+
+/** F3: every level OpenRouter offers, weakest first. `null` (= Default) is not in the list. */
+export const REASONING_EFFORTS = [
+  'none',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+] as const satisfies readonly ReasoningEffort[];
+
+/**
+ * Compile-time check that the list above covers every `ReasoningEffort`: the argument resolves to `never` only
+ * when nothing is missing, so adding a level to `ReasoningEffort` fails typecheck here until it is listed too.
+ * Type-only: nothing is added at runtime.
+ */
+type AssertNever<T extends never> = T;
+export type AllReasoningEffortsListed = AssertNever<Exclude<ReasoningEffort, (typeof REASONING_EFFORTS)[number]>>;
 
 export const LIMITS = {
   attachmentsPerMessage: 10,

@@ -1,4 +1,5 @@
-// SettingsService (plan S1.4): `settings.json` for `lastModel`, the API key goes through the `SecretStore`.
+// SettingsService (plan S1.4): `settings.json` for `lastModel` / `lastEffort`, the API key goes through the
+// `SecretStore`.
 
 import type { PublicSettings } from '@shared/types';
 import { CoreError } from '../errors';
@@ -34,6 +35,7 @@ export function createSettingsService(opts: SettingsServiceOptions): SettingsSer
     return {
       openRouter: { configured: key !== null && key !== '', keyHint: key ? keyHint(key) : null },
       lastModel: stored?.lastModel ?? null,
+      lastEffort: stored?.lastEffort ?? null,
     };
   }
 
@@ -58,9 +60,12 @@ export function createSettingsService(opts: SettingsServiceOptions): SettingsSer
     },
 
     async update(patch) {
-      if (patch.lastModel !== undefined) {
-        const lastModel = patch.lastModel;
-        await file.update((current) => ({ version: 1, ...current, lastModel }));
+      if (patch.lastModel !== undefined || patch.lastEffort !== undefined) {
+        await file.update((current) => ({
+          version: 1,
+          lastModel: patch.lastModel !== undefined ? patch.lastModel : (current?.lastModel ?? null),
+          lastEffort: patch.lastEffort !== undefined ? patch.lastEffort : (current?.lastEffort ?? null),
+        }));
       }
       return snapshot();
     },

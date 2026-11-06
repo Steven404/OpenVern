@@ -6,10 +6,10 @@
 //  - Pre-stream failures are JSON `{ error: { code: <http status>, message, metadata? } }` with that HTTP status.
 //  - Reasoning arrives in `delta.reasoning_details` and must be passed back unmodified as `reasoning_details`.
 
-import { APP_NAME } from '@shared/constants';
+import { APP_NAME, REASONING_EFFORTS } from '@shared/constants';
 import { ERROR_DEFAULTS, type ErrorCode } from '@shared/errors';
 import { readSSE } from '@shared/sse';
-import type { ModelInfo, ToolCall, Usage } from '@shared/types';
+import type { ModelInfo, ReasoningEffort, ToolCall, Usage } from '@shared/types';
 import { authorFromSlug, splitModelName } from './models';
 import {
   type ContentPart,
@@ -48,6 +48,9 @@ const NO_TOOLS_RE = /no endpoints found.*(tool|function)/i;
 const NO_IMAGES_RE = /no endpoints found.*(image|vision|multimodal)/i;
 const MODEL_RE =
   /no endpoints found|not a valid model|model.{0,40}(not found|does not exist|not available|unavailable)|no allowed providers/i;
+/** F3: `effort: 'none'` on a model whose endpoint requires reasoning. */
+const REASONING_MANDATORY_RE = /reasoning is mandatory|reasoning.{0,40}(cannot|can't|can not) be disabled/i;
+const REASONING_MANDATORY_MESSAGE = "This model can't turn reasoning off. Pick another effort.";
 
 function providerError(code: ErrorCode, status: number | undefined, detail?: string, retryable?: boolean) {
   const d = ERROR_DEFAULTS[code];
@@ -67,6 +70,8 @@ export function mapOpenRouterError(h: ErrorHints): ProviderError {
   if (status === 429 || errorType === 'rate_limit_exceeded') return providerError('rate_limited', status);
   if (NO_TOOLS_RE.test(text)) return providerError('model_no_tools', status);
   if (NO_IMAGES_RE.test(text)) return providerError('model_no_image_input', status);
+  if (REASONING_MANDATORY_RE.test(text))
+    return new ProviderError('invalid_request', REASONING_MANDATORY_MESSAGE, false, status);
   if (CONTEXT_RE.test(text)) return providerError('context_length_exceeded', status);
   if (status === 404 || MODEL_RE.test(text)) return providerError('model_unavailable', status);
   if (status === 403) return providerError('provider_error', status, h.message, false);
@@ -307,6 +312,7 @@ interface WireModel {
   architecture?: { input_modalities?: unknown; output_modalities?: unknown };
   supported_parameters?: unknown;
   top_provider?: { context_length?: unknown };
+  reasoning?: { supported_efforts?: unknown; default_effort?: unknown; mandatory?: unknown };
 }
 
 /** Per-token USD string → USD per million tokens. Missing, non-numeric or negative (router pseudo-prices) → null. */
@@ -320,6 +326,22 @@ function perMTok(v: unknown): number | null {
 const strArray = (v: unknown): string[] =>
   Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
 
+const EFFORT_SET: ReadonlySet<string> = new Set(REASONING_EFFORTS);
+
+/**
+ * `reasoning.supported_efforts` → known levels only, deduped, in `REASONING_EFFORTS` order. OpenRouter sends them
+ * descending; the UI and `ModelInfo` expect ascending (none→max).
+ */
+function mapEfforts(v: unknown): ReasoningEffort[] {
+  const given = new Set(strArray(v));
+  return REASONING_EFFORTS.filter((effort) => given.has(effort));
+}
+
+/** `reasoning.default_effort` → the level when it is one we know, else undefined. */
+function mapEffort(v: unknown): ReasoningEffort | undefined {
+  return typeof v === 'string' && EFFORT_SET.has(v) ? (v as ReasoningEffort) : undefined;
+}
+
 export function mapModels(data: unknown): ModelInfo[] {
   if (!Array.isArray(data)) {
     throw new ProviderError('provider_error', 'OpenRouter returned an unexpected model list.', true);
@@ -332,6 +354,15 @@ export function mapModels(data: unknown): ModelInfo[] {
     if (!outputs.includes('text')) continue;
     const ctx = m.context_length ?? m.top_provider?.context_length;
     const name = typeof m.name === 'string' && m.name !== '' ? m.name : m.id;
+    const supportsReasoning = strArray(m.supported_parameters).includes('reasoning');
+    // F3 follow-up: levels only mean something for a model that reasons. A mandatory-reasoning model cannot turn
+    // reasoning off, so `none` is not a level it accepts.
+    const efforts = supportsReasoning
+      ? mapEfforts(m.reasoning?.supported_efforts).filter(
+          (effort) => !(m.reasoning?.mandatory === true && effort === 'none'),
+        )
+      : [];
+    const defaultEffort = supportsReasoning ? mapEffort(m.reasoning?.default_effort) : undefined;
     out.push({
       id: m.id,
       name,
@@ -340,6 +371,9 @@ export function mapModels(data: unknown): ModelInfo[] {
       contextLength: typeof ctx === 'number' && Number.isFinite(ctx) ? ctx : null,
       supportsTools: strArray(m.supported_parameters).includes('tools'),
       supportsImages: strArray(m.architecture?.input_modalities).includes('image'),
+      supportsReasoning,
+      ...(efforts.length > 0 ? { reasoningEfforts: efforts } : {}),
+      ...(defaultEffort !== undefined ? { defaultEffort } : {}),
       promptPricePerMTok: perMTok(m.pricing?.prompt),
       completionPricePerMTok: perMTok(m.pricing?.completion),
     });
@@ -423,6 +457,9 @@ export function createOpenRouterProvider(opts: OpenRouterOptions): Provider {
       };
       if (req.tools && req.tools.length > 0) body.tools = mapTools(req.tools);
       if (req.maxTokens !== undefined) body.max_tokens = req.maxTokens;
+      // F3: only when an effort was chosen for a reasoning model; Default (`null` / omitted) sends no
+      // `reasoning` field at all. `!= null` also covers a `null` that slipped past the optional type.
+      if (req.effort != null) body.reasoning = { effort: req.effort };
 
       const res = await request(
         `${OPENROUTER_BASE_URL}/chat/completions`,

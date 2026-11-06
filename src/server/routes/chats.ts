@@ -132,6 +132,7 @@ export function chatRoutes(core: Core): Hono {
       chatId,
       model: body.model,
       newUserMessage: { text: body.text, attachmentIds: body.attachmentIds },
+      effort: body.effort,
       release,
     });
   });
@@ -143,7 +144,7 @@ export function chatRoutes(core: Core): Hono {
     if (!chat.messages.some((m) => m.role === 'user'))
       throw new CoreError('invalid_request', 'There is no message to retry in this chat.');
     const release = claim(chatId);
-    return streamTurn(c, core, { chatId, model: body.model, release });
+    return streamTurn(c, core, { chatId, model: body.model, effort: body.effort, release });
   });
 
   r.get(ROUTES.chatChanges, async (c) => {

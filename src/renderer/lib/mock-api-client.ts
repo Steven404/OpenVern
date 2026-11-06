@@ -24,6 +24,7 @@ import type {
   ProjectFileTree,
   ProjectListItem,
   PublicSettings,
+  ReasoningEffort,
   ToolCall,
   ToolMessage,
   Usage,
@@ -101,6 +102,7 @@ export class MockApiClient implements ApiClient {
   private readonly delayMs: number;
   private apiKey: string | null;
   private lastModel: string | null = null;
+  private lastEffort: ReasoningEffort | null = null;
   private projects: Project[] = [];
   private chats: Chat[] = [];
   private attachments = new Map<Id, StoredAttachment>();
@@ -122,6 +124,7 @@ export class MockApiClient implements ApiClient {
     return {
       openRouter: { configured: k !== null, keyHint: k ? `${k.slice(0, 9)}…${k.slice(-4)}` : null },
       lastModel: this.lastModel,
+      lastEffort: this.lastEffort,
     };
   }
 
@@ -141,8 +144,9 @@ export class MockApiClient implements ApiClient {
     this.apiKey = null;
     return this.publicSettings();
   }
-  async updateSettings(patch: { lastModel?: string }) {
+  async updateSettings(patch: { lastModel?: string; lastEffort?: ReasoningEffort | null }) {
     if (patch.lastModel !== undefined) this.lastModel = patch.lastModel;
+    if (patch.lastEffort !== undefined) this.lastEffort = patch.lastEffort;
     return this.publicSettings();
   }
   async listModels(): Promise<ModelInfo[]> {
@@ -216,6 +220,7 @@ export class MockApiClient implements ApiClient {
       updatedAt: t,
       archived: false,
       usage: { ...EMPTY_USAGE },
+      effort: null,
       messages: [],
     };
     this.chats.push(chat);
@@ -252,16 +257,21 @@ export class MockApiClient implements ApiClient {
 
   // ── streaming ─────────────────────────────────────────────────────────────
 
-  sendMessage(chatId: Id, input: { text: string; attachmentIds: Id[]; model: string }, signal: AbortSignal) {
-    return this.run(chatId, input.model, signal, input);
+  sendMessage(
+    chatId: Id,
+    input: { text: string; attachmentIds: Id[]; model: string; effort?: ReasoningEffort | null },
+    signal: AbortSignal,
+  ) {
+    return this.run(chatId, input.model, input.effort, signal, input);
   }
-  retry(chatId: Id, input: { model: string }, signal: AbortSignal) {
-    return this.run(chatId, input.model, signal);
+  retry(chatId: Id, input: { model: string; effort?: ReasoningEffort | null }, signal: AbortSignal) {
+    return this.run(chatId, input.model, input.effort, signal);
   }
 
   private async *run(
     chatId: Id,
     model: string,
+    effortInput: ReasoningEffort | null | undefined,
     signal: AbortSignal,
     input?: { text: string; attachmentIds: Id[] },
   ): AsyncIterable<AgentEvent> {
@@ -271,6 +281,8 @@ export class MockApiClient implements ApiClient {
     if (this.running.has(chatId)) fail('conflict', 409, 'A reply is already in progress.');
     if (!this.apiKey) fail('no_api_key', 400);
     const info = SAMPLE_MODELS.find((m) => m.id === model);
+    // F3: the body's effort wins; omitted = the chat's stored effort.
+    const effort = effortInput === undefined ? chat.effort : effortInput;
     const refs = (input?.attachmentIds ?? []).map(
       (id) => this.attachments.get(id)?.ref ?? fail('not_found', 404, 'Attachment not found.'),
     );
@@ -422,6 +434,7 @@ export class MockApiClient implements ApiClient {
 
       if (signal.aborted) stopRun();
       chat.model = model;
+      chat.effort = effort;
       chat.updatedAt = now();
       if (chat.title === NEW_CHAT_TITLE) {
         const first = chat.messages.find((m): m is UserMessage => m.role === 'user');
@@ -603,6 +616,7 @@ export class MockApiClient implements ApiClient {
         updatedAt: minutesAgo(age),
         archived: false,
         usage: { ...EMPTY_USAGE },
+        effort: null,
         messages,
       };
     };
