@@ -284,7 +284,7 @@ describe('NewChatScreen', () => {
     expect(await screen.findByRole('button', { name: 'Effort: High' })).toBeTruthy();
   });
 
-  it('the first send on such a model carries no level, and the new chat is created without touching lastEffort', async () => {
+  it('the first send on such a model carries the raw choice, and the new chat is created without touching lastEffort', async () => {
     const api = new MockApiClient({ delayMs: 0 });
     await api.updateSettings({ lastEffort: 'high' });
     const lowMax: ModelInfo = {
@@ -311,8 +311,9 @@ describe('NewChatScreen', () => {
     fireEvent.keyDown(textarea(), { key: 'Enter' });
     await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
     expect(send.mock.calls[0]?.[1]).toMatchObject({ model: 'test/low-max' });
-    expect(send.mock.calls[0]?.[1]).toHaveProperty('effort', null);
+    expect(send.mock.calls[0]?.[1]).toHaveProperty('effort', 'high');
     const chatId = send.mock.calls[0]?.[0] ?? '';
+    expect(useRunsStore.getState().chatEfforts[chatId]).toBe('high');
     await waitFor(() => expect(useRunsStore.getState().runs[chatId]).toBeUndefined());
     expect(update.mock.calls.filter(([patch]) => 'lastEffort' in patch)).toEqual([]);
     expect((await api.getSettings()).lastEffort).toBe('high');

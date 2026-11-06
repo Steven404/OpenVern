@@ -304,4 +304,24 @@ describe('createModelCatalog: cache format version and effort fields (F3 follow-
     // A model with no effort fields at all is untouched.
     expect(b).toEqual(B);
   });
+
+  it('a cached model with effort fields but supportsReasoning false or absent loads without them', async () => {
+    await writeCacheFile({
+      version: 2,
+      fetchedAt: iso(),
+      models: [
+        { ...A, id: 'x/false', supportsReasoning: false, reasoningEfforts: ['low', 'high'], defaultEffort: 'high' },
+        { ...A, id: 'x/absent', reasoningEfforts: ['low', 'high'], defaultEffort: 'high' },
+      ],
+    });
+    const p = fakeProvider([new ProviderError('no_api_key', 'no key')]);
+    const list = await createModelCatalog({ provider: p.provider, cacheFile, now }).list();
+    expect(p.calls).toBe(0);
+    const [noReasoning, absent] = list;
+    expect(noReasoning).toMatchObject({ id: 'x/false', supportsReasoning: false });
+    expect(noReasoning).not.toHaveProperty('reasoningEfforts');
+    expect(noReasoning).not.toHaveProperty('defaultEffort');
+    expect(absent).not.toHaveProperty('reasoningEfforts');
+    expect(absent).not.toHaveProperty('defaultEffort');
+  });
 });

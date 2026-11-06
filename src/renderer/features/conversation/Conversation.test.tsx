@@ -1,6 +1,7 @@
 import { TREE_UNAVAILABLE_NOTICE } from '@shared/constants';
 import { errorInfo } from '@shared/errors';
-import type { AssistantMessage, Chat, Message, ToolMessage, UserMessage } from '@shared/types';
+import { SAMPLE_MODELS } from '@shared/sample-data';
+import type { AssistantMessage, Chat, Message, ModelInfo, ToolMessage, UserMessage } from '@shared/types';
 import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MockApiClient } from '../../lib/mock-api-client';
@@ -347,6 +348,27 @@ describe('Conversation run overlay', () => {
       fireEvent.click(within(card).getByRole('button', { name: 'Retry' }));
     });
     expect(retry.mock.calls[0]?.[1]).toEqual({ model: chat.model, effort: 'low' });
+    await waitFor(() => expect(screen.queryByTestId('error-card')).toBeNull());
+  });
+
+  it('a retry on a model that does not list the chat effort passes the raw effort', async () => {
+    const { api, chat } = await seededChat();
+    const full = await api.getChat(chat.id);
+    const retry = vi.spyOn(api, 'retry');
+    // The model publishes low/max only, so the picker would show Default for the stored high.
+    vi.spyOn(api, 'listModels').mockResolvedValue([
+      { ...(SAMPLE_MODELS[0] as ModelInfo), id: chat.model, reasoningEfforts: ['low', 'max'] },
+    ]);
+    useRunsStore.setState({
+      chatEfforts: { [chat.id]: 'high' },
+      runs: { [chat.id]: { ...createRun(1), status: 'idle', error: errorInfo('provider_error') } },
+    });
+    renderWithProviders(<Conversation chatId={chat.id} />, { api, chats: [{ ...full, effort: 'low' }] });
+    const card = await screen.findByTestId('error-card');
+    await act(async () => {
+      fireEvent.click(within(card).getByRole('button', { name: 'Retry' }));
+    });
+    expect(retry.mock.calls[0]?.[1]).toEqual({ model: chat.model, effort: 'high' });
     await waitFor(() => expect(screen.queryByTestId('error-card')).toBeNull());
   });
 

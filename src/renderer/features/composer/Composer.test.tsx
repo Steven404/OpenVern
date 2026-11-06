@@ -661,9 +661,13 @@ describe('effort picker per model (F3 follow-up)', () => {
     withModels(api, [customModel('test/low-max', 'Test: Low and Max', { reasoningEfforts: ['low', 'max'] })]);
     renderWithProviders(<ReplyComposer chat={{ ...chat, effort: 'high' }} />, { api });
     expect(await screen.findByRole('button', { name: 'Effort: Default' })).toBeTruthy();
+    openEffortMenu();
+    const items = await screen.findAllByRole('menuitemradio');
+    expect(items[0]?.getAttribute('aria-checked')).toBe('true');
+    for (const item of items.slice(1)) expect(item.getAttribute('aria-checked')).toBe('false');
   });
 
-  it('switching to a model without the chosen level shows Default and sends none; switching back shows the choice again', async () => {
+  it('shows Default, sends the raw choice', async () => {
     const { api, chat } = await setup();
     withModels(api, [customModel('test/low-max', 'Test: Low and Max', { reasoningEfforts: ['low', 'max'] })]);
     const send = vi.spyOn(api, 'sendMessage');
@@ -680,7 +684,7 @@ describe('effort picker per model (F3 follow-up)', () => {
     fireEvent.keyDown(textarea(), { key: 'Enter' });
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0]?.[1]).toMatchObject({ model: 'test/low-max' });
-    expect(send.mock.calls[0]?.[1]).toHaveProperty('effort', null);
+    expect(send.mock.calls[0]?.[1]).toHaveProperty('effort', 'high');
     await waitForIdle(chat.id);
 
     await pickModel(VISION);

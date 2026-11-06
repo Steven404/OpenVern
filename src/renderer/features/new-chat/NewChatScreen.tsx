@@ -46,14 +46,7 @@ export function NewChatScreen() {
   const model = picked ?? resolveDefaultModel(settings.data?.lastModel, modelsQuery.data);
   // F3: a new chat starts from `lastEffort`, until the picker is used here.
   const [pickedEffort, setPickedEffort] = useState<ReasoningEffort | null | undefined>(undefined);
-  const requestedEffort = pickedEffort === undefined ? (settings.data?.lastEffort ?? null) : pickedEffort;
-  // F3 follow-up: an effort the selected model does not publish behaves as Default. `lastEffort` itself is left
-  // alone (only `changeEffort` writes it); this is just what the composer shows and sends.
-  const modelInfo = modelsQuery.data?.find((m) => m.id === model);
-  const effort =
-    modelInfo && requestedEffort !== null && !modelInfo.reasoningEfforts?.includes(requestedEffort)
-      ? null
-      : requestedEffort;
+  const effort = pickedEffort === undefined ? (settings.data?.lastEffort ?? null) : pickedEffort;
 
   const onProjectChange = useCallback(
     (id: string | null) => {

@@ -750,6 +750,7 @@ describe('listModels', () => {
         id: 'a/b',
         name: 'B',
         architecture: {},
+        supported_parameters: ['reasoning'],
         reasoning: { supported_efforts: ['max', 'high', 'bogus', 'low', 'high'], default_effort: 'high' },
       },
     ]);
@@ -759,12 +760,19 @@ describe('listModels', () => {
 
   it('mapModels omits empty/absent efforts and an unknown default_effort', () => {
     const [empty, absent, badDefault] = mapModels([
-      { id: 'a/empty', name: 'Empty', architecture: {}, reasoning: { supported_efforts: [] } },
+      {
+        id: 'a/empty',
+        name: 'Empty',
+        architecture: {},
+        supported_parameters: ['reasoning'],
+        reasoning: { supported_efforts: [] },
+      },
       { id: 'a/absent', name: 'Absent', architecture: {} },
       {
         id: 'a/bad-default',
         name: 'Bad default',
         architecture: {},
+        supported_parameters: ['reasoning'],
         reasoning: { supported_efforts: ['none', 'max'], default_effort: 'ultra' },
       },
     ]);
@@ -780,6 +788,7 @@ describe('listModels', () => {
         id: 'a/b',
         name: 'B',
         architecture: {},
+        supported_parameters: ['reasoning'],
         reasoning: { supported_efforts: ['max', 'xhigh', 'high', 'medium', 'minimal', 'low', 'none'] },
       },
     ]);
@@ -792,9 +801,16 @@ describe('listModels', () => {
         id: 'a/mixed',
         name: 'Mixed',
         architecture: {},
+        supported_parameters: ['reasoning'],
         reasoning: { supported_efforts: ['ultra', 42, null, {}, 'low', 'extreme'] },
       },
-      { id: 'a/all-unknown', name: 'All unknown', architecture: {}, reasoning: { supported_efforts: ['ultra', 42] } },
+      {
+        id: 'a/all-unknown',
+        name: 'All unknown',
+        architecture: {},
+        supported_parameters: ['reasoning'],
+        reasoning: { supported_efforts: ['ultra', 42] },
+      },
     ]);
     expect(m?.reasoningEfforts).toEqual(['low']);
     expect(allUnknown).not.toHaveProperty('reasoningEfforts');
@@ -802,12 +818,18 @@ describe('listModels', () => {
 
   it('mapModels gives neither field, and does not throw, for a missing or non-object reasoning value', () => {
     const list = [
-      { id: 'a/none', name: 'N', architecture: {} },
-      { id: 'a/string', name: 'S', architecture: {}, reasoning: 'high' },
-      { id: 'a/array', name: 'A', architecture: {}, reasoning: ['high', 'max'] },
-      { id: 'a/null', name: 'U', architecture: {}, reasoning: null },
-      { id: 'a/number', name: 'M', architecture: {}, reasoning: 3 },
-      { id: 'a/string-levels', name: 'T', architecture: {}, reasoning: { supported_efforts: 'high' } },
+      { id: 'a/none', name: 'N', architecture: {}, supported_parameters: ['reasoning'] },
+      { id: 'a/string', name: 'S', architecture: {}, supported_parameters: ['reasoning'], reasoning: 'high' },
+      { id: 'a/array', name: 'A', architecture: {}, supported_parameters: ['reasoning'], reasoning: ['high', 'max'] },
+      { id: 'a/null', name: 'U', architecture: {}, supported_parameters: ['reasoning'], reasoning: null },
+      { id: 'a/number', name: 'M', architecture: {}, supported_parameters: ['reasoning'], reasoning: 3 },
+      {
+        id: 'a/string-levels',
+        name: 'T',
+        architecture: {},
+        supported_parameters: ['reasoning'],
+        reasoning: { supported_efforts: 'high' },
+      },
     ];
     let out: ReturnType<typeof mapModels> = [];
     expect(() => {
@@ -827,6 +849,7 @@ describe('listModels', () => {
         id: `a/${i}`,
         name: `N${i}`,
         architecture: {},
+        supported_parameters: ['reasoning'],
         reasoning: { supported_efforts: ['low', 'high'], default_effort: d },
       })),
     );
@@ -835,6 +858,34 @@ describe('listModels', () => {
       expect(m).not.toHaveProperty('defaultEffort');
       expect(m.reasoningEfforts).toEqual(['low', 'high']);
     }
+  });
+
+  it('mapModels gives no effort fields when the model does not list "reasoning" in supported_parameters', () => {
+    const [m] = mapModels([
+      {
+        id: 'a/no-reasoning',
+        name: 'No reasoning',
+        architecture: {},
+        supported_parameters: ['tools', 'max_tokens'],
+        reasoning: { supported_efforts: ['low', 'high'], default_effort: 'high' },
+      },
+    ]);
+    expect(m?.supportsReasoning).toBe(false);
+    expect(m).not.toHaveProperty('reasoningEfforts');
+    expect(m).not.toHaveProperty('defaultEffort');
+  });
+
+  it('mapModels drops "none" when reasoning is mandatory', () => {
+    const [m] = mapModels([
+      {
+        id: 'a/mandatory',
+        name: 'Mandatory',
+        architecture: {},
+        supported_parameters: ['reasoning'],
+        reasoning: { supported_efforts: ['none', 'low', 'high'], mandatory: true },
+      },
+    ]);
+    expect(m?.reasoningEfforts).toEqual(['low', 'high']);
   });
 
   it('does not produce float noise when scaling prices', () => {

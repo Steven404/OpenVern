@@ -312,7 +312,7 @@ interface WireModel {
   architecture?: { input_modalities?: unknown; output_modalities?: unknown };
   supported_parameters?: unknown;
   top_provider?: { context_length?: unknown };
-  reasoning?: { supported_efforts?: unknown; default_effort?: unknown };
+  reasoning?: { supported_efforts?: unknown; default_effort?: unknown; mandatory?: unknown };
 }
 
 /** Per-token USD string → USD per million tokens. Missing, non-numeric or negative (router pseudo-prices) → null. */
@@ -354,8 +354,15 @@ export function mapModels(data: unknown): ModelInfo[] {
     if (!outputs.includes('text')) continue;
     const ctx = m.context_length ?? m.top_provider?.context_length;
     const name = typeof m.name === 'string' && m.name !== '' ? m.name : m.id;
-    const efforts = mapEfforts(m.reasoning?.supported_efforts);
-    const defaultEffort = mapEffort(m.reasoning?.default_effort);
+    const supportsReasoning = strArray(m.supported_parameters).includes('reasoning');
+    // F3 follow-up: levels only mean something for a model that reasons. A mandatory-reasoning model cannot turn
+    // reasoning off, so `none` is not a level it accepts.
+    const efforts = supportsReasoning
+      ? mapEfforts(m.reasoning?.supported_efforts).filter(
+          (effort) => !(m.reasoning?.mandatory === true && effort === 'none'),
+        )
+      : [];
+    const defaultEffort = supportsReasoning ? mapEffort(m.reasoning?.default_effort) : undefined;
     out.push({
       id: m.id,
       name,
@@ -364,7 +371,7 @@ export function mapModels(data: unknown): ModelInfo[] {
       contextLength: typeof ctx === 'number' && Number.isFinite(ctx) ? ctx : null,
       supportsTools: strArray(m.supported_parameters).includes('tools'),
       supportsImages: strArray(m.architecture?.input_modalities).includes('image'),
-      supportsReasoning: strArray(m.supported_parameters).includes('reasoning'),
+      supportsReasoning,
       ...(efforts.length > 0 ? { reasoningEfforts: efforts } : {}),
       ...(defaultEffort !== undefined ? { defaultEffort } : {}),
       promptPricePerMTok: perMTok(m.pricing?.prompt),

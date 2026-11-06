@@ -38,11 +38,14 @@ const EFFORT_SET: ReadonlySet<string> = new Set(REASONING_EFFORTS);
  */
 function sanitizeModel(m: ModelInfo): ModelInfo {
   const raw = m as unknown as Record<string, unknown>;
-  const efforts = Array.isArray(raw.reasoningEfforts)
-    ? REASONING_EFFORTS.filter((e) => (raw.reasoningEfforts as unknown[]).includes(e))
-    : [];
+  // F3 follow-up: effort levels only apply to a model that reasons; drop them otherwise.
+  const supportsReasoning = raw.supportsReasoning === true;
+  const efforts =
+    supportsReasoning && Array.isArray(raw.reasoningEfforts)
+      ? REASONING_EFFORTS.filter((e) => (raw.reasoningEfforts as unknown[]).includes(e))
+      : [];
   const defaultEffort =
-    typeof raw.defaultEffort === 'string' && EFFORT_SET.has(raw.defaultEffort)
+    supportsReasoning && typeof raw.defaultEffort === 'string' && EFFORT_SET.has(raw.defaultEffort)
       ? (raw.defaultEffort as ReasoningEffort)
       : undefined;
   const rest = { ...m };
