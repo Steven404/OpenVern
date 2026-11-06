@@ -198,7 +198,7 @@ function KeyForm({ onDone, onCancel }: { onDone: () => void; onCancel?: () => vo
         placeholder="sk-or-v1-…"
         autoComplete="off"
         spellCheck={false}
-        inputClassName="font-mono"
+        inputClassName="font-mono focus-visible:outline-none"
         error={save.isError ? keyErrorMessage(save.error) : undefined}
         hint={
           <>

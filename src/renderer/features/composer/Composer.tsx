@@ -227,7 +227,7 @@ export function Composer({
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKeyDown}
           placeholder={isNew ? 'Ask a question, paste a snippet, or describe a task…' : 'Reply to OpenVern…'}
-          className={`scrollbar-stable resize-none border-0 bg-transparent leading-normal text-text placeholder:text-text-faint ${
+          className={`scrollbar-stable resize-none border-0 bg-transparent leading-normal text-text placeholder:text-text-faint focus-visible:outline-none ${
             isNew ? 'text-base' : 'text-[15.5px]'
           }`}
         />
