@@ -7,7 +7,7 @@ import { RightPanelToggle } from '../right-panel';
 import { ChatOptionsMenu } from './ChatOptionsMenu';
 
 /**
- * D8 + D9: breadcrumb (`PROJECT /`, `PROJECT · ARCHIVED /`, `Chats /` or `Archived /`), chat title, options menu.
+ * D8 + D9: breadcrumb (`project /`, `project · Archived /`, `Chats /` or `Archived /`), chat title, options menu.
  * Also owns `document.title`.
  */
 export function ChatHeader({ chat }: { chat: ChatSummary }) {

@@ -84,10 +84,10 @@ export function Sidebar({ onCollapse, className }: { onCollapse: () => void; cla
           aria-current={onNewChatScreen ? 'page' : undefined}
           onClick={() => navigate(newChatPath)}
           className={cx(
-            'flex min-h-11 w-full cursor-pointer items-center gap-2.5 rounded-[10px] border-0 px-3 text-[15px] font-medium text-text-secondary',
+            'flex min-h-11 w-full cursor-pointer items-center gap-2.5 rounded-[10px] border-0 px-3 text-[15px] font-medium',
             onNewChatScreen
               ? 'bg-overlay-ghost text-text hover:bg-overlay-tonal-hover'
-              : 'bg-transparent hover:bg-overlay-ghost hover:text-text',
+              : 'bg-transparent text-text-secondary hover:bg-overlay-ghost hover:text-text',
           )}
         >
           <PlusIcon />
