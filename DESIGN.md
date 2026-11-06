@@ -174,7 +174,7 @@ The few minutes after sunset when the sky turns deep indigo and the windows alon
 
 The window uses a flat `#10162e` ground with no backdrop glow. Everything else is flat colour, 1px lines and type. Density is calm, not sparse: a 272px sidebar, a centred 760px conversation column and 32px between turns. The interface shows its work (tool calls, files read, proposed edits) as small legible rows, because the product's stance is visible over magical.
 
-Blue hour is the shipped design. **Late Workshop** remains a future theme; there is no theme switch or theme persistence yet.
+Blue hour is the shipped design. **Late Workshop** remains unshipped and unselectable; a partial legacy token block exists in `tokens.css`, but no theme switch or persistence exists.
 
 **Key Characteristics:**
 - Flat cool indigo ground with tonal surface steps, not shadows or a backdrop glow.
@@ -204,21 +204,21 @@ A cool night-blue ramp lit by warm lamplight, taken from canal streets at blue h
 - **Dusk / Raised Dusk / Hover / Active** (surface, surface-raised and states): composer, fields, outline buttons, selected rows.
 - **Bubble** (bubble): the user's own messages.
 - **Tow Path** (tool): tool-call rows and inline cards inside assistant replies.
-- **Line family** (border → border-focus): six cool steps from hairline dividers to the focused composer edge.
-- **Moonlit text family** (text → text-faint): seven cool off-whites, from Moonlit for headings to Mist for meta. Every step passes 4.5:1 on the ground (Mist is 5.9:1).
-- **Overlays** (overlay-row / ghost / current): translucent moonlight for row hover, ghost-button hover and the current item.
+- **Line family** (border → border-focus): seven cool values from hairline dividers to focused edges.
+- **Moonlit text family** (text → text-faint): seven cool off-whites, from Moonlit to Mist. Contrast varies by surface; no single ratio applies across every use.
+- **Overlays** (overlay-tonal, overlay-tonal-hover, overlay-tonal-active): translucent cool fills for tonal controls and their states. Separate overlay-row / ghost / current values serve rows, ghost buttons and current items.
 
 ### Backdrop
 There is no backdrop glow or gradient. The app shell uses the flat Blue hour ground (`#10162e`).
 
 ### Diff colours
-Tokens `diff-add-*`, `diff-del-*`, `diff-text`, `diff-range` and `segment-on` (the selected half of the Unified/Split control). Added lines sit on seafoam at 9% opacity with a `#9fd4b3` sign; removed lines on gable brick at 11% with a `#f09a7c` sign; line-number gutters (`*-num`, `*-num-bg`) take the same hue a step stronger. Rejected hunks are dimmed to 42% opacity.
+Tokens `diff-add-*`, `diff-del-*`, `diff-text`, `diff-range` and `segment-on` (the selected half of the Unified/Split control). Added lines sit on seafoam at 9% opacity with a `#9fd4b3` sign; removed lines sit on accent-2 at 11% with a `#f09a7c` sign; line-number gutters use related stronger hues. Rejected hunks are dimmed to 42% opacity and receive a subtle diagonal hatch.
 
 ### Future theme: Late Workshop
-Late Workshop is not shipped as a selectable theme. A future theme setting may bring back the original warm palette; there is no switch, persistence, or expanded alternate token set in the current product.
+Late Workshop is not shipped as a selectable theme. A partial legacy token block remains, but it does not provide a complete alternate token set; there is no switch or persistence.
 
 ### Named Rules
-**The One Accent Rule.** Lamplight marks at most one primary action per view, plus focus. If two things are amber, one of them is wrong.
+**The One Glow Rule.** Lamplight marks at most one primary action per view, plus focus. If two things are amber, one of them is wrong.
 
 **The Night Not Gray Rule.** Every neutral carries the indigo tint. A pure gray (`#888`, `#1e1e1e`) never enters the palette.
 
@@ -250,14 +250,14 @@ The **right panel** docks to the right of the conversation (1px left border, sid
 
 ## Elevation & Depth
 
-Tonal and nearly flat. Depth comes from stepped dusk-blue surfaces and 1px borders: sidebar darker than the ground, raised controls lighter, code darkest. Shadows appear only on things that float above the page: menus, popovers, dialogs and the New chat composer.
+Tonal and nearly flat. Depth comes from stepped dusk-blue surfaces and 1px borders: sidebar darker than the ground, raised controls lighter, code darkest. Shadows appear on floating menus, popovers and dialogs, and on the New chat composer; the reply composer is in-flow.
 
 ### Shadow Vocabulary
 - **Floating composer** (`box-shadow: 0 24px 64px -32px rgba(0,0,0,0.6)`): the New chat composer.
 - **Segment lift** (`box-shadow: 0 1px 2px rgba(0,0,0,0.35)`): the selected option in a segmented control.
 
 ### Named Rules
-**The Tone Not Shadow Rule.** If a surface sits in the page flow, separate it with a surface step or a border, never a shadow.
+**The Tone Not Shadow Rule.** Use surface steps and borders to separate in-flow surfaces; reserve shadows for selected segmented controls and floating elements.
 
 ## Shapes
 
@@ -268,7 +268,7 @@ Soft, consistent corners that grow with the element: 5px for key hints, badges a
 Soft-cornered and quiet: ghost by default, the accent saved for the one action that moves things forward.
 
 ### Buttons
-- **Shape:** gently rounded (10px; 12px at large size). Heights 32 / 40 / 44px.
+- **Shape:** gently rounded with component-specific sizes. Primary actions commonly use 40px; compact actions use 30–34px.
 - **Primary:** Lamplight fill, ground-colour text, weight 500. Hover brightens 10%.
 - **Outline:** raised dusk with a control border; hover steps both up.
 - **Ghost:** transparent, secondary text; hover adds the ghost overlay and full-strength text.
@@ -278,7 +278,7 @@ Soft-cornered and quiet: ghost by default, the accent saved for the one action t
 - **Motion:** 150ms ease on background, border and colour. Nothing else animates by default.
 
 ### Chips
-- **Style:** transparent pill, 1px control border, 13px secondary text, optional 14px icon (e.g. the project chip in the composer). Hover fills with bubble.
+- **Style:** chips vary by purpose; the project chip is a pill with a control border and secondary text. Hover treatment is component-specific.
 
 ### Cards / Containers
 - **Tool row:** tow path, 1px tool border, 10px corners, seafoam check, mono tool name, muted path, faint timing.
@@ -294,7 +294,7 @@ Soft-cornered and quiet: ghost by default, the accent saved for the one action t
 - **Sidebar:** deep water, 13px Figtree section label, project rows 36px with a rotating chevron and terracotta folder icon. Chats indent 30px; the current chat gets the current overlay and a 2px sand inset marker.
 
 ### Composer (signature)
-Dusk surface (`#1a2142`, focus `#1f2752`), 14px corners, borderless textarea, a tools row with attach (ghost icon), model picker (ghost text) and a 38px sand send button. On focus, the fill shifts to `#1f2752` and the border brightens to border-focus.
+Dusk surface (`#1a2142`, focus `#1f2752`), borderless textarea, attach and model controls, and send/stop action. Reply and new-chat composer details vary by variant; focus treatment is defined by the component.
 
 ### Right panel
 A tab strip (pinned Files tab, closable tabs for open files and Diff, a "+" that opens the launcher, a close button) over a surface. The launcher lists Files, Terminal and Diff with a hint and a key (F, T, D); unavailable rows are dimmed with the reason ("Not available yet", "Only for chats in a project", "Available after the current chat has made edits"). Files: project name, collapse-all, a filter field, the tree in mono, and a footer saying ignored and secret files are hidden. The file viewer has a breadcrumb, line count, an Attach ghost button and numbered lines on the code surface.
@@ -315,11 +315,11 @@ Quiet and always there when something can scroll. The thumb is the only mark.
 ## Do's and Don'ts
 
 ### Do:
-- **Do** route every colour through a token from `src/renderer/styles/tokens.css`; themes depend on it.
+- **Do** prefer tokens from `src/renderer/styles/tokens.css`; isolated hard-coded colors remain in some component styles.
 - **Do** keep Lamplight to one primary action per view, plus focus.
 - **Do** show tool calls and proposed edits as visible rows or cards in the conversation.
 - **Do** use 1px cool borders and surface steps for separation.
-- **Do** keep text at 4.5:1 or better; `text-faint` is the floor for meta text on the ground.
+- **Do** maintain readable text contrast; verify contrast against the specific surface in use.
 - **Do** route new interface colours through existing Blue hour tokens.
 
 ### Don't:
@@ -328,4 +328,4 @@ Quiet and always there when something can scroll. The thumb is the only mark.
 - **Don't** use mono for prose or headings.
 - **Don't** load fonts from a CDN in the app; use the `@fontsource-variable` packages.
 - **Don't** add a second filled accent button beside the primary.
-- **Don't** add gradients.
+- **Don't** add decorative gradients; the diff surface uses a subtle repeating hatch pattern.
