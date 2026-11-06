@@ -16,7 +16,7 @@ export function RightPanelToggle() {
       aria-controls="right-panel"
       tooltip="Toggle right panel (Ctrl ])"
       onClick={toggle}
-      className={cx(open && 'bg-surface-raised text-text shadow-[inset_0_0_0_1px_var(--color-border-control)]')}
+      className={cx(open && 'bg-surface-raised text-text')}
     >
       <RightPanelIcon />
     </IconButton>

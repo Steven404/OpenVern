@@ -104,7 +104,7 @@ export function FileViewer({
           <button
             type="button"
             onClick={onBack}
-            className="max-w-[40%] cursor-pointer truncate rounded-[6px] border-0 bg-transparent px-1 py-0.5 font-semibold text-text hover:bg-overlay-ghost"
+            className="max-w-[40%] cursor-pointer truncate rounded-[5px] border-0 bg-transparent px-1 py-0.5 font-semibold text-text hover:bg-overlay-tonal"
           >
             {projectName}
           </button>
@@ -124,7 +124,7 @@ export function FileViewer({
           title="Attach to message"
           disabled={!file.data || file.data.binary || attach.busy}
           onClick={() => void onAttach()}
-          className="inline-flex min-h-[30px] cursor-pointer items-center gap-1.5 rounded-[8px] border-0 bg-transparent px-[9px] text-[12.5px] text-text-secondary hover:bg-overlay-ghost hover:text-text disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex min-h-[30px] cursor-pointer items-center gap-1.5 rounded-[6px] border-0 bg-transparent px-[9px] text-[12.5px] text-text-secondary hover:bg-overlay-ghost hover:text-text disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Plus aria-hidden="true" size={13} strokeWidth={2.2} />
           Attach
