@@ -435,7 +435,7 @@ async function mainPhase() {
     await waitFor(`${answered} && ${isIdle}`, 'loose answer', 20000);
     await sleep(1000);
     const aside = await ev(`document.querySelector('aside').innerText`);
-    check('A8 loose chat appears under CHATS', /CHATS/.test(aside));
+    check('A8 loose chat appears under Chats', /Chats/.test(aside));
     check('A8 no tool calls in a loose chat', !(await text()).includes('read_file'));
     await shot('a8-loose');
   });
