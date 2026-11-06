@@ -46,6 +46,7 @@ export function ContextUsagePopover({ chat, usage, modelName, view, limitNote, c
         role="dialog"
         aria-label="Context"
         data-level={view.level}
+        style={{ boxShadow: '0 24px 48px -12px rgb(4 6 16 / .65), 0 2px 6px rgb(4 6 16 / .35)' }}
         className={cx(
           'w-[352px] origin-top-right px-[18px] pt-4 pb-[18px]',
           'transition-[opacity,transform] duration-[180ms] ease-[cubic-bezier(0.16,1,0.3,1)]',

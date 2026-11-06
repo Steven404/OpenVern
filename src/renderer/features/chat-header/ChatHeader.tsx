@@ -34,17 +34,12 @@ export function ChatHeader({ chat }: { chat: ChatSummary }) {
     <header className="flex min-h-(--height-header) items-center gap-3 border-b border-border-header py-3 pr-3 pl-6 group-data-[sidebar-hidden]:pl-16">
       {crumb && projectName ? (
         // The project name truncates; the ` · Archived /` suffix never does.
-        <span
-          className="flex min-w-0 max-w-[40%] shrink-0 font-mono text-xs tracking-[0.08em] text-text-muted uppercase"
-          title={crumb}
-        >
+        <span className="flex min-w-0 max-w-[40%] shrink-0 font-mono text-[13px] text-text-muted" title={crumb}>
           <span className="min-w-0 truncate">{projectName}</span>
           <span className="shrink-0 whitespace-pre">{chat.archived ? ' · Archived /' : ' /'}</span>
         </span>
       ) : crumb ? (
-        <span className="max-w-[40%] shrink-0 truncate font-mono text-xs tracking-[0.08em] text-text-muted uppercase">
-          {crumb} /
-        </span>
+        <span className="max-w-[40%] shrink-0 truncate font-mono text-[13px] text-text-muted">{crumb} /</span>
       ) : null}
       <h1 className="m-0 min-w-0 flex-1 truncate text-[15px] font-semibold text-text" title={chat.title}>
         {chat.title}

@@ -25,10 +25,10 @@ const findCrumb = (header: HTMLElement, text: string) => within(header).findByTe
 const queryCrumb = (header: HTMLElement, text: string) => within(header).queryByText(crumbMatcher(header, text));
 
 describe('ChatHeader (D8)', () => {
-  it('shows the project as an uppercase-by-CSS breadcrumb, then the title', async () => {
+  it('shows the project breadcrumb, then the title', async () => {
     const { header, project, chat } = await renderChat();
     const crumb = await findCrumb(header, `${project.name} /`);
-    expect(crumb.className).toContain('uppercase');
+    expect(crumb.textContent).toBe(`${project.name} /`);
     expect(within(header).getByRole('heading', { level: 1 }).textContent).toBe(chat.title);
   });
 

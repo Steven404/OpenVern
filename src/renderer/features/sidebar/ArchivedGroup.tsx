@@ -36,7 +36,7 @@ export function ArchivedGroup({ chats, currentChatId, open, onOpenChange }: Arch
         aria-expanded={open}
         aria-controls={open ? listId : undefined}
         onClick={() => onOpenChange(!open)}
-        className="flex min-h-9 w-full cursor-pointer items-center gap-2 rounded-[9px] px-2 text-left text-sm font-medium text-text hover:bg-overlay-row"
+        className="flex min-h-9 w-full cursor-pointer items-center gap-2 rounded-[7px] px-2 text-left text-sm font-medium text-text hover:bg-overlay-row"
       >
         <ChevronIcon
           className="shrink-0 text-text-faint transition-transform duration-150 ease-in-out"

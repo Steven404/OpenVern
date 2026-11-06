@@ -47,9 +47,9 @@ export function ContextUsageButton({ chat }: { chat: ChatSummary }) {
         title="Context used in this chat"
         data-level={view.level}
         className={cx(
-          'inline-flex h-10 shrink-0 items-center rounded-[10px] px-2.5 font-mono text-[12.5px] whitespace-nowrap text-text-secondary tabular-nums',
+          'inline-flex h-10 shrink-0 items-center rounded-[8px] px-2.5 font-mono text-[12.5px] whitespace-nowrap text-text-secondary tabular-nums',
           'hover:bg-overlay-ghost hover:text-text',
-          'aria-expanded:bg-surface-raised aria-expanded:text-text aria-expanded:shadow-[inset_0_0_0_1px_var(--color-border-control)]',
+          'aria-expanded:bg-surface-raised aria-expanded:text-text',
         )}
       >
         <span className="sr-only">Context used: </span>
