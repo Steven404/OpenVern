@@ -48,6 +48,9 @@ const NO_TOOLS_RE = /no endpoints found.*(tool|function)/i;
 const NO_IMAGES_RE = /no endpoints found.*(image|vision|multimodal)/i;
 const MODEL_RE =
   /no endpoints found|not a valid model|model.{0,40}(not found|does not exist|not available|unavailable)|no allowed providers/i;
+/** F3: `effort: 'none'` on a model whose endpoint requires reasoning. */
+const REASONING_MANDATORY_RE = /reasoning is mandatory|reasoning.{0,40}(cannot|can't|can not) be disabled/i;
+const REASONING_MANDATORY_MESSAGE = "This model can't turn reasoning off. Pick another effort.";
 
 function providerError(code: ErrorCode, status: number | undefined, detail?: string, retryable?: boolean) {
   const d = ERROR_DEFAULTS[code];
@@ -67,6 +70,8 @@ export function mapOpenRouterError(h: ErrorHints): ProviderError {
   if (status === 429 || errorType === 'rate_limit_exceeded') return providerError('rate_limited', status);
   if (NO_TOOLS_RE.test(text)) return providerError('model_no_tools', status);
   if (NO_IMAGES_RE.test(text)) return providerError('model_no_image_input', status);
+  if (REASONING_MANDATORY_RE.test(text))
+    return new ProviderError('invalid_request', REASONING_MANDATORY_MESSAGE, false, status);
   if (CONTEXT_RE.test(text)) return providerError('context_length_exceeded', status);
   if (status === 404 || MODEL_RE.test(text)) return providerError('model_unavailable', status);
   if (status === 403) return providerError('provider_error', status, h.message, false);
@@ -340,6 +345,7 @@ export function mapModels(data: unknown): ModelInfo[] {
       contextLength: typeof ctx === 'number' && Number.isFinite(ctx) ? ctx : null,
       supportsTools: strArray(m.supported_parameters).includes('tools'),
       supportsImages: strArray(m.architecture?.input_modalities).includes('image'),
+      supportsReasoning: strArray(m.supported_parameters).includes('reasoning'),
       promptPricePerMTok: perMTok(m.pricing?.prompt),
       completionPricePerMTok: perMTok(m.pricing?.completion),
     });
@@ -423,6 +429,8 @@ export function createOpenRouterProvider(opts: OpenRouterOptions): Provider {
       };
       if (req.tools && req.tools.length > 0) body.tools = mapTools(req.tools);
       if (req.maxTokens !== undefined) body.max_tokens = req.maxTokens;
+      // F3: only when an effort was chosen for a reasoning model; Default sends no `reasoning` field at all.
+      if (req.effort !== undefined) body.reasoning = { effort: req.effort };
 
       const res = await request(
         `${OPENROUTER_BASE_URL}/chat/completions`,

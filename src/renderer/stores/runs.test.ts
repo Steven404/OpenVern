@@ -41,6 +41,7 @@ const summary: ChatSummary = {
   updatedAt: '',
   archived: false,
   usage: { contextTokens: 0, promptTokens: 0, completionTokens: 0, costUsd: null, requests: 0 },
+  effort: null,
 };
 
 const run = (events: RunEvent[], start: RunState = createRun(1, pending)) => events.reduce(reduceRun, start);

@@ -19,6 +19,8 @@ export interface StreamTurnInput {
   chatId: string;
   model: string;
   newUserMessage?: RunTurnInput['newUserMessage'];
+  /** F3: omitted = the chat's stored effort. */
+  effort?: RunTurnInput['effort'];
   /** Called as soon as `agent.runTurn` has registered the run (or the stream gave up), to drop the pre-run claim. */
   release: () => void;
 }
@@ -44,6 +46,7 @@ export function streamTurn(c: Context, core: Core, input: StreamTurnInput): Resp
         chatId: input.chatId,
         newUserMessage: input.newUserMessage,
         model: input.model,
+        ...(input.effort !== undefined ? { effort: input.effort } : {}),
         signal: controller.signal,
         emit: async (event: AgentEvent) => {
           await stream.writeSSE({ data: JSON.stringify(event) });

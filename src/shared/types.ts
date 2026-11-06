@@ -31,6 +31,12 @@ export interface ChatUsage {
   requests: number;
 }
 
+/**
+ * F3: a reasoning effort OpenRouter understands. `null` means Default: no `reasoning` field is sent (plan §4.1).
+ * `REASONING_EFFORTS` lists them in order (constants.ts).
+ */
+export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
 export interface ChatSummary {
   id: Id;
   projectId: Id | null; // null = loose chat ("Chats" section), no tools
@@ -41,6 +47,8 @@ export interface ChatSummary {
   /** Hidden under "Archived" (in "Chats" or inside its project) in the sidebar. */
   archived: boolean;
   usage: ChatUsage;
+  /** Effort of the latest turn; null = the model's own setting (F3). */
+  effort: ReasoningEffort | null;
 }
 export interface Chat extends ChatSummary {
   messages: Message[];
@@ -117,11 +125,18 @@ export interface ModelInfo {
   description?: string;
   /** Display name of the maker, e.g. "DeepSeek". */
   author?: string;
+  /**
+   * `supported_parameters` includes "reasoning" (F3). Optional so model caches written before F3 still load;
+   * missing counts as false.
+   */
+  supportsReasoning?: boolean;
 }
 
 export interface PublicSettings {
   openRouter: { configured: boolean; keyHint: string | null };
   lastModel: string | null;
+  /** Effort a new chat starts from (F3); null = Default. */
+  lastEffort: ReasoningEffort | null;
 }
 
 // ── v0.2: proposed edits (plan §4.1) ──────────────────────────────────────────────────────────

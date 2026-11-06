@@ -32,7 +32,9 @@ function isModelInfo(m: unknown): m is ModelInfo {
     typeof o.id === 'string' &&
     typeof o.name === 'string' &&
     typeof o.supportsTools === 'boolean' &&
-    typeof o.supportsImages === 'boolean'
+    typeof o.supportsImages === 'boolean' &&
+    // F3: optional so a cache written before F3 still loads; a missing value counts as false.
+    (o.supportsReasoning === undefined || typeof o.supportsReasoning === 'boolean')
   );
 }
 
@@ -103,6 +105,8 @@ function fallbackModel(id: string): ModelInfo {
     contextLength: null,
     supportsTools: true,
     supportsImages: false,
+    // Unknown model: never risk a `reasoning` field it may reject (F3).
+    supportsReasoning: false,
     promptPricePerMTok: null,
     completionPricePerMTok: null,
   };

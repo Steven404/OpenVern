@@ -662,6 +662,7 @@ describe('listModels', () => {
       contextLength: 1000000,
       supportsTools: true,
       supportsImages: true,
+      supportsReasoning: true,
       promptPricePerMTok: 3,
       completionPricePerMTok: 15,
     });

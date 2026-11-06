@@ -193,6 +193,7 @@ describe('createModelCatalog', () => {
         contextLength: null,
         supportsTools: true,
         supportsImages: false,
+        supportsReasoning: false,
         promptPricePerMTok: null,
         completionPricePerMTok: null,
       });

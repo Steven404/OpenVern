@@ -62,7 +62,12 @@ describe('send keys', () => {
     fireEvent.keyDown(textarea(), { key: 'Enter' });
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0]?.[0]).toBe(chat.id);
-    expect(send.mock.calls[0]?.[1]).toEqual({ text: 'hello there', attachmentIds: [], model: chat.model });
+    expect(send.mock.calls[0]?.[1]).toEqual({
+      text: 'hello there',
+      attachmentIds: [],
+      model: chat.model,
+      effort: chat.effort,
+    });
     expect(textarea().value).toBe('');
     await waitForIdle(chat.id);
   });

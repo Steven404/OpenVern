@@ -13,6 +13,7 @@ describe('chatFileSchema', () => {
       updatedAt: 'x',
       archived: false,
       usage: { contextTokens: 0, promptTokens: 0, completionTokens: 0, costUsd: null, requests: 0 },
+      effort: null,
       messages: [
         {
           id: 'a',

@@ -134,7 +134,12 @@ describe('NewChatScreen', () => {
     const chatId = screen.getByTestId('location').textContent?.replace('/chat/', '') ?? '';
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0]?.[0]).toBe(chatId);
-    expect(send.mock.calls[0]?.[1]).toEqual({ text: 'Explain the loop', attachmentIds: [], model: DEFAULT_MODEL });
+    expect(send.mock.calls[0]?.[1]).toEqual({
+      text: 'Explain the loop',
+      attachmentIds: [],
+      model: DEFAULT_MODEL,
+      effort: null,
+    });
 
     // the run was started in the store, so the conversation shows the user bubble and then the reply
     expect(await screen.findByText('Explain the loop')).toBeTruthy();

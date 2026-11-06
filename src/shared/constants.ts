@@ -1,5 +1,7 @@
 // App-wide constants (plan §4.5).
 
+import type { ReasoningEffort } from './types';
+
 export const APP_NAME = 'OpenVern';
 /** Lower-case form for paths, the protocol host, storage keys and env vars. */
 export const APP_SLUG = 'openvern';
@@ -10,6 +12,17 @@ export const NEW_CHAT_TITLE = 'New chat';
 export const MAX_AGENT_STEPS = 25; // model calls per user turn
 /** F1: OpenRouter is the only provider; the Context popover shows this label. */
 export const PROVIDER_LABEL = 'OpenRouter';
+
+/** F3: every level OpenRouter offers, weakest first. `null` (= Default) is not in the list. */
+export const REASONING_EFFORTS = [
+  'none',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+] as const satisfies readonly ReasoningEffort[];
 
 export const LIMITS = {
   attachmentsPerMessage: 10,

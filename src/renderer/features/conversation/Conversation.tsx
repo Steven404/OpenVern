@@ -23,6 +23,7 @@ export function Conversation({ chatId }: ConversationProps) {
   const modelsQuery = useModels();
   const run = useRunsStore(selectRun(chatId));
   const selectedModel = useRunsStore((s) => s.chatModels[chatId]);
+  const selectedEffort = useRunsStore((s) => s.chatEfforts[chatId]);
   const deps = useRunDeps();
   const retryRun = useRunsStore((s) => s.retry);
   const changes = useChatChanges(chatId).data;
@@ -49,8 +50,14 @@ export function Conversation({ chatId }: ConversationProps) {
 
   const retry = useCallback(() => {
     if (!chat) return;
-    void retryRun(deps, chatId, selectedModel ?? chat.model);
-  }, [retryRun, deps, chatId, selectedModel, chat]);
+    // F3: a retry uses the effort chosen in this chat; otherwise the chat keeps the effort it already stored.
+    void retryRun(
+      deps,
+      chatId,
+      selectedModel ?? chat.model,
+      selectedEffort === undefined ? chat.effort : selectedEffort,
+    );
+  }, [retryRun, deps, chatId, selectedModel, selectedEffort, chat]);
 
   // ── stick to bottom ────────────────────────────────────────────────────────
   const scrollRef = useRef<HTMLElement>(null);

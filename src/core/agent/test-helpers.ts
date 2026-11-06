@@ -69,6 +69,7 @@ export function createFakeChats(now: () => Date = createClock()): FakeChats {
     updatedAt: c.updatedAt,
     archived: c.archived,
     usage: usageFor(c),
+    effort: c.effort,
   });
   return {
     store,
@@ -89,6 +90,7 @@ export function createFakeChats(now: () => Date = createClock()): FakeChats {
         updatedAt: ts,
         archived: false,
         usage: { contextTokens: 0, promptTokens: 0, completionTokens: 0, costUsd: null, requests: 0 },
+        effort: null,
         messages: [],
       };
       store.set(chat.id, chat);
@@ -101,6 +103,11 @@ export function createFakeChats(now: () => Date = createClock()): FakeChats {
       if (patch.projectId !== undefined) c.projectId = patch.projectId;
       if (patch.model !== undefined && patch.model !== c.model) {
         c.model = patch.model;
+        c.updatedAt = now().toISOString();
+      }
+      // F3: mirrors storage's effort branch.
+      if (patch.effort !== undefined && patch.effort !== c.effort) {
+        c.effort = patch.effort;
         c.updatedAt = now().toISOString();
       }
       if (patch.archived !== undefined) c.archived = patch.archived;
@@ -231,13 +238,14 @@ export function createFakeProjects(projects: Project[] = []): ProjectsService & 
   };
 }
 
-export function model(id: string, caps: { tools?: boolean; images?: boolean } = {}): ModelInfo {
+export function model(id: string, caps: { tools?: boolean; images?: boolean; reasoning?: boolean } = {}): ModelInfo {
   return {
     id,
     name: id,
     contextLength: 100_000,
     supportsTools: caps.tools ?? true,
     supportsImages: caps.images ?? false,
+    supportsReasoning: caps.reasoning ?? false,
     promptPricePerMTok: null,
     completionPricePerMTok: null,
   };

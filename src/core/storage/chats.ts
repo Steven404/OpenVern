@@ -192,6 +192,7 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
         createdAt: now,
         updatedAt: now,
         archived: false,
+        effort: null,
         messages: [],
       });
       return lock.run(async () => {
@@ -210,6 +211,11 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
         if (patch.projectId !== undefined) next.projectId = patch.projectId;
         if (patch.model !== undefined && patch.model !== chat.model) {
           next.model = patch.model;
+          next.updatedAt = new Date().toISOString();
+        }
+        // F3: the effort of the latest turn, stored like `model`; null = Default.
+        if (patch.effort !== undefined && patch.effort !== chat.effort) {
+          next.effort = patch.effort;
           next.updatedAt = new Date().toISOString();
         }
         // Any chat can be archived; a move keeps the flag.

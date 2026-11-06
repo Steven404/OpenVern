@@ -312,7 +312,7 @@ describe('Conversation run overlay', () => {
       fireEvent.click(within(card).getByRole('button', { name: 'Retry' }));
     });
     expect(retry).toHaveBeenCalledTimes(1);
-    expect(retry.mock.calls[0]?.[1]).toEqual({ model: chat.model });
+    expect(retry.mock.calls[0]?.[1]).toEqual({ model: chat.model, effort: chat.effort });
     await waitFor(() => expect(screen.queryByTestId('error-card')).toBeNull());
   });
 

@@ -65,7 +65,7 @@ describe('health, errors, 404', () => {
 describe('settings and models', () => {
   it('GET/PATCH /api/settings', async () => {
     const initial = (await (await h.call('/api/settings')).json()) as PublicSettings;
-    expect(initial).toEqual({ openRouter: { configured: false, keyHint: null }, lastModel: null });
+    expect(initial).toEqual({ openRouter: { configured: false, keyHint: null }, lastModel: null, lastEffort: null });
     const res = await h.call('/api/settings', { method: 'PATCH', json: { lastModel: 'openai/gpt-5.5' } });
     expect(((await res.json()) as PublicSettings).lastModel).toBe('openai/gpt-5.5');
   });

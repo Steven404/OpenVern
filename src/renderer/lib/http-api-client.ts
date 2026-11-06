@@ -16,6 +16,7 @@ import type {
   ProjectFileTree,
   ProjectListItem,
   PublicSettings,
+  ReasoningEffort,
 } from '@shared/types';
 import { type ApiClient, ApiError } from './api-client';
 
@@ -84,7 +85,7 @@ export class HttpApiClient implements ApiClient {
   removeOpenRouterKey() {
     return this.json<PublicSettings>('DELETE', '/settings/openrouter-key');
   }
-  updateSettings(patch: { lastModel?: string }) {
+  updateSettings(patch: { lastModel?: string; lastEffort?: ReasoningEffort | null }) {
     return this.json<PublicSettings>('PATCH', '/settings', patch);
   }
   listModels(opts?: { refresh?: boolean }) {
@@ -117,10 +118,14 @@ export class HttpApiClient implements ApiClient {
   deleteChat(id: Id) {
     return this.noContent('DELETE', `/chats/${enc(id)}`);
   }
-  sendMessage(chatId: Id, input: { text: string; attachmentIds: Id[]; model: string }, signal: AbortSignal) {
+  sendMessage(
+    chatId: Id,
+    input: { text: string; attachmentIds: Id[]; model: string; effort?: ReasoningEffort | null },
+    signal: AbortSignal,
+  ) {
     return this.stream(`/chats/${enc(chatId)}/messages`, input, signal);
   }
-  retry(chatId: Id, input: { model: string }, signal: AbortSignal) {
+  retry(chatId: Id, input: { model: string; effort?: ReasoningEffort | null }, signal: AbortSignal) {
     return this.stream(`/chats/${enc(chatId)}/retry`, input, signal);
   }
   uploadAttachment(file: File) {
