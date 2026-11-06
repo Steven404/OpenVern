@@ -278,8 +278,8 @@ Soft-cornered and quiet: ghost by default, the accent saved for the one action t
 - **Ghost:** transparent, secondary text; hover adds the ghost overlay and full-strength text.
 - **Danger:** Signal Coral fill for destructive confirms only.
 - **Icon button:** 28 / 36 / 40px squares, muted icon, always an `aria-label`.
-- **Focus:** global `:focus-visible` draws a 2px Lamplight outline with 2px offset. Exceptions: menu and model-list items show a highlight fill instead; the composer textarea and the model search input suppress the ring (the composer shifts its surface to `surface-focus`, the search sits in the popover header); the launcher and dialog containers also set `outline-none`.
-- **Motion:** 150ms ease on background, border and colour. The right panel slides in and resizes over 220ms and disables that motion under `prefers-reduced-motion`; a hunk's rejection fade is 200ms.
+- **Focus:** global `:focus-visible` draws a 2px Lamplight outline with 2px offset. Exceptions: menu and model-list items show a highlight fill instead; the composer also shifts its surface to `surface-focus`; the launcher and dialog containers also set `outline-none`.
+- **Motion:** 150ms ease on background, border and colour. The right panel slides in and resizes over 220ms and disables that motion under `prefers-reduced-motion`; a hunk's rejection fade is 200ms and is disabled under reduced motion.
 
 ### Chips
 - **Style:** 8px corners and borderless by default. The project chip uses the bubble fill and secondary text; composer attachment chips use the 6% tonal overlay; an errored attachment gains a danger border. Hover treatment is component-specific.
@@ -298,7 +298,7 @@ Soft-cornered and quiet: ghost by default, the accent saved for the one action t
 - **Sidebar:** deep water, 13px Figtree section label, project rows 36px with a rotating chevron and terracotta folder icon. Chats indent 30px; the current chat gets the current overlay and a 2px sand inset marker.
 
 ### Composer (signature)
-Dusk surface (`#1a2142`, focus `#1f2752`), borderless textarea, attach and model controls, and send/stop action. Both variants use 14px corners; the textarea suppresses the global focus ring and the container shifts to `surface-focus` instead. The new-chat variant adds `0 16px 40px -24px rgb(0 0 0 / 0.35)` and 16/14/10/20px padding; the reply variant is in-flow at 14/14/10/18px.
+Dusk surface (`#1a2142`, focus `#1f2752`), borderless textarea, attach and model controls, and send/stop action. Both variants use 14px corners; the textarea has the global focus ring and the container shifts to `surface-focus`. The new-chat variant adds `0 16px 40px -24px rgb(0 0 0 / 0.35)` and 16/14/10/20px padding; the reply variant is in-flow at 14/14/10/18px.
 
 ### Right panel
 A tab strip (pinned Files tab, closable tabs for open files and Diff, a "+" that opens the launcher, a close button) over a surface. The launcher lists Files, Terminal and Diff with a hint and a key (F, T, D); unavailable rows are dimmed with the reason ("Not available yet" for Terminal; "Available after the current chat has made edits" for Diff). Files is always enabled: it browses the project, or the home folder for a chat without one. Files: project (or home folder) name, collapse-all, a filter field, the tree in mono, and a footer saying ignored and secret files are hidden. The file viewer has a breadcrumb, line count, an Attach ghost button and numbered lines on the code surface.

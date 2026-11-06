@@ -81,7 +81,7 @@ function HunkBlock({
       )}
       <div
         className={cx(
-          'border-b border-[#1a2142] transition-opacity duration-200',
+          'border-b border-[#1a2142] transition-opacity duration-200 motion-reduce:transition-none',
           d === 'rejected' && 'opacity-[0.42]',
         )}
       >

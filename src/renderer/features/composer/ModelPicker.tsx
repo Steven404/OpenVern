@@ -89,7 +89,7 @@ export function ModelPicker({
               <Command.Input
                 placeholder="Search models…"
                 aria-label="Search models"
-                className="h-11 w-full border-0 bg-transparent text-[14px] text-text outline-none placeholder:text-text-faint"
+                className="h-11 w-full border-0 bg-transparent text-[14px] text-text placeholder:text-text-faint"
               />
             </div>
             <Command.List className="max-h-[320px] overflow-y-auto scrollbar-stable p-1.5">
