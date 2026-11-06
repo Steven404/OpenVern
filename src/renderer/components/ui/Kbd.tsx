@@ -5,10 +5,7 @@ import { cx } from './cx';
 export function Kbd({ className, ...props }: HTMLAttributes<HTMLElement>) {
   return (
     <kbd
-      className={cx(
-        'rounded-[6px] border border-border-control px-1.5 py-px font-mono text-[11px] font-normal text-text-muted',
-        className,
-      )}
+      className={cx('rounded-[5px] bg-overlay-tonal px-1.5 py-0.5 font-mono text-[11px] text-text-muted', className)}
       {...props}
     />
   );

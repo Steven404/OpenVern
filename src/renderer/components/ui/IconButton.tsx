@@ -5,9 +5,9 @@ import { cx } from './cx';
 export type IconButtonSize = 'sm' | 'md' | 'lg';
 
 const sizeClass: Record<IconButtonSize, string> = {
-  sm: 'size-7 rounded-[8px]',
-  md: 'size-9 rounded-[10px]',
-  lg: 'size-10 rounded-[10px]',
+  sm: 'size-7 rounded-[6px]',
+  md: 'size-9 rounded-[8px]',
+  lg: 'size-10 rounded-[8px]',
 };
 
 export interface IconButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'aria-label'> {

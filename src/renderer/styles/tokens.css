@@ -6,9 +6,13 @@
 
 @theme {
   /* Blue hour (default theme): lamplight on canal water. */
-  --color-bg: #0f1428;
+  --color-bg: #10162e;
   --color-sidebar: #0b0f20;
   --color-surface: #1a2142;
+  --color-surface-focus: #1f2752;
+  --color-card: #182040;
+  --color-card-active: #1d2448;
+  --color-code-inline: #1d2446;
   --color-surface-raised: #222a52;
   --color-surface-raised-hover: #2c3666;
   --color-surface-raised-active: #263058;
@@ -41,6 +45,12 @@
   --color-success: #9fd4b3;
   --color-danger: #ff8f87;
 
+  --color-overlay-tonal: rgb(200 215 255 / 0.06);
+  --color-overlay-tonal-hover: rgb(200 215 255 / 0.1);
+  --color-overlay-tonal-active: rgb(200 215 255 / 0.12);
+  --color-selection: rgb(246 189 96 / 0.28);
+  --color-selection-text: #fff4e0;
+
   --color-overlay-row: rgb(200 215 255 / 0.05);
   --color-overlay-ghost: rgb(200 215 255 / 0.07);
   --color-overlay-current: rgb(200 215 255 / 0.08);
@@ -72,13 +82,6 @@
   --width-panel-diff: 600px;
   --width-panel-diff-split: 800px;
   --height-header: 64px;
-}
-
-/* The app background: a faint dusk glow at the top of the window over the ground colour. */
-:root {
-  --backdrop:
-    radial-gradient(90% 55% at 62% -12%, rgb(98 126 214 / 0.22), transparent 62%),
-    linear-gradient(180deg, #121a38 0%, var(--color-bg) 38%, #0d1224 100%);
 }
 
 /* Late Workshop: the original warm theme. Not selectable yet; a future theme setting sets `data-theme` on <html>. */
@@ -121,5 +124,4 @@
   --color-overlay-row: rgb(240 230 230 / 0.05);
   --color-overlay-ghost: rgb(240 230 230 / 0.07);
   --color-overlay-current: rgb(240 230 230 / 0.08);
-  --backdrop: var(--color-bg);
 }

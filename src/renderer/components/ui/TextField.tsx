@@ -40,7 +40,7 @@ export const TextField = forwardRef<HTMLInputElement, TextFieldProps>(function T
           {...props}
           aria-describedby={describedBy || undefined}
           className={cx(
-            'h-11 w-full rounded-[12px] border bg-surface px-3.5 text-[14.5px] text-text transition-colors duration-150 placeholder:text-text-faint hover:border-border-hover focus:border-border-focus disabled:cursor-not-allowed disabled:opacity-50',
+            'h-11 w-full rounded-[10px] border bg-surface px-3.5 text-[14.5px] text-text transition-colors duration-150 placeholder:text-text-faint hover:border-border-hover focus:border-border-focus disabled:cursor-not-allowed disabled:opacity-50',
             error ? 'border-danger hover:border-danger focus:border-danger' : 'border-border-control',
             trailing ? 'pr-11' : null,
             inputClassName,

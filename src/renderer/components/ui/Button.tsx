@@ -10,11 +10,11 @@ export const buttonBase =
   'inline-flex shrink-0 cursor-pointer items-center justify-center whitespace-nowrap font-medium disabled:cursor-not-allowed disabled:opacity-50';
 
 const variantClass: Record<ButtonVariant, string> = {
-  primary: 'border border-transparent bg-accent text-bg hover:brightness-110',
+  primary: 'border border-transparent bg-accent text-bg hover:brightness-106',
   ghost: 'border border-transparent bg-transparent text-text-secondary hover:bg-overlay-ghost hover:text-text',
   outline:
-    'border border-border-control bg-surface-raised text-text hover:border-border-hover hover:bg-surface-raised-hover',
-  danger: 'border border-transparent bg-danger text-bg hover:brightness-110',
+    'border border-transparent bg-overlay-tonal text-text hover:bg-overlay-tonal-hover aria-pressed:bg-overlay-tonal-active',
+  danger: 'border border-transparent bg-danger text-bg hover:brightness-106',
 };
 
 /** Variant look for icon-only buttons (ghost is muted instead of secondary). */
@@ -24,9 +24,9 @@ export const iconVariantClass: Record<ButtonVariant, string> = {
 };
 
 const sizeClass: Record<ButtonSize, string> = {
-  sm: 'min-h-8 gap-1.5 rounded-[10px] px-3 text-[13px]',
-  md: 'min-h-10 gap-2 rounded-[10px] px-4 text-sm',
-  lg: 'min-h-11 gap-2 rounded-[12px] px-4 text-[15px]',
+  sm: 'min-h-8 gap-1.5 rounded-[6px] px-3 text-[13px]',
+  md: 'min-h-10 gap-2 rounded-[8px] px-4 text-sm',
+  lg: 'min-h-11 gap-2 rounded-[10px] px-4 text-[15px]',
 };
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {

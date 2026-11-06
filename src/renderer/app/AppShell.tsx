@@ -50,7 +50,7 @@ export function AppShell() {
 
   return (
     <div
-      className="flex h-full w-full flex-nowrap overflow-hidden bg-(image:--backdrop) bg-bg text-text"
+      className="flex h-full w-full flex-nowrap overflow-hidden bg-bg text-text"
       style={{ minWidth: LAYOUT.windowMinWidth, minHeight: LAYOUT.windowMinHeight }}
     >
       {visible ? (

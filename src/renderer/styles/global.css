@@ -2,6 +2,11 @@
 @import "./tokens.css";
 
 @layer base {
+  ::selection {
+    background: var(--color-selection);
+    color: var(--color-selection-text);
+  }
+
   html,
   body,
   #root {
