@@ -12,8 +12,8 @@ export interface ProjectRowProps {
   chats: ChatSummary[];
   /** This project's archived chats, newest first, listed under its "Archived" toggle. */
   archivedChats?: ChatSummary[];
-  /** The count shown on the row. Defaults to the number of active chats. */
-  chatCount?: number;
+  /** The count shown on the row (active chats). `undefined` while it isn't known yet: the row shows no count. */
+  chatCount: number | undefined;
   currentChatId: string | undefined;
 }
 
@@ -45,9 +45,11 @@ export function ProjectRow({ project, chats, archivedChats = [], chatCount, curr
           />
           <FolderIcon className="shrink-0 text-accent-2" />
           <span className="flex-1 truncate">{project.name}</span>
-          <span className="font-mono text-[11px] text-text-faint group-focus-within:invisible group-hover:invisible group-data-[menu-open]:invisible">
-            {chatCount ?? chats.length}
-          </span>
+          {chatCount !== undefined ? (
+            <span className="font-mono text-[11px] text-text-faint group-focus-within:invisible group-hover:invisible group-data-[menu-open]:invisible">
+              {chatCount}
+            </span>
+          ) : null}
         </button>
         <ProjectMenu project={project} onMenuOpenChange={setMenuOpen} />
       </div>

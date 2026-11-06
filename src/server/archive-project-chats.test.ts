@@ -263,6 +263,24 @@ describe('PATCH /api/chats/:id with pending edits and the combined body', () => 
     expect((await h.changes.get(chat.id)).pending).not.toBeNull();
   });
 
+  it('a move combined with archive is still refused when edits are pending', async () => {
+    const project = await newProject();
+    const otherRoot = path.join(h.projectDir, 'other');
+    await mkdir(otherRoot);
+    const other = await newProject(otherRoot);
+    const chat = await newChat(project.id);
+    h.changes.seed(chat.id, pending());
+
+    // `{ projectId, archived }` takes the archive-claim branch; its fresh-read pending check is the only one.
+    const move = await patch(chat.id, { projectId: other.id, archived: true });
+    expect(move.status).toBe(409);
+    expect(await json<{ error: { code: string; message: string } }>(move)).toMatchObject({
+      error: { code: 'conflict', message: PENDING },
+    });
+    expect(await stored(chat.id)).toMatchObject({ projectId: project.id, archived: false });
+    expect((await h.changes.get(chat.id)).pending).not.toBeNull();
+  });
+
   it('applies projectId and archived together to a loose chat', async () => {
     const project = await newProject();
     const chat = await newChat(null);

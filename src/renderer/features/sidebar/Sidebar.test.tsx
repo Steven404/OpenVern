@@ -311,6 +311,26 @@ describe('Archived chats in a project (F2)', () => {
     expect(toggle?.textContent).toBe('Archived2');
   });
 
+  it("hides the project row's count until the chat list loads, then shows active chats only", async () => {
+    const { client, project } = await projectClient(['One', 'Two', 'Archived one'], ['Archived one']);
+    expect((await client.listProjects()).find((p) => p.id === project.id)?.chatCount).toBe(3);
+    let loadChats!: () => void;
+    const chatsGate = new Promise<void>((r) => {
+      loadChats = r;
+    });
+    const listChats = client.listChats.bind(client);
+    vi.spyOn(client, 'listChats').mockImplementation(async () => {
+      await chatsGate;
+      return listChats();
+    });
+    renderApp({ client });
+    const row = await projectButton(project.name);
+    expect(row.textContent).toBe(project.name); // not the server's 3 (archived included)
+
+    loadChats();
+    await waitFor(() => expect(row.textContent).toBe(`${project.name}2`));
+  });
+
   it('shows "No chats yet" only for a project with no chats, and only the toggle when every chat is archived', async () => {
     const client = new MockApiClient({ delayMs: 0, seed: false });
     const empty = await client.createProject({ rootPath: '/tmp/empty-project', name: 'Empty project' });

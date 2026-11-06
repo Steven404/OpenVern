@@ -18,11 +18,16 @@ async function renderChat() {
 }
 
 const optionsButton = (header: HTMLElement) => within(header).getByRole('button', { name: 'Chat options' });
+/** A project crumb splits its name and suffix into spans, so match the crumb (a header child) by its whole text. */
+const crumbMatcher = (header: HTMLElement, text: string) => (_: string, el: Element | null) =>
+  el?.parentElement === header && el.textContent === text;
+const findCrumb = (header: HTMLElement, text: string) => within(header).findByText(crumbMatcher(header, text));
+const queryCrumb = (header: HTMLElement, text: string) => within(header).queryByText(crumbMatcher(header, text));
 
 describe('ChatHeader (D8)', () => {
   it('shows the project as an uppercase-by-CSS breadcrumb, then the title', async () => {
     const { header, project, chat } = await renderChat();
-    const crumb = await within(header).findByText(`${project.name} /`);
+    const crumb = await findCrumb(header, `${project.name} /`);
     expect(crumb.className).toContain('uppercase');
     expect(within(header).getByRole('heading', { level: 1 }).textContent).toBe(chat.title);
   });
@@ -97,7 +102,7 @@ describe('Chat options (D9)', () => {
     fireEvent.keyDown(sub, { key: 'ArrowRight' });
     fireEvent.click(await screen.findByRole('menuitemradio', { name: target.name }));
     await waitFor(() => expect(update).toHaveBeenCalledWith(chat.id, { projectId: target.id }));
-    expect(await within(header).findByText(`${target.name} /`)).toBeTruthy();
+    expect(await findCrumb(header, `${target.name} /`)).toBeTruthy();
   });
 
   it('Delete: confirms, calls deleteChat and navigates to #/new', async () => {
@@ -235,8 +240,8 @@ describe('Archive in chat options for project chats (F2)', () => {
 
   it('shows Unarchive and the "PROJECT · ARCHIVED" crumb, then Unarchive restores both', async () => {
     const { header, client, chat, project } = await renderArchivedProjectChat();
-    expect(await within(header).findByText(`${project.name} · Archived /`)).toBeTruthy();
-    expect(within(header).queryByText(`${project.name} /`)).toBeNull();
+    expect(await findCrumb(header, `${project.name} · Archived /`)).toBeTruthy();
+    expect(queryCrumb(header, `${project.name} /`)).toBeNull();
 
     const update = vi.spyOn(client, 'updateChat');
     openMenu(optionsButton(header));
@@ -245,8 +250,8 @@ describe('Archive in chat options for project chats (F2)', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Unarchive' }));
 
     await waitFor(() => expect(update).toHaveBeenCalledWith(chat.id, { archived: false }));
-    expect(await within(header).findByText(`${project.name} /`)).toBeTruthy();
-    expect(within(header).queryByText(`${project.name} · Archived /`)).toBeNull();
+    expect(await findCrumb(header, `${project.name} /`)).toBeTruthy();
+    expect(queryCrumb(header, `${project.name} · Archived /`)).toBeNull();
   });
 
   it('Unarchive is disabled while a reply is running', async () => {
@@ -265,6 +270,23 @@ describe('Archive in chat options for project chats (F2)', () => {
     expect(update).not.toHaveBeenCalled();
   });
 
+  it('puts " · Archived /" in its own span after the name and titles the crumb with its full text', async () => {
+    const { header, project } = await renderArchivedProjectChat();
+    const crumb = await findCrumb(header, `${project.name} · Archived /`);
+    expect(crumb.getAttribute('title')).toBe(`${project.name} · Archived`);
+    const [name, suffix] = Array.from(crumb.children);
+    expect(crumb.children).toHaveLength(2);
+    expect(name?.textContent).toBe(project.name);
+    expect(suffix?.textContent).toBe(' · Archived /');
+  });
+
+  it('an active project crumb splits the same way, with " /" as the suffix', async () => {
+    const { header, project } = await renderChat();
+    const crumb = await findCrumb(header, `${project.name} /`);
+    expect(crumb.getAttribute('title')).toBe(project.name);
+    expect(Array.from(crumb.children).map((el) => el.textContent)).toEqual([project.name, ' /']);
+  });
+
   it('an archived loose chat keeps the "Archived /" crumb', async () => {
     const seed = await seededClient();
     const loose = await seed.client.createChat({ projectId: null, model: 'm' });
@@ -272,7 +294,9 @@ describe('Archive in chat options for project chats (F2)', () => {
     renderApp({ client: seed.client, route: `/chat/${loose.id}` });
     const header = (await screen.findByRole('heading', { level: 1, name: 'Archived loose' })).closest('header');
     if (!header) throw new Error('missing header');
-    expect(await within(header).findByText('Archived /')).toBeTruthy();
+    const crumb = await within(header).findByText('Archived /');
+    expect(crumb.children).toHaveLength(0);
+    expect(crumb.hasAttribute('title')).toBe(false);
     expect(within(header).queryByText('Chats /')).toBeNull();
   });
 });

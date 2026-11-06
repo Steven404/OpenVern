@@ -372,6 +372,47 @@ describe('MockApiClient', () => {
       expect(res.changes.applied).toHaveLength(1);
     });
 
+    it('refuses moving a chat with pending edits, alone or with archived; archiving alone still works', async () => {
+      const api = new MockApiClient({ delayMs: 0 });
+      const [project, other] = await api.listProjects();
+      if (!project || !other) throw new Error('seed missing');
+      const chat = await api.createChat({ projectId: project.id, model: 'anthropic/claude-sonnet-5.5' });
+      await collect(
+        api.sendMessage(
+          chat.id,
+          { text: '[mock:edit]', attachmentIds: [], model: chat.model },
+          new AbortController().signal,
+        ),
+      );
+      const before = await api.getChatChanges(chat.id);
+      expect(before.pending).not.toBeNull();
+
+      for (const patch of [{ projectId: other.id }, { projectId: null }, { projectId: other.id, archived: true }]) {
+        await expect(api.updateChat(chat.id, patch)).rejects.toMatchObject({
+          status: 409,
+          info: { code: 'conflict', message: 'Apply or discard the proposed edits first.' },
+        });
+        expect(await api.getChat(chat.id)).toMatchObject({ projectId: project.id, archived: false });
+      }
+      expect(await api.getChatChanges(chat.id)).toEqual(before);
+
+      // Same project (not a move), title and archive-only patches are allowed.
+      expect(await api.updateChat(chat.id, { projectId: project.id, title: 'Kept' })).toMatchObject({
+        projectId: project.id,
+        title: 'Kept',
+      });
+      expect(await api.updateChat(chat.id, { archived: true })).toMatchObject({
+        projectId: project.id,
+        archived: true,
+      });
+
+      await api.discardChatChanges(chat.id);
+      expect(await api.updateChat(chat.id, { projectId: other.id })).toMatchObject({
+        projectId: other.id,
+        archived: true,
+      });
+    });
+
     it('discards pending changes', async () => {
       const api = new MockApiClient({ delayMs: 0 });
       const [project] = await api.listProjects();

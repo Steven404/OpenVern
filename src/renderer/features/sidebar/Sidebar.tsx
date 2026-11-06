@@ -131,8 +131,8 @@ export function Sidebar({ onCollapse, className }: { onCollapse: () => void; cla
                   project={project}
                   chats={active}
                   archivedChats={archived}
-                  // Active chats only, once the chat list is in; the server's count (archived included) until then.
-                  chatCount={chats.data ? active.length : project.chatCount}
+                  // Active chats only, so no count until the chat list is in (the server's count includes archived).
+                  chatCount={chats.data ? active.length : undefined}
                   currentChatId={currentChatId}
                 />
               );

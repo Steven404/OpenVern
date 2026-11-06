@@ -230,6 +230,9 @@ export class MockApiClient implements ApiClient {
     const c = this.chat(id);
     if (patch.archived !== undefined && this.running.has(id))
       fail('conflict', 409, 'Wait for the response to finish before archiving or unarchiving this chat.');
+    // A move (alone or with `archived`) is refused while edits are pending; archiving alone is not.
+    if (patch.projectId !== undefined && patch.projectId !== c.projectId && this.changes.get(id))
+      fail('conflict', 409, 'Apply or discard the proposed edits first.');
     if (patch.projectId && !this.projects.some((p) => p.id === patch.projectId)) fail('not_found', 404);
 
     if (patch.title !== undefined) c.title = patch.title.trim();

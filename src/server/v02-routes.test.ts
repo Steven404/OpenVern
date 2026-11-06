@@ -254,6 +254,30 @@ describe('change set lifecycle', () => {
     expect(await json<Chat>(moved)).toMatchObject({ projectId: p.id, archived: true });
   });
 
+  it('keeps an archive that lands after a move has read the chat', async () => {
+    const p = await newProject();
+    const chat = await newChat(null);
+    const patch = (id: string, body: unknown) => h.call(`/api/chats/${id}`, { method: 'PATCH', json: body });
+    let archivedMidMove = false;
+    const get = h.changes.get.bind(h.changes);
+    // A move reads the chat, then checks pending edits, then writes. Archive the chat inside that check, so the
+    // archive lands after the move's first read and before its write.
+    h.changes.get = async (id) => {
+      if (id === chat.id && !archivedMidMove) {
+        archivedMidMove = true;
+        const archived = await patch(id, { archived: true });
+        expect(archived.status).toBe(200);
+      }
+      return get(id);
+    };
+
+    const res = await patch(chat.id, { projectId: p.id });
+    expect(archivedMidMove).toBe(true);
+    expect(res.status).toBe(200);
+    expect(await json<Chat>(res)).toMatchObject({ projectId: p.id, archived: true });
+    expect(await json<Chat>(await h.call(`/api/chats/${chat.id}`))).toMatchObject({ projectId: p.id, archived: true });
+  });
+
   it('refuses moving a chat that has pending edits, allows other patches', async () => {
     const p = await newProject();
     const chat = await newChat(p.id);
