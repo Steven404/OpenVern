@@ -2,7 +2,7 @@ import { errorInfo } from '@shared/errors';
 import type { AgentEvent } from '@shared/events';
 import type { AssistantMessage, ChatSummary, ToolMessage, UserMessage } from '@shared/types';
 import { QueryClient } from '@tanstack/react-query';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../lib/api-client';
 import { MockApiClient } from '../lib/mock-api-client';
 import { queryKeys } from '../lib/query-keys';
@@ -121,7 +121,7 @@ describe('reduceRun', () => {
 });
 
 describe('useRunsStore', () => {
-  beforeEach(() => useRunsStore.setState({ runs: {}, chatModels: {} }));
+  beforeEach(() => useRunsStore.setState({ runs: {}, chatModels: {}, chatEfforts: {} }));
 
   async function setup() {
     const api = new MockApiClient({ delayMs: 0 });
@@ -314,6 +314,54 @@ describe('useRunsStore', () => {
     await useRunsStore.getState().retry(deps, chat.id, chat.model);
     unsubscribe();
     expect(seen.value).toMatchObject({ requests: 0 });
+  });
+
+  // ── F3: per-chat effort ──
+  it("setChatEffort remembers each chat's effort, including null (Default), and overwrites it", () => {
+    const { setChatEffort } = useRunsStore.getState();
+    expect(useRunsStore.getState().chatEfforts).toEqual({});
+    setChatEffort('c1', 'high');
+    setChatEffort('c2', null);
+    expect(useRunsStore.getState().chatEfforts).toEqual({ c1: 'high', c2: null });
+    setChatEffort('c1', 'low');
+    expect(useRunsStore.getState().chatEfforts).toEqual({ c1: 'low', c2: null });
+  });
+
+  it('send records the effort it was sent with and passes it to the API', async () => {
+    const { api, chat, deps } = await setup();
+    const sendSpy = vi.spyOn(api, 'sendMessage');
+    await useRunsStore
+      .getState()
+      .send(deps, chat.id, { text: 'hi', attachments: [], model: chat.model, effort: 'high' });
+    expect(useRunsStore.getState().chatEfforts[chat.id]).toBe('high');
+    expect(sendSpy.mock.calls[0]?.[1]).toMatchObject({ effort: 'high' });
+  });
+
+  it('send without an effort keeps the recorded one and omits effort from the API call', async () => {
+    const { api, chat, deps } = await setup();
+    const sendSpy = vi.spyOn(api, 'sendMessage');
+    useRunsStore.getState().setChatEffort(chat.id, 'low');
+    await useRunsStore.getState().send(deps, chat.id, { text: 'hi', attachments: [], model: chat.model });
+    expect(useRunsStore.getState().chatEfforts[chat.id]).toBe('low');
+    expect(sendSpy.mock.calls[0]?.[1]).not.toHaveProperty('effort');
+  });
+
+  it('retry records its effort and passes it on; omitting it keeps the recorded one', async () => {
+    const { api, chat, deps } = await setup();
+    const retrySpy = vi.spyOn(api, 'retry');
+    await useRunsStore.getState().retry(deps, chat.id, chat.model, 'max');
+    expect(useRunsStore.getState().chatEfforts[chat.id]).toBe('max');
+    expect(retrySpy.mock.calls[0]?.[1]).toEqual({ model: chat.model, effort: 'max' });
+
+    await useRunsStore.getState().retry(deps, chat.id, chat.model);
+    expect(useRunsStore.getState().chatEfforts[chat.id]).toBe('max');
+    expect(retrySpy.mock.calls[1]?.[1]).toEqual({ model: chat.model });
+  });
+
+  it('efforts are kept per chat: choosing one does not change another', () => {
+    useRunsStore.getState().setChatEffort('a', 'high');
+    expect(useRunsStore.getState().chatEfforts.b).toBeUndefined();
+    expect(useRunsStore.getState().chatEfforts.a).toBe('high');
   });
 
   it('maps ApiErrors to their info and anything else to network_error', () => {

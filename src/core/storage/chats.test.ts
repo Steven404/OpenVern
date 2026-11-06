@@ -1,6 +1,6 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { NEW_CHAT_TITLE } from '@shared/constants';
+import { NEW_CHAT_TITLE, REASONING_EFFORTS } from '@shared/constants';
 import type { AssistantMessage, Message, Usage, UserMessage } from '@shared/types';
 import { describe, expect, it, vi } from 'vitest';
 import { createStorage } from './index';
@@ -1098,5 +1098,96 @@ describe('ChatsService usage (F1)', () => {
     };
     expect(rewritten.usageBackfilled).toBe(true);
     expect(rewritten.chats[0]?.usage?.requests).toBe(1);
+  });
+});
+
+describe('ChatsService effort (F3)', () => {
+  /** The `effort` the chat file holds on disk. */
+  async function effortOnFile(dataDir: string, id: string): Promise<unknown> {
+    const file = JSON.parse(await fs.readFile(dataPaths(dataDir).chatFile(id), 'utf8')) as { effort?: unknown };
+    return file.effort;
+  }
+  /** The `effort` the index entry holds on disk. */
+  async function effortInIndex(dataDir: string, id: string): Promise<unknown> {
+    const index = JSON.parse(await fs.readFile(dataPaths(dataDir).chatsIndex, 'utf8')) as {
+      chats: { id: string; effort?: unknown }[];
+    };
+    return index.chats.find((c) => c.id === id)?.effort;
+  }
+
+  it('a new chat starts at Default (null), in the return value, the file and the index', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const chat = await storage.chats.create({ projectId: null, model: 'm' });
+    expect(chat.effort).toBeNull();
+    expect((await storage.chats.list())[0]?.effort).toBeNull();
+    expect(await effortOnFile(dataDir, chat.id)).toBeNull();
+    expect(await effortInIndex(dataDir, chat.id)).toBeNull();
+  });
+
+  it.each(REASONING_EFFORTS)('stores %s and reads it back from get, list, the file and the index', async (effort) => {
+    const { storage, dataDir } = await makeStorage();
+    const chat = await storage.chats.create({ projectId: null, model: 'm' });
+    const updated = await storage.chats.update(chat.id, { effort });
+    expect(updated.effort).toBe(effort);
+    expect((await storage.chats.get(chat.id)).effort).toBe(effort);
+    expect((await storage.chats.list())[0]).toEqual(updated); // index in sync
+    expect(await effortOnFile(dataDir, chat.id)).toBe(effort);
+    expect(await effortInIndex(dataDir, chat.id)).toBe(effort);
+  });
+
+  it('can go back to Default (null), and renames and archive changes keep the effort', async () => {
+    const { storage } = await makeStorage();
+    const chat = await storage.chats.create({ projectId: null, model: 'm' });
+    await storage.chats.update(chat.id, { effort: 'low' });
+    await storage.chats.update(chat.id, { title: 'Renamed' });
+    await storage.chats.update(chat.id, { archived: true });
+    expect((await storage.chats.get(chat.id)).effort).toBe('low');
+    expect((await storage.chats.update(chat.id, { effort: null })).effort).toBeNull();
+    expect((await storage.chats.get(chat.id)).effort).toBeNull();
+  });
+
+  it('update bumps updatedAt only when the effort actually changes', async () => {
+    const { storage } = await makeStorage();
+    const chat = await storage.chats.create({ projectId: null, model: 'm' });
+    await sleep(5);
+    expect((await storage.chats.update(chat.id, { effort: null })).updatedAt).toBe(chat.updatedAt);
+    const changed = await storage.chats.update(chat.id, { effort: 'low' });
+    expect(changed.updatedAt > chat.updatedAt).toBe(true);
+  });
+
+  it('a chat file and index from before F3 (no effort) read as Default, messages intact', async () => {
+    const { dataDir } = await makeStorage();
+    const paths = dataPaths(dataDir);
+    await fs.mkdir(paths.chatsDir, { recursive: true });
+    const file = handChat('old');
+    await fs.writeFile(paths.chatFile('old'), JSON.stringify(file));
+    const { version: _v, messages: _m, ...entry } = file;
+    await fs.writeFile(paths.chatsIndex, JSON.stringify({ version: 1, chats: [entry] }));
+
+    const logger = recordingLogger();
+    const fresh = await createStorage({ dataDir, secretStore: new MemorySecretStore(), logger });
+    expect((await fresh.chats.list()).find((c) => c.id === 'old')?.effort).toBeNull();
+    const loaded = await fresh.chats.get('old');
+    expect(loaded.effort).toBeNull();
+    expect(loaded.messages.map((m) => m.id)).toEqual(['old-u', 'old-a']);
+    expect((await names(dataDir)).some((n) => n.includes('.corrupt-'))).toBe(false);
+    expect(logger.messages).toEqual([]);
+  });
+
+  it('an invalid stored effort reads as Default and keeps the chat and its messages', async () => {
+    const { dataDir } = await makeStorage();
+    const paths = dataPaths(dataDir);
+    await fs.mkdir(paths.chatsDir, { recursive: true });
+    await fs.writeFile(paths.chatFile('odd'), JSON.stringify(handChat('odd', { effort: 'bogus' })));
+    await fs.rm(paths.chatsIndex, { force: true });
+
+    const logger = recordingLogger();
+    const fresh = await createStorage({ dataDir, secretStore: new MemorySecretStore(), logger });
+    expect((await fresh.chats.list()).find((c) => c.id === 'odd')?.effort).toBeNull();
+    const loaded = await fresh.chats.get('odd');
+    expect(loaded.effort).toBeNull();
+    expect(loaded.messages.map((m) => m.id)).toEqual(['odd-u', 'odd-a']);
+    expect((await names(dataDir)).some((n) => n.includes('.corrupt-'))).toBe(false);
+    expect(logger.messages).toEqual([]);
   });
 });

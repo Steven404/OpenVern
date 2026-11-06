@@ -12,7 +12,7 @@ import type {
 } from '@shared/types';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ProviderError } from '../core/providers/types';
-import { createHarness, type Harness, PNG_BYTES, uploadForm } from './test-helpers';
+import { collectEvents, createHarness, type Harness, PNG_BYTES, uploadForm } from './test-helpers';
 
 let h: Harness;
 beforeEach(async () => {
@@ -352,5 +352,67 @@ describe('attachments', () => {
     await h.core.attachments.bindToChat([ref.id], chat.id);
     expect((await h.call(`/api/chats/${chat.id}`, { method: 'DELETE' })).status).toBe(204);
     await expectError(await h.call(`/api/attachments/${ref.id}/content`), 404, 'not_found');
+  });
+});
+
+describe('effort (F3)', () => {
+  // Sample models: Claude Sonnet 5.5 lists `reasoning`, DeepSeek V3.2 does not.
+  const REASONING = 'anthropic/claude-sonnet-5.5';
+  const NO_REASONING = 'deepseek/deepseek-v3.2';
+
+  async function newChat(model: string): Promise<Chat> {
+    return (await (await h.call('/api/chats', { method: 'POST', json: { projectId: null, model } })).json()) as Chat;
+  }
+  const send = (chatId: string, json: unknown) =>
+    h.call(`/api/chats/${chatId}/messages`, { method: 'POST', json: { attachmentIds: [], ...(json as object) } });
+
+  it('POST /messages passes the effort to the provider for a reasoning model', async () => {
+    const chat = await newChat(REASONING);
+    const res = await send(chat.id, { text: 'hi', model: REASONING, effort: 'high' });
+    expect(res.status).toBe(200);
+    await collectEvents(res);
+    expect(h.provider.calls[0]?.effort).toBe('high');
+    expect((await h.core.chats.get(chat.id)).effort).toBe('high');
+  });
+
+  it('POST /messages without an effort keeps the chat stored one', async () => {
+    const chat = await newChat(REASONING);
+    await collectEvents(await send(chat.id, { text: 'first', model: REASONING, effort: 'medium' }));
+    await collectEvents(await send(chat.id, { text: 'second', model: REASONING }));
+    expect(h.provider.calls[0]?.effort).toBe('medium');
+    expect(h.provider.calls.at(-1)?.effort).toBe('medium');
+    expect((await h.core.chats.get(chat.id)).effort).toBe('medium');
+  });
+
+  it('POST /messages with effort null sends no effort, and a model without reasoning drops it', async () => {
+    const chat = await newChat(REASONING);
+    await collectEvents(await send(chat.id, { text: 'hi', model: REASONING, effort: null }));
+    expect(h.provider.calls[0]).not.toHaveProperty('effort');
+
+    const plain = await newChat(NO_REASONING);
+    await collectEvents(await send(plain.id, { text: 'hi', model: NO_REASONING, effort: 'high' }));
+    expect(h.provider.calls.at(-1)).not.toHaveProperty('effort');
+    expect((await h.core.chats.get(plain.id)).effort).toBe('high');
+  });
+
+  it('POST /retry passes the effort from the body to the provider and stores it', async () => {
+    const chat = await newChat(REASONING);
+    await collectEvents(await send(chat.id, { text: 'hi', model: REASONING, effort: 'high' }));
+    const res = await h.call(`/api/chats/${chat.id}/retry`, {
+      method: 'POST',
+      json: { model: REASONING, effort: 'low' },
+    });
+    expect(res.status).toBe(200);
+    await collectEvents(res);
+    // The retry runs last and no title is requested again, so its reply is the last provider call.
+    expect(h.provider.calls.at(-1)?.effort).toBe('low');
+    expect((await h.core.chats.get(chat.id)).effort).toBe('low');
+  });
+
+  it('an unknown effort is a 400 before anything runs', async () => {
+    const chat = await newChat(REASONING);
+    await expectError(await send(chat.id, { text: 'hi', model: REASONING, effort: 'NONE' }), 400, 'invalid_request');
+    expect(h.provider.calls).toHaveLength(0);
+    expect((await h.core.chats.get(chat.id)).messages).toEqual([]);
   });
 });

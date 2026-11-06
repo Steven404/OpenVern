@@ -98,6 +98,18 @@ describe('createModelCatalog', () => {
     expect(second.calls).toBe(0);
   });
 
+  it('an old cache entry without supportsReasoning (written before F3) still loads, as not reasoning', async () => {
+    // Exactly the shape the catalog wrote before F3: no `supportsReasoning` key on the entry.
+    const { mkdir } = await import('node:fs/promises');
+    await mkdir(join(dir, 'cache'), { recursive: true });
+    await writeFile(cacheFile, JSON.stringify({ fetchedAt: new Date(clock).toISOString(), models: [A] }));
+    const p = fakeProvider([new ProviderError('no_api_key', 'no key')]);
+    const cat = createModelCatalog({ provider: p.provider, cacheFile, now });
+    expect(await cat.list()).toEqual([A]);
+    expect(p.calls).toBe(0);
+    expect((await cat.get('a/one')).supportsReasoning).not.toBe(true);
+  });
+
   it('serves the stale cache (disk or memory) when the fetch fails', async () => {
     const first = fakeProvider([[A]]);
     await createModelCatalog({ provider: first.provider, cacheFile, now }).list();

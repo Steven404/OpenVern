@@ -496,3 +496,56 @@ describe('MockApiClient usage (F1)', () => {
     expect(chats.find((c) => c.title === 'Settings: what goes in v1')?.usage).toEqual(ZERO);
   });
 });
+
+describe('MockApiClient effort (F3)', () => {
+  const MODEL = 'anthropic/claude-sonnet-5.5';
+  const signal = () => new AbortController().signal;
+
+  it('a sent effort is stored on the chat; a send without one keeps the stored effort', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const chat = await api.createChat({ projectId: null, model: MODEL });
+    expect(chat.effort).toBeNull();
+    await collect(api.sendMessage(chat.id, { text: 'hi', attachmentIds: [], model: MODEL, effort: 'high' }, signal()));
+    expect((await api.getChat(chat.id)).effort).toBe('high');
+    await collect(api.sendMessage(chat.id, { text: 'again', attachmentIds: [], model: MODEL }, signal()));
+    expect((await api.getChat(chat.id)).effort).toBe('high');
+  });
+
+  it('null (Default) is stored as Default', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const chat = await api.createChat({ projectId: null, model: MODEL });
+    await collect(api.sendMessage(chat.id, { text: 'hi', attachmentIds: [], model: MODEL, effort: 'low' }, signal()));
+    await collect(api.sendMessage(chat.id, { text: 'again', attachmentIds: [], model: MODEL, effort: null }, signal()));
+    expect((await api.getChat(chat.id)).effort).toBeNull();
+  });
+
+  it('retry without an effort keeps the stored one; with one, it replaces it', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const chat = await api.createChat({ projectId: null, model: MODEL });
+    await collect(api.sendMessage(chat.id, { text: 'hi', attachmentIds: [], model: MODEL, effort: 'low' }, signal()));
+    await collect(api.retry(chat.id, { model: MODEL }, signal()));
+    expect((await api.getChat(chat.id)).effort).toBe('low');
+    await collect(api.retry(chat.id, { model: MODEL, effort: 'max' }, signal()));
+    expect((await api.getChat(chat.id)).effort).toBe('max');
+  });
+
+  it('the final chat_updated carries the effort', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const chat = await api.createChat({ projectId: null, model: MODEL });
+    const events = await collect(
+      api.sendMessage(chat.id, { text: 'hi', attachmentIds: [], model: MODEL, effort: 'medium' }, signal()),
+    );
+    const last = events.filter((e) => e.type === 'chat_updated').at(-1);
+    expect(last?.type === 'chat_updated' && last.chat.effort).toBe('medium');
+  });
+
+  it('lastEffort round-trips through updateSettings and getSettings, and a lastModel patch keeps it', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    expect((await api.getSettings()).lastEffort).toBeNull();
+    expect((await api.updateSettings({ lastEffort: 'high' })).lastEffort).toBe('high');
+    expect((await api.getSettings()).lastEffort).toBe('high');
+    expect((await api.updateSettings({ lastModel: MODEL })).lastEffort).toBe('high');
+    expect((await api.updateSettings({ lastEffort: null })).lastEffort).toBeNull();
+    expect((await api.getSettings()).lastEffort).toBeNull();
+  });
+});

@@ -913,3 +913,91 @@ describe('usage (F1)', () => {
     });
   });
 });
+
+describe('effort (F3)', () => {
+  const REASONING = [model(MODEL, { tools: true, images: true, reasoning: true })];
+  const NO_REASONING = [model(MODEL, { tools: true, images: true })];
+
+  it('sends the effort with the request for a reasoning model', async () => {
+    const h = await createHarness({ script: scriptFromTurns([reply('Hi'), TITLE_TURN]), models: REASONING });
+    await h.run({ effort: 'high' });
+    expect(h.provider.calls[0]?.effort).toBe('high');
+  });
+
+  it('every request of a tool turn carries the effort', async () => {
+    const h = await createHarness({
+      script: scriptFromTurns([callTools([['c1', 'read_file', '{"path":"README.md"}']]), reply('Done.'), TITLE_TURN]),
+      models: REASONING,
+    });
+    await h.run({ effort: 'low' });
+    expect(h.provider.calls.slice(0, 2).map((c) => c.effort)).toEqual(['low', 'low']);
+  });
+
+  it('drops the effort for a model without reasoning, but still stores it on the chat', async () => {
+    const h = await createHarness({ script: scriptFromTurns([reply('Hi'), TITLE_TURN]), models: NO_REASONING });
+    const events = await h.run({ effort: 'high' });
+    expect(h.provider.calls[0]).not.toHaveProperty('effort');
+    expect((await h.chats.get(h.chatId)).effort).toBe('high');
+    expect(find(events, 'chat_updated')[0]?.chat.effort).toBe('high');
+  });
+
+  it('null (Default) sends no effort, even to a reasoning model, and stores null', async () => {
+    const h = await createHarness({ script: scriptFromTurns([reply('Hi'), TITLE_TURN]), models: REASONING });
+    await h.run({ effort: 'medium' });
+    await h.run({ effort: null, newUserMessage: { text: 'again', attachmentIds: [] } });
+    expect(h.provider.calls[2]).not.toHaveProperty('effort');
+    expect((await h.chats.get(h.chatId)).effort).toBeNull();
+  });
+
+  it('omitting effort keeps the stored one, for the request and for the chat', async () => {
+    const h = await createHarness({
+      script: scriptFromTurns([reply('Hi'), TITLE_TURN, reply('Again')]),
+      models: REASONING,
+    });
+    await h.run({ effort: 'low' });
+    await h.run({ newUserMessage: { text: 'more', attachmentIds: [] } });
+    expect(h.provider.calls[2]?.effort).toBe('low');
+    expect((await h.chats.get(h.chatId)).effort).toBe('low');
+  });
+
+  it('a retry uses the effort from the retry body and stores it', async () => {
+    const h = await createHarness({
+      script: scriptFromTurns([reply('Hi'), TITLE_TURN, reply('Retried')]),
+      models: REASONING,
+    });
+    await h.run({ effort: 'low' });
+    const events = await h.run({ newUserMessage: undefined, effort: 'max' });
+    expect(h.provider.calls[2]?.effort).toBe('max');
+    expect((await h.chats.get(h.chatId)).effort).toBe('max');
+    expect(find(events, 'chat_updated').at(-1)?.chat.effort).toBe('max');
+  });
+
+  it('a retry without an effort keeps the stored one', async () => {
+    const h = await createHarness({
+      script: scriptFromTurns([reply('Hi'), TITLE_TURN, reply('Retried')]),
+      models: REASONING,
+    });
+    await h.run({ effort: 'high' });
+    await h.run({ newUserMessage: undefined });
+    expect(h.provider.calls[2]?.effort).toBe('high');
+  });
+
+  it('chat.effort is persisted, and every chat_updated carries it', async () => {
+    const h = await createHarness({ script: scriptFromTurns([reply('Hi'), TITLE_TURN]), models: REASONING });
+    const events = await h.run({ effort: 'medium' });
+    expect((await h.chats.get(h.chatId)).effort).toBe('medium');
+    const updates = find(events, 'chat_updated');
+    expect(updates).toHaveLength(2);
+    for (const u of updates) expect(u.chat).toMatchObject({ id: h.chatId, effort: 'medium' });
+  });
+
+  it('title generation never sends an effort, even when the reply did', async () => {
+    const h = await createHarness({ script: scriptFromTurns([reply('Hi'), TITLE_TURN]), models: REASONING });
+    await h.run({ effort: 'high' });
+    expect(h.provider.calls[0]?.effort).toBe('high');
+    // calls[1] is the title request: no tools, maxTokens 30, and no effort.
+    expect(h.provider.calls[1]?.maxTokens).toBe(30);
+    expect(h.provider.calls[1]).not.toHaveProperty('effort');
+    expect((await h.chats.get(h.chatId)).title).toBe('Friendly greeting');
+  });
+});

@@ -118,6 +118,33 @@ describe('SettingsService', () => {
     });
   });
 
+  it('lastEffort defaults to null, round-trips across instances, and null clears it (F3)', async () => {
+    const { storage, dataDir, secrets } = await makeStorage();
+    expect((await storage.settings.get()).lastEffort).toBeNull();
+    expect((await storage.settings.update({ lastEffort: 'high' })).lastEffort).toBe('high');
+    const again = createSettingsService({ filePath: dataPaths(dataDir).settings, secretStore: secrets });
+    expect((await again.get()).lastEffort).toBe('high');
+    expect((await again.update({ lastEffort: null })).lastEffort).toBeNull();
+    expect((await again.get()).lastEffort).toBeNull();
+  });
+
+  it('a lastModel patch keeps lastEffort, and a lastEffort patch keeps lastModel (F3)', async () => {
+    const { storage } = await makeStorage();
+    await storage.settings.update({ lastModel: 'a/b', lastEffort: 'medium' });
+    expect(await storage.settings.update({ lastModel: 'c/d' })).toMatchObject({
+      lastModel: 'c/d',
+      lastEffort: 'medium',
+    });
+    expect(await storage.settings.update({ lastEffort: 'max' })).toMatchObject({ lastModel: 'c/d', lastEffort: 'max' });
+  });
+
+  it('a settings file from before F3 (no lastEffort) reads as null, keeping lastModel (F3)', async () => {
+    const { dataDir, secrets } = await makeStorage();
+    await fs.writeFile(dataPaths(dataDir).settings, JSON.stringify({ version: 1, lastModel: 'a/b' }));
+    const old = createSettingsService({ filePath: dataPaths(dataDir).settings, secretStore: secrets });
+    expect(await old.get()).toMatchObject({ lastModel: 'a/b', lastEffort: null });
+  });
+
   it('works end to end with a FileSecretStore', async () => {
     const dir = await makeTempDir();
     const paths = dataPaths(dir);

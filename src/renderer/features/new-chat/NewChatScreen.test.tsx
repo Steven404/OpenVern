@@ -214,4 +214,40 @@ describe('NewChatScreen', () => {
     expect(textarea().value).toBe('hello');
     expect(screen.getByTestId('location').textContent).toBe('/new');
   });
+
+  // ── F3: effort ──
+  it('a new chat starts from lastEffort, and the first send carries it', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    await api.updateSettings({ lastEffort: 'high' });
+    const send = vi.spyOn(api, 'sendMessage');
+    renderWithProviders(<App />, { api, route: '/new' });
+    await screen.findByRole('button', { name: 'Effort: High' });
+
+    fireEvent.change(textarea(), { target: { value: 'Explain effort' } });
+    fireEvent.keyDown(textarea(), { key: 'Enter' });
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    expect(send.mock.calls[0]?.[1]).toMatchObject({ effort: 'high' });
+    const chatId = send.mock.calls[0]?.[0] ?? '';
+    await waitFor(() => expect(useRunsStore.getState().runs[chatId]).toBeUndefined());
+  });
+
+  it('choosing an effort on a new chat changes the first send and is remembered as lastEffort', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const update = vi.spyOn(api, 'updateSettings');
+    const send = vi.spyOn(api, 'sendMessage');
+    renderWithProviders(<App />, { api, route: '/new' });
+    const trigger = await screen.findByRole('button', { name: 'Effort: Default' });
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: 'Enter' });
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Low' }));
+    expect(update).toHaveBeenLastCalledWith({ lastEffort: 'low' });
+    await screen.findByRole('button', { name: 'Effort: Low' });
+
+    fireEvent.change(textarea(), { target: { value: 'Quick one' } });
+    fireEvent.keyDown(textarea(), { key: 'Enter' });
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    expect(send.mock.calls[0]?.[1]).toMatchObject({ effort: 'low' });
+    const chatId = send.mock.calls[0]?.[0] ?? '';
+    await waitFor(() => expect(useRunsStore.getState().runs[chatId]).toBeUndefined());
+  });
 });

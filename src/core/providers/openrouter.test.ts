@@ -165,6 +165,22 @@ describe('request mapping', () => {
     expect(calls[0]?.body.tools).toBeUndefined();
   });
 
+  // ── F3: reasoning effort ──
+  it.each(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const)(
+    'sends reasoning.effort = %s when the request has that effort',
+    async (effort) => {
+      const { provider, calls } = make(() => sseResponse(fixture('text-stream.sse')));
+      await collect(provider, { ...REQ, effort });
+      expect(calls[0]?.body.reasoning).toEqual({ effort });
+    },
+  );
+
+  it('sends no reasoning key at all when the request has no effort (Default)', async () => {
+    const { provider, calls } = make(() => sseResponse(fixture('text-stream.sse')));
+    await collect(provider, REQ);
+    expect(calls[0]?.body).not.toHaveProperty('reasoning');
+  });
+
   it('throws no_api_key without calling fetch when there is no key', async () => {
     const { provider, calls } = make(() => sseResponse(''), null);
     const err = await caught(collect(provider));
@@ -475,6 +491,30 @@ describe('error mapping (pre-stream HTTP errors)', () => {
     const err = await caught(collect(provider));
     expect(err.message).toBe('The model provider returned an error: Provider returned error');
   });
+
+  // ── F3: reasoning effort errors ──
+  it('"Reasoning is mandatory" (400) → invalid_request with the effort hint, not retryable', async () => {
+    const { provider } = make(() =>
+      jsonResponse(400, {
+        error: { code: 400, message: 'Reasoning is mandatory for this endpoint and cannot be disabled.' },
+      }),
+    );
+    const err = await caught(collect(provider, { ...REQ, effort: 'none' }));
+    expect(err.code).toBe('invalid_request');
+    expect(err.message).toBe("This model can't turn reasoning off. Pick another effort.");
+    expect(err.retryable).toBe(false);
+    expect(err.status).toBe(400);
+  });
+
+  it('a different 400 that mentions reasoning keeps its own message, not the effort hint', async () => {
+    const { provider } = make(() =>
+      jsonResponse(400, { error: { code: 400, message: 'Invalid reasoning.effort value for this model.' } }),
+    );
+    const err = await caught(collect(provider, { ...REQ, effort: 'low' }));
+    expect(err.code).toBe('invalid_request');
+    expect(err.message).toBe('Invalid reasoning.effort value for this model.');
+    expect(err.message).not.toBe("This model can't turn reasoning off. Pick another effort.");
+  });
 });
 
 // ── S2.6: abort ────────────────────────────────────────────────────────────────────────────────
@@ -686,6 +726,15 @@ describe('listModels', () => {
       promptPricePerMTok: 0,
       completionPricePerMTok: 0,
     });
+  });
+
+  // ── F3: supportsReasoning comes from supported_parameters ──
+  it('mapModels sets supportsReasoning from "reasoning" in supported_parameters', () => {
+    const byId = Object.fromEntries(mapModels(models.data).map((m) => [m.id, m]));
+    expect(byId['anthropic/claude-sonnet-4.5']?.supportsReasoning).toBe(true);
+    expect(byId['deepseek/deepseek-chat-v3.1']?.supportsReasoning).toBe(false);
+    // Lists tools and max_tokens but not reasoning.
+    expect(byId['openrouter/auto']?.supportsReasoning).toBe(false);
   });
 
   it('does not produce float noise when scaling prices', () => {

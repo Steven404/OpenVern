@@ -316,6 +316,40 @@ describe('Conversation run overlay', () => {
     await waitFor(() => expect(screen.queryByTestId('error-card')).toBeNull());
   });
 
+  // ── F3: retry effort ──
+  it('a retry passes the effort chosen in this chat, over the one the chat stores', async () => {
+    const { api, chat } = await seededChat();
+    const full = await api.getChat(chat.id);
+    const retry = vi.spyOn(api, 'retry');
+    useRunsStore.setState({
+      chatEfforts: { [chat.id]: 'high' },
+      runs: { [chat.id]: { ...createRun(1), status: 'idle', error: errorInfo('provider_error') } },
+    });
+    renderWithProviders(<Conversation chatId={chat.id} />, { api, chats: [{ ...full, effort: 'low' }] });
+    const card = await screen.findByTestId('error-card');
+    await act(async () => {
+      fireEvent.click(within(card).getByRole('button', { name: 'Retry' }));
+    });
+    expect(retry.mock.calls[0]?.[1]).toEqual({ model: chat.model, effort: 'high' });
+    await waitFor(() => expect(screen.queryByTestId('error-card')).toBeNull());
+  });
+
+  it('a retry without a choice in this chat passes the effort the chat stores', async () => {
+    const { api, chat } = await seededChat();
+    const full = await api.getChat(chat.id);
+    const retry = vi.spyOn(api, 'retry');
+    useRunsStore.setState({
+      runs: { [chat.id]: { ...createRun(1), status: 'idle', error: errorInfo('provider_error') } },
+    });
+    renderWithProviders(<Conversation chatId={chat.id} />, { api, chats: [{ ...full, effort: 'low' }] });
+    const card = await screen.findByTestId('error-card');
+    await act(async () => {
+      fireEvent.click(within(card).getByRole('button', { name: 'Retry' }));
+    });
+    expect(retry.mock.calls[0]?.[1]).toEqual({ model: chat.model, effort: 'low' });
+    await waitFor(() => expect(screen.queryByTestId('error-card')).toBeNull());
+  });
+
   it('renders a persisted assistant error inline, once', async () => {
     const { api, chat } = await seededChat();
     const full: Chat = {
