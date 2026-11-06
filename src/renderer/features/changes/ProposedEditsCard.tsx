@@ -38,12 +38,9 @@ function CardShell({
     <section
       aria-label={title}
       data-testid="changes-card"
-      className={cx(
-        'overflow-hidden rounded-[14px] border bg-tool',
-        highlight ? 'border-border-hover' : 'border-border-tool',
-      )}
+      className={cx('overflow-hidden rounded-[12px]', highlight ? 'bg-card-active' : 'bg-card')}
     >
-      <div className="flex flex-wrap items-center gap-2.5 py-3 pr-3.5 pl-4">
+      <div className="flex flex-wrap items-center gap-2.5 pt-3 pr-3.5 pb-2.5 pl-4">
         <DiffIcon size={17} className="text-accent" />
         <span className="text-[14px] font-semibold text-text">{title}</span>
         <span className="text-[13px] text-text-muted">{plural(fileCount, 'file')}</span>
@@ -76,7 +73,7 @@ function FileRow({
       <button
         type="button"
         onClick={onOpen}
-        className="flex min-h-[34px] w-full cursor-pointer items-center gap-2.5 rounded-[8px] border-0 bg-transparent px-2 text-left text-[13px] text-text-secondary hover:bg-overlay-row"
+        className="flex min-h-[34px] w-full cursor-pointer items-center gap-2.5 rounded-[6px] border-0 bg-transparent px-2 text-left text-[13px] text-text-secondary hover:bg-overlay-row"
       >
         <StatusBadge kind={kind} />
         <PathLabel path={path} />
@@ -122,8 +119,8 @@ export function ProposedEditsCard({ chatId, pending }: { chatId: string; pending
             aria-pressed={reviewing}
             onClick={toggle}
             className={cx(
-              'inline-flex min-h-[34px] cursor-pointer items-center gap-2 rounded-[10px] border border-border-control px-3 text-[13px] font-medium text-text hover:border-border-hover hover:bg-surface-raised-hover',
-              reviewing ? 'bg-surface-raised' : 'bg-transparent',
+              'inline-flex min-h-[34px] cursor-pointer items-center gap-2 rounded-[8px] border-0 px-3 text-[13px] font-medium text-text hover:bg-overlay-tonal-hover',
+              reviewing ? 'bg-overlay-tonal-active' : 'bg-overlay-tonal',
             )}
           >
             {reviewing ? 'Reviewing' : 'Review changes'}
@@ -136,7 +133,6 @@ export function ProposedEditsCard({ chatId, pending }: { chatId: string; pending
 }
 
 export function AppliedEditsCard({ chatId, batch }: { chatId: string; batch: AppliedBatch }) {
-  const reviewing = useReviewing(chatId);
   const add = batch.written.reduce((n, f) => n + f.add, 0);
   const del = batch.written.reduce((n, f) => n + f.del, 0);
   return (
@@ -145,7 +141,7 @@ export function AppliedEditsCard({ chatId, batch }: { chatId: string; batch: App
       fileCount={batch.written.length}
       add={add}
       del={del}
-      highlight={reviewing}
+      highlight={false}
       rows={batch.written.map((f) => (
         <FileRow
           key={f.path}

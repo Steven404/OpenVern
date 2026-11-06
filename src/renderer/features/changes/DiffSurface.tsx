@@ -48,7 +48,7 @@ function useWindowWidth(): number {
 const ghostBtn =
   'inline-flex cursor-pointer items-center justify-center border-0 bg-transparent text-text-muted hover:bg-overlay-ghost hover:text-text';
 const lineBtn =
-  'inline-flex cursor-pointer items-center gap-2 border border-border-control bg-transparent text-text-secondary hover:border-border-hover hover:bg-surface-raised-hover hover:text-text disabled:cursor-not-allowed disabled:opacity-50';
+  'inline-flex cursor-pointer items-center gap-2 border-0 bg-overlay-tonal text-text-secondary hover:bg-overlay-tonal-hover hover:text-text disabled:cursor-not-allowed disabled:opacity-50';
 
 function HunkBlock({
   chatId,
@@ -95,7 +95,7 @@ function HunkBlock({
                 type="button"
                 aria-label="Reject this change"
                 onClick={() => set('rejected')}
-                className="inline-flex min-h-[30px] cursor-pointer items-center gap-1.5 rounded-[8px] border border-border-control bg-transparent px-2.5 text-[12.5px] text-text-secondary hover:border-[#a15b45] hover:bg-[rgb(229_134_95/0.14)] hover:text-[#f8c6b2]"
+                className="inline-flex min-h-[30px] cursor-pointer items-center gap-1.5 rounded-[6px] border-0 bg-overlay-tonal px-2.5 text-[12.5px] text-text-secondary hover:bg-accent-2/14 hover:text-[#f8c6b2]"
               >
                 <X aria-hidden="true" size={13} strokeWidth={2.2} />
                 Reject
@@ -104,7 +104,7 @@ function HunkBlock({
                 type="button"
                 aria-label="Accept this change"
                 onClick={() => set('accepted')}
-                className="inline-flex min-h-[30px] cursor-pointer items-center gap-1.5 rounded-[8px] border border-border-control bg-transparent px-2.5 text-[12.5px] text-text-secondary hover:border-[#5f927a] hover:bg-[rgb(159_212_179/0.16)] hover:text-[#d2efdd]"
+                className="inline-flex min-h-[30px] cursor-pointer items-center gap-1.5 rounded-[6px] border-0 bg-overlay-tonal px-2.5 text-[12.5px] text-text-secondary hover:bg-success/16 hover:text-[#d2efdd]"
               >
                 <Check aria-hidden="true" size={13} strokeWidth={2.2} />
                 Accept
@@ -115,9 +115,7 @@ function HunkBlock({
               <span
                 className={cx(
                   'inline-flex min-h-6 items-center rounded-full px-[9px] text-[12px] font-medium',
-                  d === 'accepted'
-                    ? 'bg-[rgb(159_212_179/0.14)] text-[#b5e0c6]'
-                    : 'bg-[rgb(229_134_95/0.14)] text-[#f2ad94]',
+                  d === 'accepted' ? 'bg-success/14 text-[#b5e0c6]' : 'bg-accent-2/14 text-[#f2ad94]',
                 )}
               >
                 {d === 'accepted' ? 'Accepted' : 'Rejected'}
@@ -126,7 +124,7 @@ function HunkBlock({
                 type="button"
                 aria-label="Undo decision"
                 onClick={() => set(null)}
-                className={cx(ghostBtn, 'min-h-[30px] rounded-[8px] px-2 text-[12.5px]')}
+                className={cx(ghostBtn, 'min-h-[30px] rounded-[6px] px-2 text-[12.5px]')}
               >
                 Undo
               </button>
@@ -239,11 +237,7 @@ export function DiffSurface({ chatId, params }: SurfaceProps) {
       <span className="flex-1" />
       {pending && (
         // biome-ignore lint/a11y/useSemanticElements: a segmented control, not a form fieldset
-        <div
-          role="group"
-          aria-label="Diff layout"
-          className="inline-flex gap-0.5 rounded-[10px] border border-border-tool bg-[#131932] p-[3px]"
-        >
+        <div role="group" aria-label="Diff layout" className="inline-flex gap-0.5 rounded-[8px] bg-[#131932] p-[3px]">
           {(['unified', 'split'] as const).map((m) => {
             const on = effMode === m;
             const disabled = m === 'split' && !canSplit;
@@ -256,7 +250,7 @@ export function DiffSurface({ chatId, params }: SurfaceProps) {
                 title={disabled ? 'Make the window wider to use Split' : undefined}
                 onClick={() => pick(m)}
                 className={cx(
-                  'inline-flex min-h-[30px] cursor-pointer items-center gap-1.5 rounded-[7px] border-0 px-2.5 text-[12.5px] disabled:cursor-not-allowed disabled:opacity-50',
+                  'inline-flex min-h-[30px] cursor-pointer items-center gap-1.5 rounded-[6px] border-0 px-2.5 text-[12.5px] disabled:cursor-not-allowed disabled:opacity-50',
                   on ? 'bg-segment-on text-text shadow-[0_1px_2px_rgb(0_0_0/0.35)]' : 'bg-transparent text-text-muted',
                 )}
               >
@@ -301,7 +295,7 @@ export function DiffSurface({ chatId, params }: SurfaceProps) {
                   aria-current={isCur}
                   onClick={() => showFile(f.path)}
                   className={cx(
-                    'flex min-h-9 w-full cursor-pointer items-center gap-2.5 rounded-[9px] border-0 px-2.5 text-left text-[13px] text-text-secondary hover:bg-overlay-row',
+                    'flex min-h-9 w-full cursor-pointer items-center gap-2.5 rounded-[7px] border-0 px-2.5 text-left text-[13px] text-text-secondary hover:bg-overlay-row',
                     isCur ? 'bg-surface-raised' : 'bg-transparent',
                   )}
                 >
@@ -369,7 +363,7 @@ export function DiffSurface({ chatId, params }: SurfaceProps) {
                 <button
                   type="button"
                   onClick={() => showFile(next.path)}
-                  className={cx(lineBtn, 'min-h-[34px] rounded-[10px] px-3 text-[13px]')}
+                  className={cx(lineBtn, 'min-h-[34px] rounded-[8px] px-3 text-[13px]')}
                 >
                   Next file
                   <ArrowRight aria-hidden="true" size={14} strokeWidth={2} />
@@ -391,14 +385,14 @@ export function DiffSurface({ chatId, params }: SurfaceProps) {
         <button
           type="button"
           onClick={() => setAll(chatId, pending, 'rejected')}
-          className={cx(ghostBtn, 'min-h-[38px] rounded-[10px] px-3 text-[13.5px] text-text-secondary')}
+          className={cx(ghostBtn, 'min-h-[38px] rounded-[8px] px-3 text-[13.5px] text-text-secondary')}
         >
           Reject all
         </button>
         <button
           type="button"
           onClick={() => setAll(chatId, pending, 'accepted')}
-          className={cx(lineBtn, 'min-h-[38px] rounded-[10px] px-3 text-[13.5px] text-text')}
+          className={cx(lineBtn, 'min-h-[38px] rounded-[8px] px-3 text-[13.5px] text-text')}
         >
           Accept all
         </button>
@@ -407,7 +401,7 @@ export function DiffSurface({ chatId, params }: SurfaceProps) {
           disabled={applyDisabled}
           aria-busy={busy || undefined}
           onClick={() => void act()}
-          className="inline-flex min-h-[38px] cursor-pointer items-center gap-2 rounded-[10px] border-0 bg-accent px-3.5 text-[13.5px] font-semibold text-bg hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-40"
+          className="inline-flex min-h-[38px] cursor-pointer items-center gap-2 rounded-[8px] border-0 bg-accent px-3.5 text-[13.5px] font-semibold text-bg hover:brightness-[1.06] disabled:cursor-not-allowed disabled:opacity-40"
         >
           <Check aria-hidden="true" size={15} strokeWidth={2.2} />
           {discarding ? 'Discard' : progress.accepted === 0 ? 'Apply' : `Apply ${progress.accepted}`}
