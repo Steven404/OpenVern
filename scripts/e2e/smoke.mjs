@@ -175,6 +175,40 @@ async function openSubmenu(label, firstItemRole, firstItemText) {
   }
 }
 
+/** The submenu item is in the DOM with a box that did not move since the previous poll (a submenu that is still opening or closing moves). */
+const itemSettled = (role, text) => `(() => {
+  const e = ${byText(`[role=${role}]`, text, true)};
+  if (!e) return false;
+  const r = e.getBoundingClientRect();
+  const box = [r.x, r.y, r.width, r.height].join(',');
+  const settled = r.width > 0 && r.height > 0 && window.__e2eSettleBox === box;
+  window.__e2eSettleBox = box;
+  return settled;
+})()`;
+
+/**
+ * Picks an item in a Radix submenu: opens it, waits until the item is visible and has stopped moving, then clicks.
+ * Radix can close the submenu between opening and clicking, so a failed attempt re-opens it (3 tries in all).
+ */
+async function chooseInSubmenu(label, role, itemText, { shotName } = {}) {
+  const item = byText(`[role=${role}]`, itemText, true);
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await openSubmenu(label, role, itemText);
+      await ev('delete window.__e2eSettleBox');
+      await waitFor(itemSettled(role, itemText), `${itemText} settled in submenu`, 1500);
+      if (shotName) await shot(shotName);
+      await click(item, itemText);
+      return;
+    } catch (err) {
+      if (attempt === 3) throw err;
+      note(
+        `submenu "${label}" lost ${itemText} (${err.message.split('\n')[0]}); re-opening, attempt ${attempt + 1} of 3`,
+      );
+    }
+  }
+}
+
 async function menuItem(triggerExpr, itemText, { role = 'menuitem' } = {}) {
   await click(triggerExpr, 'menu trigger');
   await waitFor(`!!${byText(`[role=${role}]`, itemText)}`, `menu item ${itemText}`);
@@ -628,9 +662,7 @@ async function mainPhase() {
 
     await click(chatOptions, 'Chat options');
     await waitFor(`!!${byText('[role=menuitem]', 'Move to project')}`, 'menu');
-    await openSubmenu('Move to project', 'menuitemradio', 'e2e-proj-b');
-    await shot('a13-move-menu');
-    await click(byText('[role=menuitemradio]', 'e2e-proj-b', true), 'e2e-proj-b');
+    await chooseInSubmenu('Move to project', 'menuitemradio', 'e2e-proj-b', { shotName: 'a13-move-menu' });
     await waitFor(
       `(document.querySelector('main header')?.innerText ?? '').toUpperCase().includes('E2E-PROJ-B')`,
       'moved to B',
@@ -645,8 +677,7 @@ async function mainPhase() {
 
     await click(chatOptions, 'Chat options');
     await waitFor(`!!${byText('[role=menuitem]', 'Move to project')}`, 'menu');
-    await openSubmenu('Move to project', 'menuitemradio', 'No project');
-    await click(byText('[role=menuitemradio]', 'No project', true), 'No project');
+    await chooseInSubmenu('Move to project', 'menuitemradio', 'No project');
     await waitFor(
       `(document.querySelector('main header')?.innerText ?? '').toUpperCase().includes('CHATS /')`,
       'moved to Chats',
