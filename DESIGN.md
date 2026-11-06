@@ -6,9 +6,13 @@ colors:
   accent-2: "#e5865f"
   success: "#9fd4b3"
   danger: "#ff8f87"
-  bg: "#0f1428"
+  bg: "#10162e"
   sidebar: "#0b0f20"
   surface: "#1a2142"
+  surface-focus: "#1f2752"
+  card: "#182040"
+  card-active: "#1d2448"
+  code-inline: "#1d2446"
   surface-raised: "#222a52"
   surface-raised-hover: "#2c3666"
   surface-raised-active: "#263058"
@@ -32,6 +36,11 @@ colors:
   text-chat: "#a9b2cf"
   text-muted: "#9ba5c6"
   text-faint: "#8792b6"
+  overlay-tonal: "rgb(200 215 255 / 0.06)"
+  overlay-tonal-hover: "rgb(200 215 255 / 0.10)"
+  overlay-tonal-active: "rgb(200 215 255 / 0.12)"
+  selection: "rgb(246 189 96 / 0.28)"
+  selection-text: "#fff4e0"
   overlay-row: "rgb(200 215 255 / 0.05)"
   overlay-ghost: "rgb(200 215 255 / 0.07)"
   overlay-current: "rgb(200 215 255 / 0.08)"
@@ -63,21 +72,20 @@ typography:
     fontWeight: 400
     lineHeight: 1.65
   label:
-    fontFamily: "JetBrains Mono Variable, JetBrains Mono, ui-monospace, monospace"
-    fontSize: "11px"
-    fontWeight: 500
-    letterSpacing: "0.12em"
+    fontFamily: "Figtree Variable, Figtree, system-ui, sans-serif"
+    fontSize: "13px"
+    fontWeight: 600
   code:
     fontFamily: "JetBrains Mono Variable, JetBrains Mono, ui-monospace, monospace"
     fontSize: "13px"
     fontWeight: 400
     lineHeight: 1.7
 rounded:
-  xs: "6px"
-  sm: "8px"
-  md: "10px"
-  lg: "12px"
-  xl: "18px"
+  xs: "5px"
+  sm: "6px"
+  md: "8px"
+  lg: "10px"
+  xl: "14px"
   pill: "999px"
 spacing:
   xs: "4px"
@@ -131,12 +139,13 @@ components:
   composer:
     backgroundColor: "{colors.surface}"
     textColor: "{colors.text}"
+    focusBackgroundColor: "{colors.surface-focus}"
     rounded: "{rounded.xl}"
     padding: "14px 14px 10px 18px"
   user-bubble:
     backgroundColor: "{colors.bubble}"
     textColor: "{colors.text}"
-    rounded: "{rounded.xl}"
+    rounded: "14px 14px 5px 14px"
     padding: "12px 16px"
   tool-row:
     backgroundColor: "{colors.tool}"
@@ -161,17 +170,17 @@ components:
 
 **Creative North Star: "The Blue Hour"**
 
-The few minutes after sunset when the sky turns deep indigo and the windows along a canal light up. The ground is a cool night blue that stays calm for hours of reading; surfaces step up in small dusk-blue increments; and one warm lamplight accent glows where the next action is, the way a lit window draws the eye across dark water. Gable brick, the colour of the canal houses, is the quiet second voice.
+The few minutes after sunset when the sky turns deep indigo and the windows along a canal light up. The flat `#10162e` ground stays calm for hours of reading; surfaces step up in small dusk-blue increments; and one warm lamplight accent marks the next action, the way a lit window draws the eye across dark water. Gable brick, the colour of the canal houses, is the quiet second voice.
 
-The window carries a faint dusk glow at the top (the `--backdrop`), the only gradient in the system. Everything else is flat colour, 1px lines and type. Density is calm, not sparse: a 272px sidebar, a centred 760px conversation column and 32px between turns. The interface shows its work (tool calls, files read, proposed edits) as small legible rows, because the product's stance is visible over magical.
+The window uses a flat `#10162e` ground with no backdrop glow. Everything else is flat colour, 1px lines and type. Density is calm, not sparse: a 272px sidebar, a centred 760px conversation column and 32px between turns. The interface shows its work (tool calls, files read, proposed edits) as small legible rows, because the product's stance is visible over magical.
 
-Blue hour is the default theme. The original warm theme, **Late Workshop**, is kept intact as an alternate (see Colors) for a future theme setting.
+Blue hour is the shipped design. **Late Workshop** remains a future theme; there is no theme switch or theme persistence yet.
 
 **Key Characteristics:**
-- Cool indigo ground with tonal surface steps, not shadows; one faint dusk glow at the top of the window.
+- Flat cool indigo ground with tonal surface steps, not shadows or a backdrop glow.
 - One warm lamplight accent for the primary action and focus; gable brick for project folders and code keywords.
 - Display voice in Bricolage Grotesque, reading voice in Figtree, machine voice in JetBrains Mono.
-- Soft corners (8–18px), 1px cool borders, ghost controls by default.
+- Soft corners (5–14px), 1px cool borders where needed, tonal controls by default.
 - Self-hosted fonts; no runtime requests to font CDNs.
 
 ## Colors
@@ -179,7 +188,7 @@ Blue hour is the default theme. The original warm theme, **Late Workshop**, is k
 A cool night-blue ramp lit by warm lamplight, taken from canal streets at blue hour.
 
 ### Primary
-- **Lamplight** (accent): the one primary action per view (Send, Apply), the focus ring, the wordmark's full stop, the current-chat marker and the assistant avatar. Text on it is the ground colour.
+- **Lamplight** (accent): the one primary action per view (Send, Apply), the focus ring, the wordmark's full stop, and the current-chat marker. Text on it is the ground colour.
 
 ### Secondary
 - **Gable Brick** (accent-2): project folder icons and code keywords. Never a second primary button.
@@ -189,7 +198,7 @@ A cool night-blue ramp lit by warm lamplight, taken from canal streets at blue h
 - **Signal Coral** (danger): errors, destructive confirms, invalid fields.
 
 ### Neutral
-- **Blue Hour** (bg): the conversation ground, under the dusk glow.
+- **Blue Hour** (bg, `#10162e`): the flat conversation ground.
 - **Deep Water** (sidebar): one step darker than the ground so the conversation reads as the lit area.
 - **Night Canal** (code): code blocks and diff bodies, the darkest surface.
 - **Dusk / Raised Dusk / Hover / Active** (surface, surface-raised and states): composer, fields, outline buttons, selected rows.
@@ -200,20 +209,18 @@ A cool night-blue ramp lit by warm lamplight, taken from canal streets at blue h
 - **Overlays** (overlay-row / ghost / current): translucent moonlight for row hover, ghost-button hover and the current item.
 
 ### Backdrop
-`--backdrop` (not a colour token): a radial glow of `rgb(98 126 214 / 0.22)` from above the window's top edge over a vertical ramp `#121a38 → bg → #0d1224`. Painted once, on the app shell.
+There is no backdrop glow or gradient. The app shell uses the flat Blue hour ground (`#10162e`).
 
 ### Diff colours
 Tokens `diff-add-*`, `diff-del-*`, `diff-text`, `diff-range` and `segment-on` (the selected half of the Unified/Split control). Added lines sit on seafoam at 9% opacity with a `#9fd4b3` sign; removed lines on gable brick at 11% with a `#f09a7c` sign; line-number gutters (`*-num`, `*-num-bg`) take the same hue a step stronger. Rejected hunks are dimmed to 42% opacity.
 
-### Alternate theme: Late Workshop
-The original warm theme, kept for a future theme setting. Same token names, warm plum-black values: ground `#161316`, sidebar `#120f12`, surface `#221c21`, text `#f0e6e6`, accent Late Sand `#f2cc8f`, accent-2 Terracotta `#e07a5f`, success Sage `#b8d4a0`, no backdrop glow. The full set lives in `src/renderer/styles/tokens.css` under `[data-theme="late-workshop"]`; setting that attribute on `<html>` switches the whole app. The three scrollbar thumb tokens (`--color-scroll-thumb`, `--color-scroll-thumb-hover`, `--color-scroll-thumb-active`) are overridden here rather than aliased, because the warm border steps do not match the thumb: rest `#4a3c46`, hover `#5e4c58`, drag `#76626f`. The token names are the same.
+### Future theme: Late Workshop
+Late Workshop is not shipped as a selectable theme. A future theme setting may bring back the original warm palette; there is no switch, persistence, or expanded alternate token set in the current product.
 
 ### Named Rules
-**The One Glow Rule.** Lamplight marks at most one primary action per view, plus focus. If two things are amber, one of them is wrong.
+**The One Accent Rule.** Lamplight marks at most one primary action per view, plus focus. If two things are amber, one of them is wrong.
 
 **The Night Not Gray Rule.** Every neutral carries the indigo tint. A pure gray (`#888`, `#1e1e1e`) never enters the palette.
-
-**The Same Names Rule.** Themes change values, never token names. A new screen that works in Blue hour works in Late Workshop without edits.
 
 ## Typography
 
@@ -229,7 +236,7 @@ The original warm theme, kept for a future theme setting. Same token names, warm
 - **Title** (600, 15px): chat titles in the header, card titles.
 - **Body** (400, 15px, 1.5): UI copy and controls.
 - **Message** (400, 15.5px, 1.65): conversation prose; the column caps it near 75ch.
-- **Label** (500, 11px, 0.12em, uppercase mono): section labels such as Projects; also keyboard hints and counts at 11–12px.
+- **Section label** (600, 13px, Figtree): section headings such as Projects. Mono is reserved for machine data; keyboard hints and counts use mono at 11–12px.
 - **Code** (400, 13px, 1.7 mono): code blocks; diffs use 12.5px on a 20px line.
 
 ### Named Rules
@@ -246,7 +253,7 @@ The **right panel** docks to the right of the conversation (1px left border, sid
 Tonal and nearly flat. Depth comes from stepped dusk-blue surfaces and 1px borders: sidebar darker than the ground, raised controls lighter, code darkest. Shadows appear only on things that float above the page: menus, popovers, dialogs and the New chat composer.
 
 ### Shadow Vocabulary
-- **Floating composer** (`box-shadow: 0 24px 64px -32px rgba(0,0,0,0.6)`): the New chat composer, the one hero surface.
+- **Floating composer** (`box-shadow: 0 24px 64px -32px rgba(0,0,0,0.6)`): the New chat composer.
 - **Segment lift** (`box-shadow: 0 1px 2px rgba(0,0,0,0.35)`): the selected option in a segmented control.
 
 ### Named Rules
@@ -254,7 +261,7 @@ Tonal and nearly flat. Depth comes from stepped dusk-blue surfaces and 1px borde
 
 ## Shapes
 
-Soft, consistent corners that grow with the element: 6px for key hints and badges, 8px for list rows and small buttons, 10px for buttons and icon buttons, 12px for fields, tool rows, code blocks and the New chat button, 18px for the composer and message bubbles, full pill for chips. The user bubble tucks its bottom-right corner to 6px to point at its author. Borders are always 1px.
+Soft, consistent corners that grow with the element: 5px for key hints, badges and inline code; 6px for small controls, tabs and tree rows; 7px for project rows; 8px for regular controls; 10px for tool rows, code blocks and the New chat button; 12px for cards; 14px for composers and message bubbles, full pill for chips. The user bubble tucks its bottom-right corner to 6px to point at its author. Borders are always 1px.
 
 ## Components
 
@@ -274,20 +281,20 @@ Soft-cornered and quiet: ghost by default, the accent saved for the one action t
 - **Style:** transparent pill, 1px control border, 13px secondary text, optional 14px icon (e.g. the project chip in the composer). Hover fills with bubble.
 
 ### Cards / Containers
-- **Tool row:** tow path, 1px tool border, 12px corners, seafoam check, mono tool name, muted path, faint timing.
-- **Code block:** night canal, 1px border, 12px corners, 16×18px padding.
-- **Proposed edits card:** tow path, 14px corners, file rows with A/M badges and +/− counts, a footer strip one step darker holding status and the Review button.
+- **Tool row:** tow path, 1px tool border, 10px corners, seafoam check, mono tool name, muted path, faint timing.
+- **Code block:** night canal, 1px border, 10px corners, 16×18px padding.
+- **Proposed edits card:** card surface (`#182040`), active while reviewing (`#1d2448`), 12px corners; file rows show A/M badges and +/− counts, with a footer strip holding status and the Review button.
 
 ### Inputs / Fields
-- **Style:** surface fill, control border, 12px corners, 44px tall, faint placeholder.
+- **Style:** surface fill, control border, 10px corners, 44px tall, faint placeholder.
 - **Focus:** border shifts to border-focus; the global sand outline also shows.
 - **Error / Disabled:** danger border and a danger message below; disabled at 50% opacity.
 
 ### Navigation
-- **Sidebar:** deep water, mono uppercase section label, project rows 36px with a rotating chevron and terracotta folder icon. Chats indent 30px; the current chat gets the current overlay and a 2px sand inset marker.
+- **Sidebar:** deep water, 13px Figtree section label, project rows 36px with a rotating chevron and terracotta folder icon. Chats indent 30px; the current chat gets the current overlay and a 2px sand inset marker.
 
 ### Composer (signature)
-Dusk surface, 18px corners, borderless textarea, a tools row with attach (ghost icon), model picker (ghost text) and a 38px sand send button. The border brightens to border-focus while focused.
+Dusk surface (`#1a2142`, focus `#1f2752`), 14px corners, borderless textarea, a tools row with attach (ghost icon), model picker (ghost text) and a 38px sand send button. On focus, the fill shifts to `#1f2752` and the border brightens to border-focus.
 
 ### Right panel
 A tab strip (pinned Files tab, closable tabs for open files and Diff, a "+" that opens the launcher, a close button) over a surface. The launcher lists Files, Terminal and Diff with a hint and a key (F, T, D); unavailable rows are dimmed with the reason ("Not available yet", "Only for chats in a project", "Available after the current chat has made edits"). Files: project name, collapse-all, a filter field, the tree in mono, and a footer saying ignored and secret files are hidden. The file viewer has a breadcrumb, line count, an Attach ghost button and numbered lines on the code surface.
@@ -313,7 +320,7 @@ Quiet and always there when something can scroll. The thumb is the only mark.
 - **Do** show tool calls and proposed edits as visible rows or cards in the conversation.
 - **Do** use 1px cool borders and surface steps for separation.
 - **Do** keep text at 4.5:1 or better; `text-faint` is the floor for meta text on the ground.
-- **Do** add any new colour to both themes in `tokens.css`.
+- **Do** route new interface colours through existing Blue hour tokens.
 
 ### Don't:
 - **Don't** introduce pure grays; neutrals stay indigo-tinted.
@@ -321,4 +328,4 @@ Quiet and always there when something can scroll. The thumb is the only mark.
 - **Don't** use mono for prose or headings.
 - **Don't** load fonts from a CDN in the app; use the `@fontsource-variable` packages.
 - **Don't** add a second filled accent button beside the primary.
-- **Don't** add gradients beyond the backdrop glow.
+- **Don't** add gradients.

@@ -18,7 +18,7 @@ OpenVern is a desktop AI app: chat with an LLM about a local code project, with 
 
 ## Positioning
 
-- **You see every step.** Tool calls, files read and (later) edits are shown in the conversation, and every change can be opened as a diff. The user chooses how writes are approved: review each change before it touches disk, or let edits land as the model responds and stop only for high-risk ones.
+- **You see every step.** Tool calls, files read and proposed edits are shown in the conversation, and every change can be opened as a diff. The user chooses how writes are approved: review each change before it touches disk, or let edits land as the model responds and stop only for high-risk ones.
 - **Any model.** Provider-agnostic: V0 talks to OpenRouter through a thin in-house adapter, not one vendor's SDK.
 - **Local and private.** Chats, projects and settings live in local JSON files; the API key sits in the OS keyring (Electron `safeStorage`); no telemetry.
 
@@ -36,6 +36,10 @@ OpenVern is a desktop AI app: chat with an LLM about a local code project, with 
 - **Next, committed:** a light theme (only dark exists today).
 - **Not committed:** running commands, direct providers besides OpenRouter, branching or editing past messages, token/cost display, context compaction, chat search, MCP, Windows/macOS builds, auto-update, i18n.
 - Terminology: *project*, *chat*, *tool call*, *proposed edits*, *apply*, *review mode*, *auto mode*.
+
+## Shipped Design
+
+The interface uses the flat Blue hour design: an indigo `#10162e` ground, tonal surfaces, warm lamplight accents, and self-hosted fonts. The composer changes from `#1a2142` at rest to `#1f2752` on focus; proposed edit cards use `#182040` and `#1d2448` while active. There is no backdrop glow and no selectable theme setting. Late Workshop remains a future theme.
 
 ## Brand Commitments
 
