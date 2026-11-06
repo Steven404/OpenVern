@@ -261,6 +261,14 @@ export function DiffSurface({ chatId, params }: SurfaceProps) {
           })}
         </div>
       )}
+      <button
+        type="button"
+        aria-label="Close review"
+        onClick={() => useUiStore.getState().setRightPanelOpen(false)}
+        className={cx(ghostBtn, 'size-9 flex-none rounded-[8px]')}
+      >
+        <X aria-hidden="true" size={17} strokeWidth={1.9} />
+      </button>
     </header>
   );
 

@@ -21,7 +21,7 @@ function AppliedFile({ file, mode }: { file: AppliedBatch['written'][number]; mo
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
-        className="flex min-h-9 w-full cursor-pointer items-center gap-2.5 border-0 bg-transparent px-4 text-left text-[13px] text-text-secondary hover:bg-overlay-row"
+        className="flex min-h-9 w-full cursor-pointer items-center gap-2.5 rounded-[7px] border-0 bg-transparent px-4 text-left text-[13px] text-text-secondary hover:bg-overlay-row"
       >
         <ChevronRight
           aria-hidden="true"
@@ -50,9 +50,7 @@ export function AppliedList({ batches, mode = 'unified' }: { batches: AppliedBat
   const newestFirst = [...batches].reverse();
   return (
     <section aria-label="Applied" className="border-t border-border-header">
-      <h3 className="m-0 px-4 pt-4 pb-2 font-mono text-[11px] font-medium tracking-[0.12em] text-text-muted uppercase">
-        Applied
-      </h3>
+      <h3 className="m-0 px-4 pt-4 pb-2 text-[13px] font-semibold text-text-muted">Applied</h3>
       <ul className="m-0 flex list-none flex-col gap-3 p-0 pb-4">
         {newestFirst.map((b) => (
           <li key={b.id} data-testid="applied-batch" className="flex flex-col">
