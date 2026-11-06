@@ -8,6 +8,7 @@ import {
   MenuTrigger,
 } from '@renderer/components/ui';
 import { RenameDialog } from '@renderer/features/chat-header';
+import { ApiError } from '@renderer/lib/api-client';
 import { useApiClient } from '@renderer/lib/api-context';
 import { queryKeys } from '@renderer/lib/query-keys';
 import { NEW_CHAT_PROJECT_PARAM, paths } from '@renderer/lib/routes';
@@ -56,6 +57,13 @@ export function ProjectMenu({ project, onMenuOpenChange }: ProjectMenuProps) {
     },
   });
 
+  // Shown inline; the dialog stays open so the user can retry (a retry clears it, a success closes the dialog).
+  const removeError = remove.error
+    ? remove.error instanceof ApiError
+      ? remove.error.info.message
+      : 'Something went wrong. Try again.'
+    : undefined;
+
   return (
     <>
       <Menu onOpenChange={onMenuOpenChange}>
@@ -81,7 +89,14 @@ export function ProjectMenu({ project, onMenuOpenChange }: ProjectMenuProps) {
             Rename
           </MenuItem>
           <MenuSeparator />
-          <MenuItem danger icon={<Trash2 size={15} />} onSelect={() => setRemoveOpen(true)}>
+          <MenuItem
+            danger
+            icon={<Trash2 size={15} />}
+            onSelect={() => {
+              remove.reset();
+              setRemoveOpen(true);
+            }}
+          >
             Remove
           </MenuItem>
         </MenuContent>
@@ -109,7 +124,13 @@ export function ProjectMenu({ project, onMenuOpenChange }: ProjectMenuProps) {
         loading={remove.isPending}
         returnFocusRef={triggerRef}
         onConfirm={() => remove.mutate()}
-      />
+      >
+        {removeError ? (
+          <p role="alert" className="text-[13px] text-danger">
+            {removeError}
+          </p>
+        ) : null}
+      </ConfirmDialog>
     </>
   );
 }

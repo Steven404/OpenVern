@@ -170,7 +170,13 @@ try {
     check('B15 loose chat has no pending edits', (await changes()).pending === null);
     await showLauncher();
     check('B4 Terminal is disabled', (await rowDisabled('Terminal')) === true);
-    check('B4/B15 Files is disabled in a chat without a project', (await rowDisabled('Files')) === true);
+    check('B4/B15 Files is enabled (home folder) in a chat without a project', (await rowDisabled('Files')) === false);
+    const filesHint = await ev(`${launcherRow('Files')}?.innerText ?? ''`);
+    check(
+      'B4/B15 Files hint says "Browse your home folder, read-only"',
+      filesHint.includes('Browse your home folder, read-only'),
+      filesHint.replace(/\n/g, ' | '),
+    );
     check('B4/B15 Diff is disabled in a chat without edits', (await rowDisabled('Diff')) === true);
     const hint = await ev(`${launcherRow('Terminal')}?.innerText ?? ''`);
     check('B4 Terminal hint says "Not available yet"', hint.includes('Not available yet'), hint.replace(/\n/g, ' | '));

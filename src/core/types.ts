@@ -76,8 +76,8 @@ export interface ChatsService {
   create(input: { projectId: Id | null; model: string }): Promise<Chat>;
   /**
    * Bumps `updatedAt` only when `model` changes (renames, moves and archive changes don't reorder the sidebar).
-   * `archived` applies only to chats without a project: a chat that ends up in a project is always unarchived,
-   * and `archived: true` for one throws `conflict` without writing. Moving to `projectId: null` keeps the flag.
+   * `archived` applies to any chat, in a project or not. Only `archived` changes the flag: moving a chat between
+   * projects, or to and from `projectId: null`, keeps it.
    */
   update(
     id: Id,

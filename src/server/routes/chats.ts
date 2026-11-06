@@ -71,18 +71,16 @@ export function chatRoutes(core: Core): Hono {
         if (body.projectId !== undefined && projectId !== body.projectId && (await core.changes.get(id)).pending)
           throw new CoreError('conflict', 'Apply or discard the proposed edits first.');
       };
-      // A move into a project can clear the flag. Hold the run claim across a fresh read so an archive
-      // that lands after the first snapshot cannot be wiped while a reply is in progress.
-      const guardsFlag = body.archived !== undefined || typeof body.projectId === 'string';
-      if (guardsFlag) {
+      // Only `archived` changes the flag (a move keeps it). Archive changes need the chat idle: hold the run
+      // claim across a fresh read so a turn can't start between the check and the write.
+      if (body.archived !== undefined) {
         if (starting.has(id))
           throw new CoreError('conflict', 'Wait for the response to finish before archiving or unarchiving this chat.');
         starting.add(id);
         try {
           const fresh = await core.chats.get(id);
           await rejectPendingMove(fresh.projectId);
-          const changesFlag = body.archived !== undefined || (fresh.archived && typeof body.projectId === 'string');
-          if (changesFlag && core.agent.isRunning(id))
+          if (core.agent.isRunning(id))
             throw new CoreError(
               'conflict',
               'Wait for the response to finish before archiving or unarchiving this chat.',

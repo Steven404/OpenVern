@@ -55,17 +55,12 @@ export const renameProjectBody = z.object({ name: z.string().trim().min(1).max(2
 /** `POST /chats` */
 export const createChatBody = z.object({ projectId: id.nullable(), model: modelId });
 /** `PATCH /chats/:id` */
-export const updateChatBody = z
-  .object({
-    title: z.string().trim().min(1).max(200).optional(),
-    projectId: id.nullable().optional(),
-    /** Only chats without a project can be archived. */
-    archived: z.boolean().optional(),
-  })
-  .refine((b) => !(b.archived === true && typeof b.projectId === 'string'), {
-    path: ['archived'],
-    message: 'A chat in a project cannot be archived.',
-  });
+export const updateChatBody = z.object({
+  title: z.string().trim().min(1).max(200).optional(),
+  projectId: id.nullable().optional(),
+  /** Any chat can be archived; a move keeps the flag. */
+  archived: z.boolean().optional(),
+});
 /** `POST /chats/:id/messages` → `text/event-stream` of `AgentEvent` */
 export const sendMessageBody = z
   .object({ text: z.string(), attachmentIds: z.array(id).max(LIMITS.attachmentsPerMessage), model: modelId })
