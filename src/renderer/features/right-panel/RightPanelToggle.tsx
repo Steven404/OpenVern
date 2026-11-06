@@ -1,4 +1,4 @@
-import { cx, IconButton } from '@renderer/components/ui';
+import { IconButton } from '@renderer/components/ui';
 import { useUiStore } from '@renderer/stores/ui';
 import { RightPanelIcon } from './icons';
 import { RIGHT_PANEL_TOGGLE_ID } from './RightPanel';
@@ -16,7 +16,7 @@ export function RightPanelToggle() {
       aria-controls="right-panel"
       tooltip="Toggle right panel (Ctrl ])"
       onClick={toggle}
-      className={cx(open && 'bg-surface-raised text-text')}
+      className="aria-pressed:bg-surface-raised aria-pressed:text-text"
     >
       <RightPanelIcon />
     </IconButton>

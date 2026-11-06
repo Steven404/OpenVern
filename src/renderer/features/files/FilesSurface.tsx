@@ -61,7 +61,7 @@ export function FilesSurface({ chatId, projectId }: SurfaceProps) {
             placeholder="Filter files"
             value={query}
             onChange={(e) => setQuery(chatId, e.target.value)}
-            className="min-w-0 flex-1 border-0 bg-transparent text-[13.5px] text-text outline-none placeholder:text-text-faint focus-visible:outline-none"
+            className="min-w-0 flex-1 border-0 bg-transparent text-[13.5px] text-text placeholder:text-text-faint"
           />
         </label>
       </div>
