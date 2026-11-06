@@ -12,7 +12,9 @@ const reasoningEffortSchema = z.enum(REASONING_EFFORTS).nullable();
 export const settingsFileSchema = z.object({
   version: z.literal(1),
   lastModel: z.string().nullable().default(null),
-  lastEffort: reasoningEffortSchema.default(null),
+  // `.catch`, not `.default`: a missing key (pre-F3 file) and a malformed value (future level, downgrade, hand
+  // edit) both load as null instead of quarantining the file and losing `lastModel` with it.
+  lastEffort: reasoningEffortSchema.catch(null),
 });
 export type SettingsFile = z.infer<typeof settingsFileSchema>;
 

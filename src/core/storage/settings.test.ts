@@ -143,6 +143,18 @@ describe('SettingsService', () => {
     await fs.writeFile(dataPaths(dataDir).settings, JSON.stringify({ version: 1, lastModel: 'a/b' }));
     const old = createSettingsService({ filePath: dataPaths(dataDir).settings, secretStore: secrets });
     expect(await old.get()).toMatchObject({ lastModel: 'a/b', lastEffort: null });
+    expect((await fs.readdir(dataDir)).some((n) => n.startsWith('settings.json.corrupt-'))).toBe(false);
+  });
+
+  it('an out-of-enum lastEffort reads as null, keeps lastModel and does not quarantine the file (F3)', async () => {
+    const { dataDir, secrets } = await makeStorage();
+    await fs.writeFile(
+      dataPaths(dataDir).settings,
+      JSON.stringify({ version: 1, lastModel: 'a/b', lastEffort: 'bogus' }),
+    );
+    const settings = createSettingsService({ filePath: dataPaths(dataDir).settings, secretStore: secrets });
+    expect(await settings.get()).toMatchObject({ lastModel: 'a/b', lastEffort: null });
+    expect((await fs.readdir(dataDir)).some((n) => n.startsWith('settings.json.corrupt-'))).toBe(false);
   });
 
   it('works end to end with a FileSecretStore', async () => {

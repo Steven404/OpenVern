@@ -24,6 +24,14 @@ export const REASONING_EFFORTS = [
   'max',
 ] as const satisfies readonly ReasoningEffort[];
 
+/**
+ * Compile-time check that the list above covers every `ReasoningEffort`: the argument resolves to `never` only
+ * when nothing is missing, so adding a level to `ReasoningEffort` fails typecheck here until it is listed too.
+ * Type-only: nothing is added at runtime.
+ */
+type AssertNever<T extends never> = T;
+export type AllReasoningEffortsListed = AssertNever<Exclude<ReasoningEffort, (typeof REASONING_EFFORTS)[number]>>;
+
 export const LIMITS = {
   attachmentsPerMessage: 10,
   textAttachmentBytes: 512 * 1024,

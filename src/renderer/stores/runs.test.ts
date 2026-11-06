@@ -358,6 +358,24 @@ describe('useRunsStore', () => {
     expect(retrySpy.mock.calls[1]?.[1]).toEqual({ model: chat.model });
   });
 
+  it('retry of an unsent message carries the effort it is given', async () => {
+    const api = new MockApiClient({ delayMs: 0, keyConfigured: false });
+    const queryClient = new QueryClient();
+    const chat = await api.createChat({ projectId: null, model: 'anthropic/claude-sonnet-5.5' });
+    queryClient.setQueryData(queryKeys.chat(chat.id), chat);
+    const deps = { api, queryClient };
+    await useRunsStore
+      .getState()
+      .send(deps, chat.id, { text: 'hello', attachments: [], model: chat.model, effort: 'low' });
+    expect(useRunsStore.getState().runs[chat.id]?.unsent).toMatchObject({ text: 'hello', effort: 'low' });
+
+    await api.setOpenRouterKey('sk-or-v1-abcdefghijklmnop');
+    const sendSpy = vi.spyOn(api, 'sendMessage');
+    await useRunsStore.getState().retry(deps, chat.id, chat.model, 'high');
+    expect(useRunsStore.getState().runs[chat.id]).toBeUndefined();
+    expect(sendSpy.mock.calls[0]?.[1]).toMatchObject({ effort: 'high' });
+  });
+
   it('efforts are kept per chat: choosing one does not change another', () => {
     useRunsStore.getState().setChatEffort('a', 'high');
     expect(useRunsStore.getState().chatEfforts.b).toBeUndefined();

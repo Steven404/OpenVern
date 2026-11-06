@@ -181,6 +181,12 @@ describe('request mapping', () => {
     expect(calls[0]?.body).not.toHaveProperty('reasoning');
   });
 
+  it('sends no reasoning key when effort is null (a cleared setting, cast past the optional type)', async () => {
+    const { provider, calls } = make(() => sseResponse(fixture('text-stream.sse')));
+    await collect(provider, { ...REQ, effort: null as unknown as ProviderRequest['effort'] });
+    expect(calls[0]?.body).not.toHaveProperty('reasoning');
+  });
+
   it('throws no_api_key without calling fetch when there is no key', async () => {
     const { provider, calls } = make(() => sseResponse(''), null);
     const err = await caught(collect(provider));

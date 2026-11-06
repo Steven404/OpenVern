@@ -429,8 +429,9 @@ export function createOpenRouterProvider(opts: OpenRouterOptions): Provider {
       };
       if (req.tools && req.tools.length > 0) body.tools = mapTools(req.tools);
       if (req.maxTokens !== undefined) body.max_tokens = req.maxTokens;
-      // F3: only when an effort was chosen for a reasoning model; Default sends no `reasoning` field at all.
-      if (req.effort !== undefined) body.reasoning = { effort: req.effort };
+      // F3: only when an effort was chosen for a reasoning model; Default (`null` / omitted) sends no
+      // `reasoning` field at all. `!= null` also covers a `null` that slipped past the optional type.
+      if (req.effort != null) body.reasoning = { effort: req.effort };
 
       const res = await request(
         `${OPENROUTER_BASE_URL}/chat/completions`,

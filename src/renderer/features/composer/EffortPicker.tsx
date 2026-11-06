@@ -1,5 +1,6 @@
 import { REASONING_EFFORTS } from '@shared/constants';
 import type { ReasoningEffort } from '@shared/types';
+import { useId } from 'react';
 import {
   Button,
   Menu,
@@ -41,6 +42,7 @@ const DESCRIPTIONS: Partial<Record<ReasoningEffort, string>> = {
  */
 export function EffortPicker({ value, onChange }: EffortPickerProps) {
   const label = value === null ? 'Default' : LABELS[value];
+  const hintId = useId();
 
   return (
     <Menu>
@@ -50,22 +52,22 @@ export function EffortPicker({ value, onChange }: EffortPickerProps) {
           Effort: {label}
         </Button>
       </MenuTrigger>
-      <MenuContent side="top" align="end" className="w-[min(240px,calc(100vw-32px))]">
+      <MenuContent side="top" align="end" aria-describedby={hintId} className="w-[min(240px,calc(100vw-32px))]">
         <MenuRadioGroup
           value={value ?? DEFAULT_EFFORT}
           onValueChange={(next) => onChange(next === DEFAULT_EFFORT ? null : (next as ReasoningEffort))}
         >
-          <MenuRadioItem value={DEFAULT_EFFORT}>
+          <MenuRadioItem value={DEFAULT_EFFORT} textValue="Default">
             <ItemText name="Default" description="The model's own setting" />
           </MenuRadioItem>
           {REASONING_EFFORTS.map((effort) => (
-            <MenuRadioItem key={effort} value={effort}>
+            <MenuRadioItem key={effort} value={effort} textValue={LABELS[effort]}>
               <ItemText name={LABELS[effort]} description={DESCRIPTIONS[effort]} />
             </MenuRadioItem>
           ))}
         </MenuRadioGroup>
         <MenuSeparator />
-        <p className="m-0 px-2.5 py-1 text-[11.5px] leading-snug text-text-faint">
+        <p id={hintId} className="m-0 px-2.5 py-1 text-[11.5px] leading-snug text-text-faint">
           Higher effort thinks longer and costs more.
         </p>
       </MenuContent>

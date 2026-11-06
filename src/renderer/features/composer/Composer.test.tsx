@@ -464,9 +464,14 @@ describe('effort picker (F3)', () => {
     await screen.findByRole('button', { name: /^Effort:/ });
     openEffortMenu();
     const items = await screen.findAllByRole('menuitemradio');
-    expect(items.map((i) => i.textContent)).toEqual([
-      "DefaultThe model's own setting",
-      'NoneNo reasoning',
+    expect(items).toHaveLength(8);
+    // Name and description are asserted separately: joined text would break Radix's typeahead.
+    const [def, none, minimal, low, medium, high, xhigh, max] = items;
+    expect(within(def as HTMLElement).getByText('Default')).toBeTruthy();
+    expect(within(def as HTMLElement).getByText("The model's own setting")).toBeTruthy();
+    expect(within(none as HTMLElement).getByText('None')).toBeTruthy();
+    expect(within(none as HTMLElement).getByText('No reasoning')).toBeTruthy();
+    expect([minimal, low, medium, high, xhigh, max].map((i) => i?.textContent)).toEqual([
       'Minimal',
       'Low',
       'Medium',
@@ -475,6 +480,44 @@ describe('effort picker (F3)', () => {
       'Max',
     ]);
     expect(items[0]?.getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('the trigger title is "Reasoning effort" and the menu is described by the hint', async () => {
+    const { api, chat } = await setup();
+    renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    const trigger = await screen.findByRole('button', { name: /^Effort:/ });
+    expect(trigger.getAttribute('title')).toBe('Reasoning effort');
+
+    openEffortMenu();
+    const menu = await screen.findByRole('menu');
+    const hint = screen.getByText('Higher effort thinks longer and costs more.');
+    expect(menu.getAttribute('aria-describedby')).toBe(hint.id);
+    expect(document.getElementById(hint.id)).toBe(hint);
+  });
+
+  it('is hidden while the model list is still missing', async () => {
+    const { api, chat } = await setup();
+    vi.spyOn(api, 'listModels').mockReturnValue(new Promise(() => {}));
+    renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    await screen.findByRole('button', { name: /^Model:/ });
+    expect(effortTrigger()).toBeNull();
+  });
+
+  it('is hidden when the model list fails to load', async () => {
+    const { api, chat } = await setup();
+    vi.spyOn(api, 'listModels').mockRejectedValue(new Error('boom'));
+    renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    fireEvent.click(await screen.findByRole('button', { name: /^Model:/ }));
+    expect(await screen.findByText('boom')).toBeTruthy();
+    expect(effortTrigger()).toBeNull();
+  });
+
+  it('is hidden for a listed model that lacks supportsReasoning', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const chat = await api.createChat({ projectId: null, model: 'openai/gpt-5.5' });
+    renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    await screen.findByRole('button', { name: 'Model: GPT-5.5' });
+    expect(effortTrigger()).toBeNull();
   });
 
   it('selecting High shows "Effort: High", and the next send carries effort: high', async () => {
