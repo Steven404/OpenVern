@@ -120,7 +120,7 @@ export function ProposedEditsCard({ chatId, pending }: { chatId: string; pending
             onClick={toggle}
             className={cx(
               'inline-flex min-h-[34px] cursor-pointer items-center gap-2 rounded-[8px] border-0 px-3 text-[13px] font-medium text-text hover:bg-overlay-tonal-hover',
-              reviewing ? 'bg-overlay-tonal-active' : 'bg-overlay-tonal',
+              'bg-overlay-tonal aria-pressed:bg-overlay-tonal-active',
             )}
           >
             {reviewing ? 'Reviewing' : 'Review changes'}

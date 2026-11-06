@@ -48,7 +48,7 @@ function useWindowWidth(): number {
 const ghostBtn =
   'inline-flex cursor-pointer items-center justify-center border-0 bg-transparent text-text-muted hover:bg-overlay-ghost hover:text-text';
 const lineBtn =
-  'inline-flex cursor-pointer items-center gap-2 border-0 bg-overlay-tonal text-text-secondary hover:bg-overlay-tonal-hover hover:text-text disabled:cursor-not-allowed disabled:opacity-50';
+  'inline-flex cursor-pointer items-center gap-2 border-0 bg-overlay-tonal hover:bg-overlay-tonal-hover hover:text-text disabled:cursor-not-allowed disabled:opacity-50';
 
 function HunkBlock({
   chatId,
@@ -363,7 +363,7 @@ export function DiffSurface({ chatId, params }: SurfaceProps) {
                 <button
                   type="button"
                   onClick={() => showFile(next.path)}
-                  className={cx(lineBtn, 'min-h-[34px] rounded-[8px] px-3 text-[13px]')}
+                  className={cx(lineBtn, 'min-h-[34px] rounded-[8px] px-3 text-[13px] text-text-secondary')}
                 >
                   Next file
                   <ArrowRight aria-hidden="true" size={14} strokeWidth={2} />
