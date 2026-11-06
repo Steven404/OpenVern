@@ -1,8 +1,13 @@
 {
   "schemaVersion": 2,
   "generatedAt": "2026-11-02T13:54:44.479Z",
-  "title": "Design System: OpenVern",
+  "title": "Design System: OpenVern (historical snapshot)",
   "extensions": {
+    "deprecation": {
+      "status": "historical",
+      "supersededBy": "DESIGN.md",
+      "note": "Snapshot from before the Blue hour redesign. Values here (backdrop glow, pill chips, raised outline buttons, 800px minimum window, old shadows) are not the shipped system. Read DESIGN.md at the repository root instead."
+    },
     "colorMeta": {
       "accent": {
         "role": "primary",
@@ -234,7 +239,7 @@
   ],
   "narrative": {
     "northStar": "The Blue Hour",
-    "overview": "The few minutes after sunset when the sky turns deep indigo and the windows along a canal light up. The ground is a cool night blue that stays calm for hours of reading; surfaces step up in small dusk-blue increments; and one warm lamplight accent glows where the next action is, the way a lit window draws the eye across dark water. Gable brick, the colour of the canal houses, is the quiet second voice.\n\nThe window carries a faint dusk glow at the top (the `--backdrop`), the only gradient in the system. Everything else is flat colour, 1px lines and type. Density is calm, not sparse: a 272px sidebar, a centred 760px conversation column and 32px between turns. The interface shows its work (tool calls, files read, proposed edits) as small legible rows, because the product's stance is visible over magical.\n\nBlue hour is the default theme. The original warm theme, **Late Workshop**, is kept intact as an alternate (see Colors) for a future theme setting.",
+    "overview": "Historical snapshot, superseded by DESIGN.md; do not use as the current spec.\n\nThe few minutes after sunset when the sky turns deep indigo and the windows along a canal light up. The ground is a cool night blue that stays calm for hours of reading; surfaces step up in small dusk-blue increments; and one warm lamplight accent glows where the next action is, the way a lit window draws the eye across dark water. Gable brick, the colour of the canal houses, is the quiet second voice.\n\nThe window carries a faint dusk glow at the top (the `--backdrop`), the only gradient in the system. Everything else is flat colour, 1px lines and type. Density is calm, not sparse: a 272px sidebar, a centred 760px conversation column and 32px between turns. The interface shows its work (tool calls, files read, proposed edits) as small legible rows, because the product's stance is visible over magical.\n\nBlue hour is the default theme. The original warm theme, **Late Workshop**, is kept intact as an alternate (see Colors) for a future theme setting.",
     "keyCharacteristics": [
       "Cool indigo ground with tonal surface steps, not shadows; one faint dusk glow at the top of the window.",
       "One warm lamplight accent for the primary action and focus; gable brick for project folders and code keywords.",
