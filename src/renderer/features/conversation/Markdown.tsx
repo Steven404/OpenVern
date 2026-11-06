@@ -134,7 +134,7 @@ const components: Components = {
   code: ({ node: _n, className, children, ...rest }) => (
     <code
       {...rest}
-      className={`rounded-[6px] border border-border bg-code px-1.5 py-px font-mono text-[0.88em] text-text-code ${className ?? ''}`}
+      className={`rounded-[5px] bg-code-inline px-[5px] py-px font-mono text-[0.88em] text-text-code ${className ?? ''}`}
     >
       {children}
     </code>

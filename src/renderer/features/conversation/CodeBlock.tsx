@@ -34,7 +34,7 @@ export const CodeBlock = memo(function CodeBlock({ code, lang, highlight = true 
   const text = code.replace(/\n$/, '');
   const lines = useHighlighted(text, lang, highlight);
   return (
-    <pre className="m-0 overflow-x-auto rounded-[12px] border border-border bg-code px-[18px] py-4 font-mono text-[13px] leading-[1.7] text-text-code">
+    <pre className="m-0 overflow-x-auto rounded-[10px] bg-code px-[18px] py-4 font-mono text-[13px] leading-[1.7] text-text-code">
       <code data-language={lang || undefined} data-highlighted={lines ? 'true' : undefined}>
         {lines
           ? lines.map((line, i) => (

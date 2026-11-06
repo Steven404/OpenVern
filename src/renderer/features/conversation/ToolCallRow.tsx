@@ -38,7 +38,7 @@ export const ToolCallRow = memo(function ToolCallRow({ block }: ToolCallRowProps
 
   return (
     <div
-      className="overflow-hidden rounded-[12px] border border-border-tool bg-tool text-[13.5px] text-text-secondary"
+      className="overflow-hidden rounded-[10px] bg-card text-[13.5px] text-text-secondary"
       data-testid="tool-row"
       data-state={state}
     >

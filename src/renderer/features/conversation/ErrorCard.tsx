@@ -22,7 +22,7 @@ export function ErrorCard({ error, onRetry, forceRetry = false }: ErrorCardProps
     <div
       role="alert"
       data-testid="error-card"
-      className="flex items-start gap-3 rounded-[12px] border border-danger/50 bg-danger/8 px-4 py-3 text-[14px] leading-[1.5] text-text"
+      className="flex items-start gap-3 rounded-[10px] border border-danger/50 bg-danger/8 px-4 py-3 text-[14px] leading-[1.5] text-text"
     >
       <AlertCircle aria-hidden="true" size={18} className="mt-0.5 shrink-0 text-danger" />
       <div className="flex min-w-0 flex-1 flex-col gap-2.5">
