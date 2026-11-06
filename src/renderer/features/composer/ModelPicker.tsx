@@ -85,7 +85,7 @@ export function ModelPicker({
           </div>
         ) : (
           <Command label="Models" filter={filter} loop>
-            <div className="border-b border-border-control px-3">
+            <div className="border-b border-border-control px-3 py-1">
               <Command.Input
                 placeholder="Search models…"
                 aria-label="Search models"

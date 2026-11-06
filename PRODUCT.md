@@ -48,7 +48,7 @@ The interface uses the flat Blue hour design: an indigo `#10162e` ground, tonal 
 
 ## Evidence on Hand
 
-- Design canvas (claude.ai Design artifact `LBiDZrEcuRYShHmNjEtjco`): Conversation, New chat and Review changes artboards; Conversation and New chat are mirrored in `docs/design/`.
+- Design canvas (claude.ai Design artifact `LBiDZrEcuRYShHmNjEtjco`): Conversation, New chat and Review changes artboards; Conversation and New chat are mirrored in `docs/design/` as historical prototypes; `DESIGN.md` describes the current design.
 - No users, testimonials, benchmarks or public release yet. Do not invent any.
 
 ## Product Principles

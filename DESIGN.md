@@ -178,7 +178,7 @@ The few minutes after sunset when the sky turns deep indigo and the windows alon
 
 The window uses a flat `#10162e` ground with no backdrop glow. Everything else is flat colour, 1px lines and type. Density is calm, not sparse: a 272px sidebar, a centred 760px conversation column and 32px between turns. The interface shows its work (tool calls, files read, proposed edits) as small legible rows, because the product's stance is visible over magical.
 
-Blue hour is the shipped design. **Late Workshop** remains unshipped and unselectable: the dormant `[data-theme="late-workshop"]` block in `src/renderer/styles/tokens.css` is only partial (it omits card, focus-surface, overlay-tonal, selection and diff tokens), nothing sets `data-theme`, and there is no theme switch or persistence.
+Blue hour is the shipped design. **Late Workshop** remains unshipped and unselectable: the dormant `[data-theme="late-workshop"]` block in `src/renderer/styles/tokens.css` is only partial (it omits card, surface-focus, overlay-tonal, selection and diff tokens), nothing sets `data-theme`, and there is no theme switch or persistence.
 
 **Key Characteristics:**
 - Flat cool indigo ground with tonal surface steps, not shadows or a backdrop glow.
@@ -216,10 +216,10 @@ A cool night-blue ramp lit by warm lamplight, taken from canal streets at blue h
 There is no backdrop glow or gradient. The app shell uses the flat Blue hour ground (`#10162e`).
 
 ### Diff colours
-The diff line tints are tokenised: `diff-add-*`, `diff-del-*`, `diff-text`, `diff-range` and `segment-on` (the selected half of the Unified/Split control). Added lines sit on seafoam at 9% opacity with a `#9fd4b3` sign; removed lines sit on accent-2 at 11% with a `#f09a7c` sign; line-number gutters use related stronger hues. Rejected hunks fade to 42% opacity. Not every diff colour is a token yet: hunk headers, gap rows, status pills and some hover text still use isolated hex values. The diagonal hatch (`repeating-linear-gradient(135deg, transparent 0 6px, rgb(200 215 255 / 0.025) 6px 12px)`) fills only empty cells in Split view as an alignment placeholder; it is not applied to rejected hunks.
+The diff line tints are tokenised: `diff-add-*`, `diff-del-*`, `diff-text`, `diff-range` and `segment-on` (the selected half of the Unified/Split control). Added lines sit on seafoam at 9% opacity with a `#9fd4b3` sign; removed lines sit on accent-2 at 11% with a `#f09a7c` sign; line-number gutters use related stronger hues. Rejected hunks fade to 42% opacity. Not every diff colour is a token yet: hunk headers, gap rows, status pills and some hover text still use isolated hex values. The diagonal hatch (`repeating-linear-gradient(135deg, transparent 0 6px, rgb(200 215 255 / 0.025) 6px 12px)`) fills only empty cells in Split view as an alignment placeholder; rejection dims the whole hunk rather than adding a separate hatch.
 
 ### Future theme: Late Workshop
-Late Workshop is not shipped as a selectable theme. The dormant `[data-theme="late-workshop"]` block in `src/renderer/styles/tokens.css` is partial (no card, focus-surface, overlay-tonal, selection or diff tokens), nothing sets `data-theme`, and there is no switch or persistence.
+Late Workshop is not shipped as a selectable theme. The dormant `[data-theme="late-workshop"]` block in `src/renderer/styles/tokens.css` is partial (no card, surface-focus, overlay-tonal, selection or diff tokens), nothing sets `data-theme`, and there is no switch or persistence.
 
 ### Named Rules
 **The One Glow Rule.** Lamplight marks at most one primary action per view, plus focus. If two things are amber, one of them is wrong.
@@ -248,9 +248,9 @@ Late Workshop is not shipped as a selectable theme. The dormant `[data-theme="la
 
 ## Layout
 
-A non-wrapping flex row: sidebar (272px, fixed basis) then the main column (`flex: 1 1 0; min-width: 420px`). The conversation and composer centre in a 760px column (New chat: 720px). The header is 64px with a 1px divider. Turns are 32px apart; inside a turn, 14px. Side padding is 24px. There is no overlay mode: the minimum window is 1080×720 (`LAYOUT` in `src/shared/constants.ts`), and the row scrolls rather than wrapping below it; 1080px holds the sidebar, a 420px conversation and a 380px panel.
+A non-wrapping flex row: sidebar (272px, fixed basis) then the main column (`flex: 1 1 0; min-width: 420px`). The conversation and composer centre in a 760px column (New chat: 720px). The header is 64px with a 1px divider. User bubbles and assistant articles are separated by 32px; content within an assistant article uses 14px gaps. Side padding is 24px. There is no overlay mode: the minimum window is 1080×720 (`LAYOUT` in `src/shared/constants.ts`), and the row scrolls rather than wrapping below it; 1080px holds the sidebar, a 420px conversation and a 380px panel.
 
-The **right panel** docks to the right of the conversation (1px left border, sidebar colour, 220ms width transition, 12px slide-in). Its width depends on what it shows: 380px for Files, 560px for an open file, 600px for Diff (800px in split view). The conversation shrinks to a 420px floor; the panel to 380px. Split is disabled when the window can't hold the wider panel next to the sidebar and the conversation. Picking Split widens the panel to up to 800px when the window has room; the panel never resizes on its own otherwise.
+The **right panel** docks to the right of the conversation (1px left border, sidebar colour, 220ms width transition, 12px slide-in). It defaults to 380px and its user-resized width is persisted. The conversation has a 420px floor and the panel a 380px minimum. Split requires at least 640px of available panel width; choosing it widens the panel toward 800px as space allows, preserving a wider existing width. Opening files or Diff otherwise leaves the width unchanged.
 
 ## Elevation & Depth
 
@@ -274,7 +274,7 @@ Soft-cornered and quiet: ghost by default, the accent saved for the one action t
 ### Buttons
 - **Shape:** gently rounded with component-specific sizes. Primary actions commonly use 40px; compact actions use 30–34px.
 - **Primary:** Lamplight fill, ground-colour text, weight 500. Hover brightens 6%.
-- **Outline:** 6% tonal fill with a transparent 1px border; hover steps the fill to 10%, pressed to 12%.
+- **Outline:** 6% tonal fill with a transparent 1px border; hover steps the fill to 10%, and `aria-pressed` selects 12%.
 - **Ghost:** transparent, secondary text; hover adds the ghost overlay and full-strength text.
 - **Danger:** Signal Coral fill for destructive confirms only.
 - **Icon button:** 28 / 36 / 40px squares, muted icon, always an `aria-label`.
@@ -304,7 +304,7 @@ Dusk surface (`#1a2142`, focus `#1f2752`), borderless textarea, attach and model
 A tab strip (pinned Files tab, closable tabs for open files and Diff, a "+" that opens the launcher, a close button) over a surface. The launcher lists Files, Terminal and Diff with a hint and a key (F, T, D); unavailable rows are dimmed with the reason ("Not available yet" for Terminal; "Available after the current chat has made edits" for Diff). Files is always enabled: it browses the project, or the home folder for a chat without one. Files: project (or home folder) name, collapse-all, a filter field, the tree in mono, and a footer saying ignored and secret files are hidden. The file viewer has a breadcrumb, line count, an Attach ghost button and numbered lines on the code surface.
 
 ### Review pane (signature)
-The Diff surface: header with +/− totals and a Unified/Split segmented control, file list with per-file review state (or "Changed on disk" for a skipped file), diff body on night canal with a sticky file header, per-hunk Reject/Accept (then a status pill and Undo), and an apply bar whose primary button counts the accepted changes (Discard when everything is rejected). Applied batches are listed below, read-only. The **Proposed edits** card in the conversation (and **Edits applied** after applying) uses the card surface (`#182040`; `#1d2448` while reviewing), 12px corners and no border, with a footer strip holding the status dot and a tonal "Review changes" button that reads "Reviewing" while the pane is open.
+The Diff surface: header with +/− totals and a Unified/Split segmented control, file list with per-file review state (or "Changed on disk" for a skipped file), diff body on night canal with a sticky file header, per-hunk Reject/Accept (then a status pill and Undo), and an apply bar whose primary button counts the accepted changes (Discard when everything is rejected). Applied batches are listed below, read-only. The **Proposed edits** card uses the card surface (`#182040`; `#1d2448` while reviewing), 12px corners and no border. Its footer holds a status dot and a tonal "Review changes" button that reads "Reviewing" while the pane is open. The read-only **Edits applied** card uses the same shell with a check and summary in its footer.
 
 ### Scrollbars
 Quiet and always there when something can scroll. The thumb is the only mark.
@@ -312,14 +312,14 @@ Quiet and always there when something can scroll. The thumb is the only mark.
 - **Shape:** no track and no arrow buttons. The gutter is transparent; the thumb is the only visible mark.
 - **Colour:** the thumb uses `--color-scroll-thumb` at rest, `--color-scroll-thumb-hover` on hover and `--color-scroll-thumb-active` while dragging. In Blue hour these alias border-control (`#343f72`), border-hover (`#46528c`) and border-focus (`#5a68a8`). Lamplight never appears on a thumb, including while dragging; the One Glow Rule holds.
 - **Size:** one size everywhere. Chat, diff, file tree, file viewer and sidebar share a 10px gutter. Horizontal bars are the same metrics turned sideways.
-- **Reserved gutter:** the gutter is reserved even when nothing overflows, so rows and lines do not reflow. Menus, popovers and dialogs do not reserve that gutter.
+- **Reserved gutter:** the gutter is reserved even when nothing overflows, so rows and lines do not reflow. Menus, popovers and dialogs generally do not reserve that gutter; the model picker list does.
 - **Motion:** none. Rest, hover and drag switch instantly.
 - **Anatomy:** 4px end inset, 10px gutter, thumb 6px at rest and 8px on hover and drag, pill ends, 40px minimum length.
 
 ## Do's and Don'ts
 
 ### Do:
-- **Do** prefer tokens from `src/renderer/styles/tokens.css`; isolated hard-coded colours remain in diff hunk chrome, gap rows, status pills and the proposed-edits footer.
+- **Do** prefer tokens from `src/renderer/styles/tokens.css`; isolated hard-coded colours remain in diff hunk chrome, gap rows, status pills the proposed-edits footer, and file-viewer line numbers.
 - **Do** keep Lamplight to one primary action per view, plus focus.
 - **Do** show tool calls and proposed edits as visible rows or cards in the conversation.
 - **Do** use 1px cool borders and surface steps for separation.

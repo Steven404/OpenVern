@@ -6,7 +6,7 @@
     "deprecation": {
       "status": "historical",
       "supersededBy": "DESIGN.md",
-      "note": "Snapshot from before the Blue hour redesign. Values here (backdrop glow, pill chips, raised outline buttons, 800px minimum window, old shadows) are not the shipped system. Read DESIGN.md at the repository root instead."
+      "note": "Snapshot from before the flat Blue hour pass. Values here (backdrop glow, pill chips, raised outline buttons, 800px minimum window, old shadows) are not the shipped system. Read DESIGN.md at the repository root instead."
     },
     "colorMeta": {
       "accent": {
