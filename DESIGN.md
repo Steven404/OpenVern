@@ -319,7 +319,7 @@ Quiet and always there when something can scroll. The thumb is the only mark.
 ## Do's and Don'ts
 
 ### Do:
-- **Do** prefer tokens from `src/renderer/styles/tokens.css`; isolated hard-coded colours remain in diff hunk chrome, gap rows, status pills the proposed-edits footer, and file-viewer line numbers.
+- **Do** prefer tokens from `src/renderer/styles/tokens.css`; isolated hard-coded colours remain in diff hunk chrome, gap rows, status pills, the segmented-control track, the proposed-edits footer, and file-viewer line numbers.
 - **Do** keep Lamplight to one primary action per view, plus focus.
 - **Do** show tool calls and proposed edits as visible rows or cards in the conversation.
 - **Do** use 1px cool borders and surface steps for separation.
