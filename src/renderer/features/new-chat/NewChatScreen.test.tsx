@@ -1,4 +1,6 @@
 import { DEFAULT_MODEL } from '@shared/constants';
+import { SAMPLE_MODELS } from '@shared/sample-data';
+import type { ModelInfo } from '@shared/types';
 import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
 import { Route, Routes, useLocation, useNavigate } from 'react-router';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -249,5 +251,70 @@ describe('NewChatScreen', () => {
     expect(send.mock.calls[0]?.[1]).toMatchObject({ effort: 'low' });
     const chatId = send.mock.calls[0]?.[0] ?? '';
     await waitFor(() => expect(useRunsStore.getState().runs[chatId]).toBeUndefined());
+  });
+
+  // ── F3 follow-up: a level the chosen model does not publish behaves as Default ──
+  it('an effort the new-chat model does not list shows Default, leaves lastEffort alone, and shows it again on a model that lists it', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    await api.updateSettings({ lastEffort: 'high' });
+    const lowMax: ModelInfo = {
+      id: 'test/low-max',
+      name: 'Test: Low and Max',
+      contextLength: 1000,
+      supportsTools: true,
+      supportsImages: false,
+      supportsReasoning: true,
+      reasoningEfforts: ['low', 'max'],
+      promptPricePerMTok: null,
+      completionPricePerMTok: null,
+    };
+    vi.spyOn(api, 'listModels').mockResolvedValue([...SAMPLE_MODELS, lowMax]);
+    const update = vi.spyOn(api, 'updateSettings');
+    renderWithProviders(<App />, { api, route: '/new' });
+    await screen.findByRole('button', { name: 'Effort: High' });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Model:/ }));
+    fireEvent.click(await screen.findByRole('option', { name: /Low and Max/ }));
+    expect(await screen.findByRole('button', { name: 'Effort: Default' })).toBeTruthy();
+    expect(update.mock.calls.filter(([patch]) => 'lastEffort' in patch)).toEqual([]);
+    expect((await api.getSettings()).lastEffort).toBe('high');
+
+    fireEvent.click(screen.getByRole('button', { name: /^Model:/ }));
+    fireEvent.click(await screen.findByRole('option', { name: /Claude Sonnet 5.5/ }));
+    expect(await screen.findByRole('button', { name: 'Effort: High' })).toBeTruthy();
+  });
+
+  it('the first send on such a model carries no level, and the new chat is created without touching lastEffort', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    await api.updateSettings({ lastEffort: 'high' });
+    const lowMax: ModelInfo = {
+      id: 'test/low-max',
+      name: 'Test: Low and Max',
+      contextLength: 1000,
+      supportsTools: true,
+      supportsImages: false,
+      supportsReasoning: true,
+      reasoningEfforts: ['low', 'max'],
+      promptPricePerMTok: null,
+      completionPricePerMTok: null,
+    };
+    vi.spyOn(api, 'listModels').mockResolvedValue([...SAMPLE_MODELS, lowMax]);
+    const update = vi.spyOn(api, 'updateSettings');
+    const send = vi.spyOn(api, 'sendMessage');
+    renderWithProviders(<App />, { api, route: '/new' });
+    await screen.findByRole('button', { name: 'Effort: High' });
+    fireEvent.click(screen.getByRole('button', { name: /^Model:/ }));
+    fireEvent.click(await screen.findByRole('option', { name: /Low and Max/ }));
+    await screen.findByRole('button', { name: 'Effort: Default' });
+
+    fireEvent.change(textarea(), { target: { value: 'No level here' } });
+    fireEvent.keyDown(textarea(), { key: 'Enter' });
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    expect(send.mock.calls[0]?.[1]).toMatchObject({ model: 'test/low-max' });
+    expect(send.mock.calls[0]?.[1]).toHaveProperty('effort', null);
+    const chatId = send.mock.calls[0]?.[0] ?? '';
+    await waitFor(() => expect(useRunsStore.getState().runs[chatId]).toBeUndefined());
+    expect(update.mock.calls.filter(([patch]) => 'lastEffort' in patch)).toEqual([]);
+    expect((await api.getSettings()).lastEffort).toBe('high');
   });
 });

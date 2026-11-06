@@ -1,6 +1,7 @@
 import { DEFAULT_MODEL, IMAGE_ACCEPT, TEXT_ACCEPT } from '@shared/constants';
 import { ERROR_DEFAULTS, errorInfo } from '@shared/errors';
-import type { ChatSummary } from '@shared/types';
+import { SAMPLE_MODELS } from '@shared/sample-data';
+import type { ChatSummary, ModelInfo } from '@shared/types';
 import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -586,5 +587,106 @@ describe('effort picker (F3)', () => {
     expect(send.mock.calls[1]?.[0]).toBe(b.id);
     expect(send.mock.calls[1]?.[1]).toMatchObject({ effort: 'low' });
     await waitForIdle(b.id);
+  });
+});
+
+// ── F3 follow-up: per-model levels ──
+
+/** A model the sample list does not have, with the levels and default the test needs. */
+const customModel = (id: string, name: string, extra: Partial<ModelInfo> = {}): ModelInfo => ({
+  id,
+  name,
+  contextLength: 1000,
+  supportsTools: true,
+  supportsImages: false,
+  supportsReasoning: true,
+  promptPricePerMTok: null,
+  completionPricePerMTok: null,
+  ...extra,
+});
+
+/** The sample list plus `extra`, so a test can switch to a model with other levels. */
+function withModels(api: MockApiClient, extra: ModelInfo[]) {
+  vi.spyOn(api, 'listModels').mockResolvedValue([...SAMPLE_MODELS, ...extra]);
+}
+
+describe('effort picker per model (F3 follow-up)', () => {
+  it('lists Default, then only the levels the model publishes, in order; no default note without defaultEffort', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const chat = await api.createChat({ projectId: null, model: 'test/three' });
+    withModels(api, [
+      customModel('test/three', 'Test: Three Levels', { reasoningEfforts: ['none', 'minimal', 'low'] }),
+    ]);
+    renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    await screen.findByRole('button', { name: 'Model: Three Levels' });
+    openEffortMenu();
+    const items = await screen.findAllByRole('menuitemradio');
+    // The name is the first `.truncate` span; the description (if any) is a second one.
+    expect(items.map((item) => item.querySelector('.truncate')?.textContent)).toEqual([
+      'Default',
+      'None',
+      'Minimal',
+      'Low',
+    ]);
+    expect(within(items[0] as HTMLElement).getByText("The model's own setting")).toBeTruthy();
+    expect(screen.queryByText(/Model default/)).toBeNull();
+  });
+
+  it('the Default note reads "Model default: …" when the model publishes a default level', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const chat = await api.createChat({ projectId: null, model: 'test/def' });
+    withModels(api, [
+      customModel('test/def', 'Test: Defaulted', { reasoningEfforts: ['low', 'max'], defaultEffort: 'low' }),
+    ]);
+    renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    await screen.findByRole('button', { name: 'Model: Defaulted' });
+    openEffortMenu();
+    const items = await screen.findAllByRole('menuitemradio');
+    expect(within(items[0] as HTMLElement).getByText('Model default: Low')).toBeTruthy();
+    expect(screen.queryByText("The model's own setting")).toBeNull();
+  });
+
+  it('is hidden for a model that reasons but publishes no levels', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const chat = await api.createChat({ projectId: null, model: 'test/none' });
+    withModels(api, [customModel('test/none', 'Test: No Levels', { reasoningEfforts: undefined })]);
+    renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    await screen.findByRole('button', { name: 'Model: No Levels' });
+    expect(effortTrigger()).toBeNull();
+  });
+
+  it('a stored effort that the model does not list shows as Default when the chat opens', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const chat = await api.createChat({ projectId: null, model: 'test/low-max' });
+    withModels(api, [customModel('test/low-max', 'Test: Low and Max', { reasoningEfforts: ['low', 'max'] })]);
+    renderWithProviders(<ReplyComposer chat={{ ...chat, effort: 'high' }} />, { api });
+    expect(await screen.findByRole('button', { name: 'Effort: Default' })).toBeTruthy();
+  });
+
+  it('switching to a model without the chosen level shows Default and sends none; switching back shows the choice again', async () => {
+    const { api, chat } = await setup();
+    withModels(api, [customModel('test/low-max', 'Test: Low and Max', { reasoningEfforts: ['low', 'max'] })]);
+    const send = vi.spyOn(api, 'sendMessage');
+    const update = vi.spyOn(api, 'updateSettings');
+    renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    await screen.findByRole('button', { name: /^Effort:/ });
+    await chooseEffort('High'); // on Claude Sonnet 5.5
+    expect(await screen.findByRole('button', { name: 'Effort: High' })).toBeTruthy();
+    update.mockClear();
+
+    await pickModel('Low and Max');
+    expect(await screen.findByRole('button', { name: 'Effort: Default' })).toBeTruthy();
+    type('hello');
+    fireEvent.keyDown(textarea(), { key: 'Enter' });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]?.[1]).toMatchObject({ model: 'test/low-max' });
+    expect(send.mock.calls[0]?.[1]).toHaveProperty('effort', null);
+    await waitForIdle(chat.id);
+
+    await pickModel(VISION);
+    expect(await screen.findByRole('button', { name: 'Effort: High' })).toBeTruthy();
+    // The clamp is not a choice: it never writes lastEffort, and the stored setting is still High.
+    expect(update.mock.calls.filter(([patch]) => 'lastEffort' in patch)).toEqual([]);
+    expect((await api.getSettings()).lastEffort).toBe('high');
   });
 });

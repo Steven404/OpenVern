@@ -774,6 +774,69 @@ describe('listModels', () => {
     expect(badDefault).not.toHaveProperty('defaultEffort');
   });
 
+  it('mapModels keeps a fully descending list ascending and complete (none→max)', () => {
+    const [m] = mapModels([
+      {
+        id: 'a/b',
+        name: 'B',
+        architecture: {},
+        reasoning: { supported_efforts: ['max', 'xhigh', 'high', 'medium', 'minimal', 'low', 'none'] },
+      },
+    ]);
+    expect(m?.reasoningEfforts).toEqual(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+  });
+
+  it('mapModels drops levels of any type that are not known levels, such as "ultra" and 42', () => {
+    const [m, allUnknown] = mapModels([
+      {
+        id: 'a/mixed',
+        name: 'Mixed',
+        architecture: {},
+        reasoning: { supported_efforts: ['ultra', 42, null, {}, 'low', 'extreme'] },
+      },
+      { id: 'a/all-unknown', name: 'All unknown', architecture: {}, reasoning: { supported_efforts: ['ultra', 42] } },
+    ]);
+    expect(m?.reasoningEfforts).toEqual(['low']);
+    expect(allUnknown).not.toHaveProperty('reasoningEfforts');
+  });
+
+  it('mapModels gives neither field, and does not throw, for a missing or non-object reasoning value', () => {
+    const list = [
+      { id: 'a/none', name: 'N', architecture: {} },
+      { id: 'a/string', name: 'S', architecture: {}, reasoning: 'high' },
+      { id: 'a/array', name: 'A', architecture: {}, reasoning: ['high', 'max'] },
+      { id: 'a/null', name: 'U', architecture: {}, reasoning: null },
+      { id: 'a/number', name: 'M', architecture: {}, reasoning: 3 },
+      { id: 'a/string-levels', name: 'T', architecture: {}, reasoning: { supported_efforts: 'high' } },
+    ];
+    let out: ReturnType<typeof mapModels> = [];
+    expect(() => {
+      out = mapModels(list);
+    }).not.toThrow();
+    expect(out.map((m) => m.id)).toEqual(['a/none', 'a/string', 'a/array', 'a/null', 'a/number', 'a/string-levels']);
+    for (const m of out) {
+      expect(m).not.toHaveProperty('reasoningEfforts');
+      expect(m).not.toHaveProperty('defaultEffort');
+    }
+  });
+
+  it('mapModels gives no defaultEffort for a non-string or unrecognised default_effort', () => {
+    const defaults: unknown[] = [42, ['high'], null, { level: 'high' }, true, 'HIGH', ''];
+    const out = mapModels(
+      defaults.map((d, i) => ({
+        id: `a/${i}`,
+        name: `N${i}`,
+        architecture: {},
+        reasoning: { supported_efforts: ['low', 'high'], default_effort: d },
+      })),
+    );
+    expect(out).toHaveLength(defaults.length);
+    for (const m of out) {
+      expect(m).not.toHaveProperty('defaultEffort');
+      expect(m.reasoningEfforts).toEqual(['low', 'high']);
+    }
+  });
+
   it('does not produce float noise when scaling prices', () => {
     const [m] = mapModels([
       { id: 'a/b', name: 'B', pricing: { prompt: '0.000001', completion: '0.00000015' }, architecture: {} },

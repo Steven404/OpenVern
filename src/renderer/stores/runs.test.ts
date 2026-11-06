@@ -1,6 +1,13 @@
 import { errorInfo } from '@shared/errors';
 import type { AgentEvent } from '@shared/events';
-import type { AssistantMessage, ChatSummary, ToolMessage, UserMessage } from '@shared/types';
+import type {
+  AssistantMessage,
+  ChatSummary,
+  ModelInfo,
+  ReasoningEffort,
+  ToolMessage,
+  UserMessage,
+} from '@shared/types';
 import { QueryClient } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../lib/api-client';
@@ -374,6 +381,95 @@ describe('useRunsStore', () => {
     await useRunsStore.getState().retry(deps, chat.id, chat.model, 'high');
     expect(useRunsStore.getState().runs[chat.id]).toBeUndefined();
     expect(sendSpy.mock.calls[0]?.[1]).toMatchObject({ effort: 'high' });
+  });
+
+  describe('effort clamp (F3 follow-up)', () => {
+    /** A cached model list entry with the given levels (the models query, not a network call). */
+    const withLevels = (id: string, efforts: ReasoningEffort[]): ModelInfo => ({
+      id,
+      name: id,
+      contextLength: 1000,
+      supportsTools: true,
+      supportsImages: false,
+      supportsReasoning: true,
+      reasoningEfforts: efforts,
+      promptPricePerMTok: null,
+      completionPricePerMTok: null,
+    });
+
+    it('send clamps an effort the cached model does not list to null, and passes a listed one through', async () => {
+      const { api, chat, deps, queryClient } = await setup();
+      queryClient.setQueryData(queryKeys.models, [withLevels(chat.model, ['low', 'high'])]);
+      const sendSpy = vi.spyOn(api, 'sendMessage');
+      await useRunsStore
+        .getState()
+        .send(deps, chat.id, { text: 'one', attachments: [], model: chat.model, effort: 'max' });
+      expect(sendSpy.mock.calls[0]?.[1]).toHaveProperty('effort', null);
+      await useRunsStore
+        .getState()
+        .send(deps, chat.id, { text: 'two', attachments: [], model: chat.model, effort: 'high' });
+      expect(sendSpy.mock.calls[1]?.[1]).toHaveProperty('effort', 'high');
+    });
+
+    it('send passes the effort through when the model list is not cached', async () => {
+      const { api, chat, deps } = await setup();
+      const sendSpy = vi.spyOn(api, 'sendMessage');
+      await useRunsStore
+        .getState()
+        .send(deps, chat.id, { text: 'hi', attachments: [], model: chat.model, effort: 'max' });
+      expect(sendSpy.mock.calls[0]?.[1]).toHaveProperty('effort', 'max');
+    });
+
+    it('send passes the effort through when the cached list does not contain this model', async () => {
+      const { api, chat, deps, queryClient } = await setup();
+      queryClient.setQueryData(queryKeys.models, [withLevels('other/model', ['low'])]);
+      const sendSpy = vi.spyOn(api, 'sendMessage');
+      await useRunsStore
+        .getState()
+        .send(deps, chat.id, { text: 'hi', attachments: [], model: chat.model, effort: 'max' });
+      expect(sendSpy.mock.calls[0]?.[1]).toHaveProperty('effort', 'max');
+    });
+
+    it('chatEfforts keeps the raw choice when the request is clamped', async () => {
+      const { api, chat, deps, queryClient } = await setup();
+      queryClient.setQueryData(queryKeys.models, [withLevels(chat.model, ['low', 'high'])]);
+      vi.spyOn(api, 'sendMessage');
+      await useRunsStore
+        .getState()
+        .send(deps, chat.id, { text: 'hi', attachments: [], model: chat.model, effort: 'max' });
+      expect(useRunsStore.getState().chatEfforts[chat.id]).toBe('max');
+    });
+
+    it('retry clamps the effort when cached, keeps the raw choice, and passes a listed one through', async () => {
+      const { api, chat, deps, queryClient } = await setup();
+      queryClient.setQueryData(queryKeys.models, [withLevels(chat.model, ['low', 'high'])]);
+      const retrySpy = vi.spyOn(api, 'retry');
+      await useRunsStore.getState().retry(deps, chat.id, chat.model, 'max');
+      expect(retrySpy.mock.calls[0]?.[1]).toEqual({ model: chat.model, effort: null });
+      expect(useRunsStore.getState().chatEfforts[chat.id]).toBe('max');
+
+      await useRunsStore.getState().retry(deps, chat.id, chat.model, 'low');
+      expect(retrySpy.mock.calls[1]?.[1]).toEqual({ model: chat.model, effort: 'low' });
+      expect(useRunsStore.getState().chatEfforts[chat.id]).toBe('low');
+    });
+
+    it('a retry of an unsent message clamps too', async () => {
+      const api = new MockApiClient({ delayMs: 0, keyConfigured: false });
+      const queryClient = new QueryClient();
+      const chat = await api.createChat({ projectId: null, model: 'anthropic/claude-sonnet-5.5' });
+      queryClient.setQueryData(queryKeys.chat(chat.id), chat);
+      const deps = { api, queryClient };
+      await useRunsStore
+        .getState()
+        .send(deps, chat.id, { text: 'hello', attachments: [], model: chat.model, effort: 'low' });
+      expect(useRunsStore.getState().runs[chat.id]?.unsent).toMatchObject({ text: 'hello', effort: 'low' });
+
+      await api.setOpenRouterKey('sk-or-v1-abcdefghijklmnop');
+      queryClient.setQueryData(queryKeys.models, [withLevels(chat.model, ['low', 'max'])]);
+      const sendSpy = vi.spyOn(api, 'sendMessage');
+      await useRunsStore.getState().retry(deps, chat.id, chat.model, 'high');
+      expect(sendSpy.mock.calls[0]?.[1]).toHaveProperty('effort', null);
+    });
   });
 
   it('efforts are kept per chat: choosing one does not change another', () => {

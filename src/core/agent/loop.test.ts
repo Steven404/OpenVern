@@ -1000,4 +1000,55 @@ describe('effort (F3)', () => {
     expect(h.provider.calls[1]).not.toHaveProperty('effort');
     expect((await h.chats.get(h.chatId)).title).toBe('Friendly greeting');
   });
+
+  // ── F3 follow-up: only a level the model publishes reaches the provider; the chat stores what was chosen ──
+  const LISTED = [
+    model(MODEL, { tools: true, images: true, reasoning: true, efforts: ['low', 'medium', 'high', 'xhigh', 'max'] }),
+  ];
+
+  it('sends an effort that the model lists', async () => {
+    const h = await createHarness({ script: scriptFromTurns([reply('Hi'), TITLE_TURN]), models: LISTED });
+    await h.run({ effort: 'xhigh' });
+    expect(h.provider.calls[0]?.effort).toBe('xhigh');
+  });
+
+  it('an effort the model does not list is not sent, but the chat still stores it as chosen', async () => {
+    const h = await createHarness({ script: scriptFromTurns([reply('Hi'), TITLE_TURN]), models: LISTED });
+    const events = await h.run({ effort: 'none' });
+    expect(h.provider.calls[0]).not.toHaveProperty('effort');
+    expect((await h.chats.get(h.chatId)).effort).toBe('none');
+    expect(find(events, 'chat_updated')[0]?.chat.effort).toBe('none');
+  });
+
+  it('an unlisted effort is left out of every request of a tool turn', async () => {
+    const h = await createHarness({
+      script: scriptFromTurns([callTools([['c1', 'read_file', '{"path":"README.md"}']]), reply('Done.'), TITLE_TURN]),
+      models: LISTED,
+    });
+    await h.run({ effort: 'minimal' });
+    expect(h.provider.calls[0]).not.toHaveProperty('effort');
+    expect(h.provider.calls[1]).not.toHaveProperty('effort');
+    expect((await h.chats.get(h.chatId)).effort).toBe('minimal');
+  });
+
+  it('a reasoning model that publishes no levels never gets an effort, but the chat stores the choice', async () => {
+    const h = await createHarness({
+      script: scriptFromTurns([reply('Hi'), TITLE_TURN]),
+      models: [model(MODEL, { reasoning: true, efforts: [] })],
+    });
+    await h.run({ effort: 'high' });
+    expect(h.provider.calls[0]).not.toHaveProperty('effort');
+    expect((await h.chats.get(h.chatId)).effort).toBe('high');
+  });
+
+  it('a retry with an unlisted effort sends none and stores the one it was given', async () => {
+    const h = await createHarness({
+      script: scriptFromTurns([reply('Hi'), TITLE_TURN, reply('Retried')]),
+      models: LISTED,
+    });
+    await h.run({ effort: 'high' });
+    await h.run({ newUserMessage: undefined, effort: 'none' });
+    expect(h.provider.calls[2]).not.toHaveProperty('effort');
+    expect((await h.chats.get(h.chatId)).effort).toBe('none');
+  });
 });
