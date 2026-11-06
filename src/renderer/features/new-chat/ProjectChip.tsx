@@ -48,7 +48,7 @@ export function ProjectChip({ projects, value, onChange }: ProjectChipProps) {
         <button
           type="button"
           aria-label={`Project: ${current?.name ?? 'No project'}`}
-          className="inline-flex min-h-8 cursor-pointer items-center gap-1.5 rounded-[8px] bg-bubble px-2.5 text-[13px] text-text-secondary hover:bg-surface-raised-hover hover:text-text"
+          className="inline-flex min-h-8 cursor-pointer items-center gap-1.5 rounded-[8px] px-2.5 text-[13px] text-text-secondary hover:bg-surface-raised-hover hover:text-text"
         >
           <FolderIcon />
           <span className="max-w-[200px] truncate">{current?.name ?? 'No project'}</span>
