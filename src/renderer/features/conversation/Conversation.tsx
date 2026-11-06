@@ -3,8 +3,7 @@ import { Fragment, useCallback, useLayoutEffect, useMemo, useRef } from 'react';
 import { Button, Spinner } from '../../components/ui';
 import { selectRun, useRunsStore } from '../../stores/runs';
 import { AppliedEditsCard, ProposedEditsCard } from '../changes';
-import { modelName } from '../composer/models';
-import { useChat, useModels, useRunDeps } from '../composer/queries';
+import { useChat, useRunDeps } from '../composer/queries';
 import { useChatChanges } from '../right-panel/queries';
 import { AssistantTurn } from './AssistantTurn';
 import { buildTurns, isWaiting, mergeMessages, turnHasMessage } from './turns';
@@ -20,7 +19,6 @@ export interface ConversationProps {
 /** The scrolling message list of a chat: persisted messages plus the in-flight run (S7.3 – S7.8). */
 export function Conversation({ chatId }: ConversationProps) {
   const chatQuery = useChat(chatId);
-  const modelsQuery = useModels();
   const run = useRunsStore(selectRun(chatId));
   const selectedModel = useRunsStore((s) => s.chatModels[chatId]);
   const selectedEffort = useRunsStore((s) => s.chatEfforts[chatId]);
@@ -141,14 +139,6 @@ export function Conversation({ chatId }: ConversationProps) {
                 <AssistantTurn
                   blocks={turn.blocks}
                   notice={turn.notice}
-                  modelLabel={
-                    turn.model
-                      ? modelName(
-                          modelsQuery.data?.find((m) => m.id === turn.model),
-                          turn.model,
-                        )
-                      : undefined
-                  }
                   waiting={turnWaiting}
                   footer={cards}
                   error={turnError}

@@ -43,10 +43,10 @@ export function Launcher({ ctx, onOpen }: { ctx: SurfaceContext; onOpen: (id: Su
                 title={hint}
                 onClick={() => onOpen(def.id)}
                 className={cx(
-                  'flex min-h-[52px] w-full items-center gap-3 rounded-[10px] px-2.5 py-1.5 text-left text-[14.5px]',
+                  'flex min-h-[52px] w-full items-center gap-3 rounded-[8px] px-2.5 py-1.5 text-left text-[14.5px]',
                   disabled
                     ? 'cursor-not-allowed text-text-faint opacity-60'
-                    : 'cursor-pointer text-text-secondary hover:bg-overlay-ghost hover:text-text',
+                    : 'cursor-pointer text-text-secondary hover:bg-overlay-tonal hover:text-text',
                 )}
               >
                 <span className="inline-flex size-[18px] shrink-0">{def.icon}</span>
@@ -54,7 +54,7 @@ export function Launcher({ ctx, onOpen }: { ctx: SurfaceContext; onOpen: (id: Su
                   <span>{def.label}</span>
                   <span className="text-xs text-text-faint">{hint}</span>
                 </span>
-                <span className="inline-flex h-[22px] min-w-[22px] items-center justify-center rounded-[6px] border border-border-control bg-tool font-mono text-[11px] text-text-muted">
+                <span className="inline-flex h-[22px] min-w-[22px] items-center justify-center rounded-[5px] border-0 bg-tool font-mono text-[11px] text-text-muted">
                   {def.key}
                 </span>
               </button>

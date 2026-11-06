@@ -82,7 +82,7 @@ export function NewChatScreen() {
       <div className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto scrollbar-stable px-6 pb-[72px]">
         <div className="my-auto flex w-full max-w-[720px] flex-col gap-7">
           <h1 className="m-0 text-center font-display text-[44px] leading-[1.1] font-bold tracking-[-0.03em] text-text max-sm:text-[34px]">
-            What are we building<span className="text-accent">?</span>
+            What are we building?
           </h1>
           <Composer
             variant="new"

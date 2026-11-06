@@ -6,9 +6,9 @@ import { type DiffLine, pairLines, parseHunk, splitPath, statusLetter } from './
 import type { DiffMode } from './review-store';
 
 const badgeTone: Record<ChangeKind, string> = {
-  create: 'bg-[rgb(159_212_179/0.14)] text-success',
-  modify: 'bg-[rgb(246_189_96/0.12)] text-accent',
-  delete: 'bg-[rgb(255_143_135/0.14)] text-danger',
+  create: 'bg-success/14 text-success',
+  modify: 'bg-accent/12 text-accent',
+  delete: 'bg-danger/14 text-danger',
 };
 const badgeName: Record<ChangeKind, string> = { create: 'Added', modify: 'Modified', delete: 'Deleted' };
 
@@ -19,7 +19,7 @@ export function StatusBadge({ kind }: { kind: ChangeKind }) {
       role="img"
       aria-label={badgeName[kind]}
       className={cx(
-        'inline-flex size-5 flex-none items-center justify-center rounded-[6px] font-mono text-[11px] font-medium',
+        'inline-flex size-5 flex-none items-center justify-center rounded-[5px] font-mono text-[11px] font-medium',
         badgeTone[kind],
       )}
     >

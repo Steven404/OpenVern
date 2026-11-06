@@ -209,10 +209,10 @@ export function Composer({
           e.preventDefault();
           void submit();
         }}
-        className={`flex flex-col border border-border-control bg-surface focus-within:border-border-focus ${
+        className={`flex flex-col bg-surface focus-within:bg-surface-focus transition-[background-color] duration-150 ${
           isNew
-            ? 'gap-2.5 rounded-[20px] pt-4 pr-3.5 pb-2.5 pl-5 shadow-[0_24px_64px_-32px_rgba(0,0,0,0.6)]'
-            : 'gap-2 rounded-[18px] pt-3.5 pr-3.5 pb-2.5 pl-[18px]'
+            ? 'gap-2.5 rounded-[14px] pt-4 pr-3.5 pb-2.5 pl-5 shadow-[0_16px_40px_-24px_rgb(0_0_0/0.35)]'
+            : 'gap-2 rounded-[14px] pt-3.5 pr-3.5 pb-2.5 pl-[18px]'
         }`}
       >
         <ComposerAttachmentChips items={items} onRemove={attachments.remove} />
@@ -268,7 +268,7 @@ export function Composer({
               type="button"
               aria-label="Stop"
               onClick={onStop}
-              className="inline-flex size-[38px] cursor-pointer items-center justify-center rounded-[12px] border-0 bg-accent text-bg hover:brightness-110"
+              className="inline-flex size-[38px] cursor-pointer items-center justify-center rounded-[10px] border-0 bg-accent text-bg hover:brightness-106"
             >
               <Square aria-hidden="true" size={14} fill="currentColor" strokeWidth={0} />
             </button>
@@ -277,7 +277,7 @@ export function Composer({
               type="submit"
               aria-label="Send message"
               disabled={!canSend}
-              className="inline-flex size-[38px] cursor-pointer items-center justify-center rounded-[12px] border-0 bg-accent text-bg hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex size-[38px] cursor-pointer items-center justify-center rounded-[10px] border-0 bg-accent text-bg hover:brightness-106 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <ArrowUp aria-hidden="true" size={18} strokeWidth={2.2} />
             </button>

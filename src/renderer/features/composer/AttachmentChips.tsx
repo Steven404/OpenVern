@@ -31,8 +31,8 @@ export function ComposerAttachmentChips({
           key={a.key}
           data-testid="attachment-chip"
           data-status={a.status}
-          className={`flex max-w-[260px] items-center gap-2 rounded-[10px] border bg-surface-raised py-1 pr-1 pl-1 ${
-            a.status === 'error' ? 'border-danger/60' : 'border-border-control'
+          className={`flex max-w-[260px] items-center gap-2 rounded-[8px] bg-overlay-tonal py-1 pr-1 pl-1 ${
+            a.status === 'error' ? 'border border-danger' : ''
           }`}
         >
           <span className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-[8px] bg-bg text-text-muted">
@@ -77,13 +77,13 @@ export function SentAttachments({ attachments }: { attachments: AttachmentRef[] 
             <img
               src={api.attachmentUrl(a.id)}
               alt={a.name}
-              className="block max-h-[240px] w-auto max-w-[240px] rounded-[10px] border border-border-bubble object-cover"
+              className="block max-h-[240px] w-auto max-w-[240px] rounded-[8px] object-cover"
             />
           </li>
         ) : (
           <li
             key={a.id}
-            className="flex max-w-[260px] items-center gap-2 rounded-[10px] border border-border-bubble bg-bg/40 px-2.5 py-1.5 text-[12.5px] text-text-secondary"
+            className="flex max-w-[260px] items-center gap-2 rounded-[8px] bg-overlay-tonal px-2.5 py-1.5 text-[12.5px] text-text-secondary"
           >
             <FileText aria-hidden="true" size={15} className="shrink-0 text-text-muted" />
             <span className="truncate" title={a.name}>

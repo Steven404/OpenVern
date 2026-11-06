@@ -47,13 +47,13 @@ export function FilesSurface({ chatId, projectId }: SurfaceProps) {
           aria-label="Collapse all folders"
           title="Collapse all"
           onClick={() => collapseAll(chatId)}
-          className="inline-flex size-[30px] cursor-pointer items-center justify-center rounded-[8px] border-0 bg-transparent text-text-muted hover:bg-overlay-ghost hover:text-text"
+          className="inline-flex size-[30px] cursor-pointer items-center justify-center rounded-[6px] border-0 bg-transparent text-text-muted hover:bg-overlay-ghost hover:text-text"
         >
           <ChevronsDownUp aria-hidden="true" size={15} strokeWidth={1.8} />
         </button>
       </div>
       <div className="px-3 pt-2.5 pb-1.5">
-        <label className="flex h-9 items-center gap-2 rounded-[10px] border border-border-tool bg-tool px-2.5 transition-colors focus-within:border-border-focus">
+        <label className="flex h-9 items-center gap-2 rounded-[8px] bg-tool px-2.5 transition-[background-color] focus-within:bg-surface">
           <Search aria-hidden="true" size={15} strokeWidth={2} className="shrink-0 text-text-faint" />
           <input
             type="search"
@@ -61,7 +61,7 @@ export function FilesSurface({ chatId, projectId }: SurfaceProps) {
             placeholder="Filter files"
             value={query}
             onChange={(e) => setQuery(chatId, e.target.value)}
-            className="min-w-0 flex-1 border-0 bg-transparent text-[13.5px] text-text outline-none placeholder:text-text-faint focus-visible:outline-none"
+            className="min-w-0 flex-1 border-0 bg-transparent text-[13.5px] text-text placeholder:text-text-faint"
           />
         </label>
       </div>
@@ -84,7 +84,7 @@ export function FilesSurface({ chatId, projectId }: SurfaceProps) {
             <button
               type="button"
               onClick={() => void tree.refetch()}
-              className="cursor-pointer rounded-[8px] border border-border-control bg-transparent px-2.5 py-1 text-text-secondary hover:bg-overlay-ghost"
+              className="cursor-pointer rounded-[6px] border border-transparent bg-overlay-tonal px-2.5 py-1 text-text hover:bg-overlay-tonal-hover"
             >
               Try again
             </button>
@@ -107,7 +107,7 @@ export function FilesSurface({ chatId, projectId }: SurfaceProps) {
                     title={r.path}
                     onClick={() => (r.isDir ? toggleFolder(chatId, r.path) : openFile(chatId, r.path))}
                     className={cx(
-                      'flex min-h-7 w-full cursor-pointer items-center gap-1.5 rounded-[7px] border-0 pr-2 text-left font-mono text-[12.5px]',
+                      'flex min-h-7 w-full cursor-pointer items-center gap-1.5 rounded-[6px] border-0 pr-2 text-left font-mono text-[12.5px]',
                       isCurrent
                         ? 'bg-surface-raised text-text'
                         : cx('bg-transparent hover:bg-overlay-row', r.isDir ? 'text-text-secondary' : 'text-text-chat'),

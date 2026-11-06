@@ -33,9 +33,9 @@ import { getSurface, getSurfaces, type SurfaceContext, type SurfaceId } from './
 export const RIGHT_PANEL_TOGGLE_ID = 'right-panel-toggle';
 
 const tabBase =
-  'inline-flex min-h-[30px] cursor-pointer items-center gap-[7px] rounded-[8px] border-0 text-[13px] whitespace-nowrap';
-const tabOn = 'bg-surface-raised text-text shadow-[inset_0_0_0_1px_var(--color-border-control)]';
-const tabOff = 'bg-transparent text-text-muted hover:bg-overlay-ghost hover:text-text';
+  'inline-flex min-h-[30px] cursor-pointer items-center gap-[7px] rounded-[6px] border-0 text-[13px] whitespace-nowrap';
+const tabOn = 'bg-surface-raised text-text';
+const tabOff = 'bg-transparent text-text-muted hover:bg-overlay-tonal hover:text-text';
 
 const baseName = (path: string) => path.slice(path.lastIndexOf('/') + 1);
 
@@ -186,7 +186,7 @@ export function RightPanel({ chatId, projectId }: { chatId: Id; projectId: Id | 
               <div
                 key={tabKey(tab)}
                 className={cx(
-                  'inline-flex flex-none items-center gap-0.5 rounded-[8px] pr-1',
+                  'inline-flex flex-none items-center gap-0.5 rounded-[6px] pr-1',
                   sel ? tabOn : 'bg-transparent',
                 )}
               >
@@ -213,7 +213,7 @@ export function RightPanel({ chatId, projectId }: { chatId: Id; projectId: Id | 
                   type="button"
                   aria-label={`Close ${name}`}
                   onClick={() => closeTab(chatId, tab)}
-                  className="inline-flex size-[22px] flex-none cursor-pointer items-center justify-center rounded-[6px] border-0 bg-transparent text-text-muted hover:bg-overlay-current hover:text-text"
+                  className="inline-flex size-[22px] flex-none cursor-pointer items-center justify-center rounded-[5px] border-0 bg-transparent text-text-muted hover:bg-overlay-tonal-hover hover:text-text"
                 >
                   <XIcon />
                 </button>
@@ -225,7 +225,7 @@ export function RightPanel({ chatId, projectId }: { chatId: Id; projectId: Id | 
             aria-label="Open a panel"
             aria-pressed={active.type === 'launcher'}
             onClick={() => show(chatId, { type: 'launcher' })}
-            className="inline-flex size-[30px] flex-none cursor-pointer items-center justify-center rounded-[8px] border-0 bg-transparent text-text-muted hover:bg-overlay-ghost hover:text-text aria-pressed:bg-overlay-ghost aria-pressed:text-text"
+            className="inline-flex size-[30px] flex-none cursor-pointer items-center justify-center rounded-[6px] border-0 bg-transparent text-text-muted hover:bg-overlay-tonal hover:text-text aria-pressed:bg-overlay-tonal aria-pressed:text-text"
           >
             <PlusIcon />
           </button>
@@ -234,7 +234,7 @@ export function RightPanel({ chatId, projectId }: { chatId: Id; projectId: Id | 
           type="button"
           aria-label="Close panel"
           onClick={close}
-          className="inline-flex size-[34px] flex-none cursor-pointer items-center justify-center rounded-[10px] border-0 bg-transparent text-text-muted hover:bg-overlay-ghost hover:text-text"
+          className="inline-flex size-[34px] flex-none cursor-pointer items-center justify-center rounded-[8px] border-0 bg-transparent text-text-muted hover:bg-overlay-ghost hover:text-text"
         >
           <XIcon size={17} strokeWidth={1.9} />
         </button>

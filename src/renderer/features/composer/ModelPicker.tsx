@@ -22,7 +22,7 @@ export interface ModelPickerProps {
 
 /** Ghost trigger shared with `EffortPicker` (F3), so the two pickers read as one control group. */
 export const triggerClass =
-  'min-h-9 gap-1.5 rounded-[10px] px-2.5 text-[13.5px] font-normal text-text-secondary hover:bg-overlay-ghost hover:text-text';
+  'min-h-9 gap-1.5 rounded-[8px] px-2.5 text-[13.5px] font-normal text-text-secondary hover:bg-overlay-ghost hover:text-text';
 
 /** Matches when every whitespace-separated word of the search occurs in the model's name or id. */
 const filter = (value: string, search: string) => {

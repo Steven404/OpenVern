@@ -1,4 +1,3 @@
-import { APP_NAME } from '@shared/constants';
 import type { ApiErrorInfo } from '@shared/errors';
 import { Info } from 'lucide-react';
 import { memo, type ReactNode } from 'react';
@@ -10,10 +9,8 @@ import type { Block, TextBlock } from './turns';
 
 export interface AssistantTurnProps {
   blocks: Block[];
-  /** Small muted note under the header (e.g. the project tree timed out). */
+  /** Small muted note before the content (e.g. the project tree timed out). */
   notice?: string;
-  /** Tooltip on the header (model name). */
-  modelLabel?: string;
   /** "Thinking…" before the first token (and between tool calls and the next reply). */
   waiting?: boolean;
   /** Rendered after the blocks (the Proposed edits card). */
@@ -28,11 +25,10 @@ export interface AssistantTurnProps {
   onRetry?: () => void;
 }
 
-/** D11: avatar header + one article per turn, texts and tool rows in order. */
+/** One article per turn, with texts and tool rows in order. */
 export const AssistantTurn = memo(function AssistantTurn({
   blocks,
   notice,
-  modelLabel,
   waiting = false,
   footer,
   error,
@@ -47,28 +43,6 @@ export const AssistantTurn = memo(function AssistantTurn({
       data-testid="assistant-turn"
       className="flex min-w-0 flex-col gap-[14px] text-[15.5px] leading-[1.65] text-text-body"
     >
-      <div className="flex items-center gap-2.5" title={modelLabel}>
-        <span
-          aria-hidden="true"
-          className="inline-flex size-[26px] items-center justify-center rounded-[8px] bg-accent font-display text-[14px] font-bold text-bg"
-        >
-          <svg
-            width="15"
-            height="15"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2.2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8" />
-          </svg>
-        </span>
-        <span className="text-[14px] font-semibold text-text">{APP_NAME}</span>
-      </div>
-
       {notice && (
         <p role="status" className="m-0 flex items-start gap-1.5 text-[13px] leading-snug text-text-muted">
           <Info aria-hidden="true" size={14} className="mt-[3px] shrink-0" />

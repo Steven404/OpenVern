@@ -37,7 +37,7 @@ export function ProjectRow({ project, chats, archivedChats = [], chatCount, curr
           aria-expanded={expanded}
           aria-controls={expanded ? listId : undefined}
           onClick={() => toggle(project.id)}
-          className="flex min-h-9 w-full cursor-pointer items-center gap-2 rounded-[9px] px-2 text-left text-sm font-medium text-text hover:bg-overlay-row"
+          className="flex min-h-9 w-full cursor-pointer items-center gap-2 rounded-[7px] px-2 text-left text-sm font-medium text-text hover:bg-overlay-row"
         >
           <ChevronIcon
             className="shrink-0 text-text-faint transition-transform duration-150 ease-in-out"

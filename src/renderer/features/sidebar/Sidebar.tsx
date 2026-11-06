@@ -12,7 +12,7 @@ import { ProjectRow } from './ProjectRow';
 
 export const SIDEBAR_COLLAPSE_BUTTON_ID = 'sidebar-collapse';
 
-const sectionLabel = 'm-0 font-mono text-[11px] font-medium tracking-[0.12em] text-text-muted uppercase';
+const sectionLabel = 'm-0 text-[13px] font-semibold text-text-muted';
 
 const byNewest = (a: ChatSummary, b: ChatSummary) => b.updatedAt.localeCompare(a.updatedAt);
 
@@ -84,10 +84,10 @@ export function Sidebar({ onCollapse, className }: { onCollapse: () => void; cla
           aria-current={onNewChatScreen ? 'page' : undefined}
           onClick={() => navigate(newChatPath)}
           className={cx(
-            'flex min-h-11 w-full cursor-pointer items-center gap-2.5 rounded-[12px] border px-3 text-[15px] font-medium text-text',
+            'flex min-h-11 w-full cursor-pointer items-center gap-2.5 rounded-[10px] border-0 px-3 text-[15px] font-medium',
             onNewChatScreen
-              ? 'border-border-hover bg-surface-raised-active'
-              : 'border-border-control bg-surface-raised hover:border-border-hover hover:bg-surface-raised-hover',
+              ? 'bg-overlay-ghost text-text hover:bg-overlay-tonal-hover'
+              : 'bg-transparent text-text-secondary hover:bg-overlay-ghost hover:text-text',
           )}
         >
           <PlusIcon />
@@ -170,7 +170,7 @@ export function Sidebar({ onCollapse, className }: { onCollapse: () => void; cla
         <button
           type="button"
           onClick={openSettings}
-          className="inline-flex min-h-10 cursor-pointer items-center gap-2.5 rounded-[10px] px-2.5 text-sm text-text-secondary hover:bg-overlay-ghost hover:text-text"
+          className="inline-flex min-h-10 cursor-pointer items-center gap-2.5 rounded-lg px-2.5 text-sm text-text-secondary hover:bg-overlay-ghost hover:text-text"
         >
           <GearIcon />
           <span>Settings</span>

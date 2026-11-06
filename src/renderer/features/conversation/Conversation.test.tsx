@@ -101,7 +101,7 @@ describe('turn grouping', () => {
     expect(merged[1]).toMatchObject({ text: 'full text' });
   });
 
-  it('renders one article per assistant turn with a single avatar header', async () => {
+  it('renders one article per assistant turn', async () => {
     const { api, chat } = await seededChat();
     renderWithProviders(<Conversation chatId={chat.id} />, { api });
     const turns = await screen.findAllByTestId('assistant-turn');
@@ -109,7 +109,6 @@ describe('turn grouping', () => {
     expect(screen.getAllByTestId('user-bubble')).toHaveLength(1);
     const turn = turns[0] as HTMLElement;
     expect(within(turn).getAllByTestId('tool-row')).toHaveLength(1);
-    expect(within(turn).getAllByText('OpenVern')).toHaveLength(1);
     expect(within(turn).getByText(/That shape is right/)).toBeTruthy();
     expect(within(turn).getByText(/Two guards are worth adding/)).toBeTruthy();
     // tool row sits between the two texts
