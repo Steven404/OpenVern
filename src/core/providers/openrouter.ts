@@ -6,10 +6,10 @@
 //  - Pre-stream failures are JSON `{ error: { code: <http status>, message, metadata? } }` with that HTTP status.
 //  - Reasoning arrives in `delta.reasoning_details` and must be passed back unmodified as `reasoning_details`.
 
-import { APP_NAME } from '@shared/constants';
+import { APP_NAME, REASONING_EFFORTS } from '@shared/constants';
 import { ERROR_DEFAULTS, type ErrorCode } from '@shared/errors';
 import { readSSE } from '@shared/sse';
-import type { ModelInfo, ToolCall, Usage } from '@shared/types';
+import type { ModelInfo, ReasoningEffort, ToolCall, Usage } from '@shared/types';
 import { authorFromSlug, splitModelName } from './models';
 import {
   type ContentPart,
@@ -312,6 +312,7 @@ interface WireModel {
   architecture?: { input_modalities?: unknown; output_modalities?: unknown };
   supported_parameters?: unknown;
   top_provider?: { context_length?: unknown };
+  reasoning?: { supported_efforts?: unknown; default_effort?: unknown };
 }
 
 /** Per-token USD string → USD per million tokens. Missing, non-numeric or negative (router pseudo-prices) → null. */
@@ -325,6 +326,22 @@ function perMTok(v: unknown): number | null {
 const strArray = (v: unknown): string[] =>
   Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
 
+const EFFORT_SET: ReadonlySet<string> = new Set(REASONING_EFFORTS);
+
+/**
+ * `reasoning.supported_efforts` → known levels only, deduped, in `REASONING_EFFORTS` order. OpenRouter sends them
+ * descending; the UI and `ModelInfo` expect ascending (none→max).
+ */
+function mapEfforts(v: unknown): ReasoningEffort[] {
+  const given = new Set(strArray(v));
+  return REASONING_EFFORTS.filter((effort) => given.has(effort));
+}
+
+/** `reasoning.default_effort` → the level when it is one we know, else undefined. */
+function mapEffort(v: unknown): ReasoningEffort | undefined {
+  return typeof v === 'string' && EFFORT_SET.has(v) ? (v as ReasoningEffort) : undefined;
+}
+
 export function mapModels(data: unknown): ModelInfo[] {
   if (!Array.isArray(data)) {
     throw new ProviderError('provider_error', 'OpenRouter returned an unexpected model list.', true);
@@ -337,6 +354,8 @@ export function mapModels(data: unknown): ModelInfo[] {
     if (!outputs.includes('text')) continue;
     const ctx = m.context_length ?? m.top_provider?.context_length;
     const name = typeof m.name === 'string' && m.name !== '' ? m.name : m.id;
+    const efforts = mapEfforts(m.reasoning?.supported_efforts);
+    const defaultEffort = mapEffort(m.reasoning?.default_effort);
     out.push({
       id: m.id,
       name,
@@ -346,6 +365,8 @@ export function mapModels(data: unknown): ModelInfo[] {
       supportsTools: strArray(m.supported_parameters).includes('tools'),
       supportsImages: strArray(m.architecture?.input_modalities).includes('image'),
       supportsReasoning: strArray(m.supported_parameters).includes('reasoning'),
+      ...(efforts.length > 0 ? { reasoningEfforts: efforts } : {}),
+      ...(defaultEffort !== undefined ? { defaultEffort } : {}),
       promptPricePerMTok: perMTok(m.pricing?.prompt),
       completionPricePerMTok: perMTok(m.pricing?.completion),
     });

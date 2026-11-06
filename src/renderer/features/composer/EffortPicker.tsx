@@ -1,4 +1,3 @@
-import { REASONING_EFFORTS } from '@shared/constants';
 import type { ReasoningEffort } from '@shared/types';
 import { useId } from 'react';
 import {
@@ -16,6 +15,10 @@ export interface EffortPickerProps {
   /** Selected effort; `null` = Default (no `reasoning` field is sent). */
   value: ReasoningEffort | null;
   onChange: (effort: ReasoningEffort | null) => void;
+  /** Levels the selected model accepts, in `REASONING_EFFORTS` order. The caller hides the picker when empty. */
+  efforts: ReasoningEffort[];
+  /** The provider's default level, shown in the Default item's description. */
+  defaultEffort?: ReasoningEffort;
 }
 
 /** Radio value for "Default" (Radix radio values must be strings, and `null` is not one). */
@@ -38,10 +41,13 @@ const DESCRIPTIONS: Partial<Record<ReasoningEffort, string>> = {
 
 /**
  * F3 (plan §5.3): reasoning-effort selector next to the model picker. Mirrors how `ModelPicker` is built — a ghost
- * trigger and an upward menu with a radio group. The caller hides it for models without reasoning support.
+ * trigger and an upward menu with a radio group. Lists Default plus the levels the selected model publishes; the
+ * caller hides it for models without any (F3 follow-up).
  */
-export function EffortPicker({ value, onChange }: EffortPickerProps) {
+export function EffortPicker({ value, onChange, efforts, defaultEffort }: EffortPickerProps) {
   const label = value === null ? 'Default' : LABELS[value];
+  const defaultDescription =
+    defaultEffort !== undefined ? `Model default: ${LABELS[defaultEffort]}` : "The model's own setting";
   const hintId = useId();
 
   return (
@@ -58,9 +64,9 @@ export function EffortPicker({ value, onChange }: EffortPickerProps) {
           onValueChange={(next) => onChange(next === DEFAULT_EFFORT ? null : (next as ReasoningEffort))}
         >
           <MenuRadioItem value={DEFAULT_EFFORT} textValue="Default">
-            <ItemText name="Default" description="The model's own setting" />
+            <ItemText name="Default" description={defaultDescription} />
           </MenuRadioItem>
-          {REASONING_EFFORTS.map((effort) => (
+          {efforts.map((effort) => (
             <MenuRadioItem key={effort} value={effort} textValue={LABELS[effort]}>
               <ItemText name={LABELS[effort]} description={DESCRIPTIONS[effort]} />
             </MenuRadioItem>

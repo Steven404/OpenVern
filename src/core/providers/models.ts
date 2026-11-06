@@ -4,13 +4,17 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import type { ModelInfo } from '@shared/types';
+import { REASONING_EFFORTS } from '@shared/constants';
+import type { ModelInfo, ReasoningEffort } from '@shared/types';
 import type { ModelCatalog } from '../types';
 import type { Provider } from './types';
 
 export const MODEL_CACHE_TTL_MS = 60 * 60 * 1000;
 /** After a failed fetch, non-forced calls serve the stale cache (or rethrow) for this long before retrying. */
 export const MODEL_FETCH_BACKOFF_MS = 60 * 1000;
+
+/** Bumped when the `ModelInfo` shape in the cache changes: an older entry is refetched, but still serves as stale data. */
+const CACHE_VERSION = 2;
 
 export interface ModelCatalogOptions {
   provider: Provider;
@@ -21,8 +25,34 @@ export interface ModelCatalogOptions {
 }
 
 interface CacheEntry {
+  version: number;
   fetchedAt: number; // epoch ms
   models: ModelInfo[];
+}
+
+const EFFORT_SET: ReadonlySet<string> = new Set(REASONING_EFFORTS);
+
+/**
+ * Drops an invalid F3 effort field from a cache entry instead of rejecting the whole cache. Known levels are also
+ * put back in `REASONING_EFFORTS` order.
+ */
+function sanitizeModel(m: ModelInfo): ModelInfo {
+  const raw = m as unknown as Record<string, unknown>;
+  const efforts = Array.isArray(raw.reasoningEfforts)
+    ? REASONING_EFFORTS.filter((e) => (raw.reasoningEfforts as unknown[]).includes(e))
+    : [];
+  const defaultEffort =
+    typeof raw.defaultEffort === 'string' && EFFORT_SET.has(raw.defaultEffort)
+      ? (raw.defaultEffort as ReasoningEffort)
+      : undefined;
+  const rest = { ...m };
+  delete rest.reasoningEfforts;
+  delete rest.defaultEffort;
+  return {
+    ...rest,
+    ...(efforts.length > 0 ? { reasoningEfforts: [...efforts] } : {}),
+    ...(defaultEffort !== undefined ? { defaultEffort } : {}),
+  };
 }
 
 function isModelInfo(m: unknown): m is ModelInfo {
@@ -42,10 +72,14 @@ async function readCache(file: string): Promise<CacheEntry | null> {
   try {
     const parsed: unknown = JSON.parse(await readFile(file, 'utf8'));
     if (typeof parsed !== 'object' || parsed === null) return null;
-    const { fetchedAt, models } = parsed as { fetchedAt?: unknown; models?: unknown };
+    const { version, fetchedAt, models } = parsed as { version?: unknown; fetchedAt?: unknown; models?: unknown };
     const t = typeof fetchedAt === 'string' ? Date.parse(fetchedAt) : Number.NaN;
     if (Number.isNaN(t) || !Array.isArray(models) || !models.every(isModelInfo)) return null;
-    return { fetchedAt: t, models };
+    return {
+      version: typeof version === 'number' && Number.isInteger(version) ? version : 0,
+      fetchedAt: t,
+      models: models.map(sanitizeModel),
+    };
   } catch {
     return null; // missing or corrupt: treat as no cache
   }
@@ -55,7 +89,11 @@ async function readCache(file: string): Promise<CacheEntry | null> {
 async function writeCache(file: string, entry: CacheEntry): Promise<void> {
   await mkdir(dirname(file), { recursive: true });
   const tmp = `${file}.${randomUUID()}.tmp`;
-  const json = JSON.stringify({ fetchedAt: new Date(entry.fetchedAt).toISOString(), models: entry.models });
+  const json = JSON.stringify({
+    version: entry.version,
+    fetchedAt: new Date(entry.fetchedAt).toISOString(),
+    models: entry.models,
+  });
   try {
     const fh = await open(tmp, 'w');
     try {
@@ -134,7 +172,8 @@ export function createModelCatalog(opts: ModelCatalogOptions): ModelCatalog {
     await loadDisk();
     if (!o.refresh) {
       const hit = cached();
-      if (hit && now() - hit.fetchedAt < MODEL_CACHE_TTL_MS) return hit.models;
+      // A cache written by an older format is not fresh: refetch it, but keep it as the stale fallback below.
+      if (hit && hit.version === CACHE_VERSION && now() - hit.fetchedAt < MODEL_CACHE_TTL_MS) return hit.models;
       if (lastFailure && now() - lastFailure.at < MODEL_FETCH_BACKOFF_MS) {
         if (hit) return hit.models;
         throw lastFailure.error;
@@ -142,7 +181,7 @@ export function createModelCatalog(opts: ModelCatalogOptions): ModelCatalog {
     }
     try {
       const models = await provider.listModels(o.signal);
-      const entry = { fetchedAt: now(), models };
+      const entry = { version: CACHE_VERSION, fetchedAt: now(), models };
       memory = entry;
       lastFailure = null;
       await writeCache(cacheFile, entry).catch(() => {}); // a failed cache write must not fail the call

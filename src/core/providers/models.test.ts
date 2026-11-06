@@ -80,11 +80,11 @@ describe('createModelCatalog', () => {
     expect(p.calls).toBe(3);
   });
 
-  it('writes the cache file atomically ({ fetchedAt, models }) and leaves no tmp files', async () => {
+  it('writes the cache file atomically ({ version, fetchedAt, models }) and leaves no tmp files', async () => {
     const p = fakeProvider([[A, B]]);
     await createModelCatalog({ provider: p.provider, cacheFile, now }).list();
     const saved = JSON.parse(await readFile(cacheFile, 'utf8'));
-    expect(saved).toEqual({ fetchedAt: '2026-10-31T12:00:00.000Z', models: [A, B] });
+    expect(saved).toEqual({ version: 2, fetchedAt: '2026-10-31T12:00:00.000Z', models: [A, B] });
     expect(await readdir(join(dir, 'cache'))).toEqual(['models.json']);
   });
 
@@ -98,15 +98,15 @@ describe('createModelCatalog', () => {
     expect(second.calls).toBe(0);
   });
 
-  it('an old cache entry without supportsReasoning (written before F3) still loads, as not reasoning', async () => {
-    // Exactly the shape the catalog wrote before F3: no `supportsReasoning` key on the entry.
+  it('an old cache entry without a version is refetched, but still serves as the stale fallback', async () => {
+    // Exactly the shape the catalog wrote before the F3 follow-up: no `version`, no reasoning levels.
     const { mkdir } = await import('node:fs/promises');
     await mkdir(join(dir, 'cache'), { recursive: true });
     await writeFile(cacheFile, JSON.stringify({ fetchedAt: new Date(clock).toISOString(), models: [A] }));
     const p = fakeProvider([new ProviderError('no_api_key', 'no key')]);
     const cat = createModelCatalog({ provider: p.provider, cacheFile, now });
-    expect(await cat.list()).toEqual([A]);
-    expect(p.calls).toBe(0);
+    expect(await cat.list()).toEqual([A]); // old format → tries a fetch first
+    expect(p.calls).toBe(1);
     expect((await cat.get('a/one')).supportsReasoning).not.toBe(true);
   });
 

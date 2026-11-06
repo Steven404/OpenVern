@@ -51,13 +51,13 @@ export function Conversation({ chatId }: ConversationProps) {
   const retry = useCallback(() => {
     if (!chat) return;
     // F3: a retry uses the effort chosen in this chat; otherwise the chat keeps the effort it already stored.
-    void retryRun(
-      deps,
-      chatId,
-      selectedModel ?? chat.model,
-      selectedEffort === undefined ? chat.effort : selectedEffort,
-    );
-  }, [retryRun, deps, chatId, selectedModel, selectedEffort, chat]);
+    const model = selectedModel ?? chat.model;
+    const picked = selectedEffort === undefined ? chat.effort : selectedEffort;
+    // F3 follow-up: an effort the model does not publish is sent as Default (null), like the composer shows it.
+    const info = modelsQuery.data?.find((m) => m.id === model);
+    const effort = info && picked !== null && !info.reasoningEfforts?.includes(picked) ? null : picked;
+    void retryRun(deps, chatId, model, effort);
+  }, [retryRun, deps, chatId, selectedModel, selectedEffort, chat, modelsQuery.data]);
 
   // ── stick to bottom ────────────────────────────────────────────────────────
   const scrollRef = useRef<HTMLElement>(null);

@@ -90,8 +90,11 @@ export function Composer({
   // Unknown capabilities (list not loaded yet): do not block; the server still validates.
   const supportsImages = info ? info.supportsImages : true;
   const supportsTools = info ? info.supportsTools : true;
-  // F3: missing means false, and the selector is hidden for models that don't list `reasoning`.
-  const supportsReasoning = info?.supportsReasoning === true;
+  // F3 follow-up: the picker only makes sense for a model that publishes the levels it accepts. Missing/empty
+  // means no picker, and any stored effort behaves as Default.
+  const efforts = info?.reasoningEfforts ?? [];
+  const showEffortPicker = efforts.length > 0;
+  const effectiveEffort = effort !== null && efforts.includes(effort) ? effort : null;
   const accept = supportsImages ? `${TEXT_ACCEPT},${IMAGE_ACCEPT}` : TEXT_ACCEPT;
 
   const [text, setText] = useState('');
@@ -242,7 +245,14 @@ export function Composer({
           />
           {projectSlot}
           <span className="flex-1" />
-          {supportsReasoning && !noKey && <EffortPicker value={effort} onChange={changeEffort} />}
+          {showEffortPicker && !noKey && (
+            <EffortPicker
+              value={effectiveEffort}
+              efforts={efforts}
+              defaultEffort={info?.defaultEffort}
+              onChange={changeEffort}
+            />
+          )}
           <ModelPicker
             value={model}
             models={modelsQuery.data}

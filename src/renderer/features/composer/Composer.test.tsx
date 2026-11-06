@@ -458,21 +458,19 @@ describe('effort picker (F3)', () => {
     expect(effortTrigger()).toBeNull();
   });
 
-  it('the menu lists the eight items in order, with Default checked first', async () => {
+  it('lists Default plus the model’s published levels in order, with Default checked first', async () => {
     const { api, chat } = await setup();
     renderWithProviders(<ReplyComposer chat={chat} />, { api });
     await screen.findByRole('button', { name: /^Effort:/ });
     openEffortMenu();
     const items = await screen.findAllByRole('menuitemradio');
-    expect(items).toHaveLength(8);
+    // Claude Sonnet 5.5 publishes low…max (no none/minimal); Default is prepended.
+    expect(items).toHaveLength(6);
     // Name and description are asserted separately: joined text would break Radix's typeahead.
-    const [def, none, minimal, low, medium, high, xhigh, max] = items;
+    const [def, low, medium, high, xhigh, max] = items;
     expect(within(def as HTMLElement).getByText('Default')).toBeTruthy();
-    expect(within(def as HTMLElement).getByText("The model's own setting")).toBeTruthy();
-    expect(within(none as HTMLElement).getByText('None')).toBeTruthy();
-    expect(within(none as HTMLElement).getByText('No reasoning')).toBeTruthy();
-    expect([minimal, low, medium, high, xhigh, max].map((i) => i?.textContent)).toEqual([
-      'Minimal',
+    expect(within(def as HTMLElement).getByText('Model default: High')).toBeTruthy();
+    expect([low, medium, high, xhigh, max].map((i) => i?.textContent)).toEqual([
       'Low',
       'Medium',
       'High',

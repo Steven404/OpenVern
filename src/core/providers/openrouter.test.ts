@@ -743,6 +743,37 @@ describe('listModels', () => {
     expect(byId['openrouter/auto']?.supportsReasoning).toBe(false);
   });
 
+  // ── F3 follow-up: per-model effort levels ──
+  it('mapModels sorts supported_efforts ascending, dedupes and drops unknown levels', () => {
+    const [m] = mapModels([
+      {
+        id: 'a/b',
+        name: 'B',
+        architecture: {},
+        reasoning: { supported_efforts: ['max', 'high', 'bogus', 'low', 'high'], default_effort: 'high' },
+      },
+    ]);
+    expect(m?.reasoningEfforts).toEqual(['low', 'high', 'max']);
+    expect(m?.defaultEffort).toBe('high');
+  });
+
+  it('mapModels omits empty/absent efforts and an unknown default_effort', () => {
+    const [empty, absent, badDefault] = mapModels([
+      { id: 'a/empty', name: 'Empty', architecture: {}, reasoning: { supported_efforts: [] } },
+      { id: 'a/absent', name: 'Absent', architecture: {} },
+      {
+        id: 'a/bad-default',
+        name: 'Bad default',
+        architecture: {},
+        reasoning: { supported_efforts: ['none', 'max'], default_effort: 'ultra' },
+      },
+    ]);
+    expect(empty).not.toHaveProperty('reasoningEfforts');
+    expect(absent).not.toHaveProperty('reasoningEfforts');
+    expect(badDefault?.reasoningEfforts).toEqual(['none', 'max']);
+    expect(badDefault).not.toHaveProperty('defaultEffort');
+  });
+
   it('does not produce float noise when scaling prices', () => {
     const [m] = mapModels([
       { id: 'a/b', name: 'B', pricing: { prompt: '0.000001', completion: '0.00000015' }, architecture: {} },

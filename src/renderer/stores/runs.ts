@@ -15,6 +15,7 @@ import type {
   ChatUsage,
   Id,
   Message,
+  ModelInfo,
   ReasoningEffort,
   UserMessage,
 } from '@shared/types';
@@ -216,6 +217,21 @@ export function toErrorInfo(err: unknown): ApiErrorInfo {
   return errorInfo('network_error', err instanceof Error && err.message ? err.message : undefined);
 }
 
+/**
+ * F3 follow-up: sends only an effort the model publishes; anything else is Default (`null`), matching the composer.
+ * When the model list is not cached, the value is left alone — the server drops an effort the model does not accept.
+ */
+function effectiveEffort(
+  queryClient: QueryClient,
+  model: string,
+  effort: ReasoningEffort | null | undefined,
+): ReasoningEffort | null | undefined {
+  if (effort == null) return effort;
+  const info = queryClient.getQueryData<ModelInfo[]>(queryKeys.models)?.find((m) => m.id === model);
+  if (!info) return effort;
+  return info.reasoningEfforts?.includes(effort) ? effort : null;
+}
+
 /** Patches cached summaries immediately (sidebar title, header, ordering). */
 export function patchChatSummary(queryClient: QueryClient, summary: ChatSummary) {
   queryClient.setQueryData<ChatSummary[]>(queryKeys.chats, (old) => {
@@ -352,6 +368,7 @@ export const useRunsStore = create<RunsState>()((set, get) => {
 
     async send(deps, chatId, input) {
       if (isActive(chatId)) return;
+      const effort = effectiveEffort(deps.queryClient, input.model, input.effort);
       const pending: UserMessage = {
         id: `${PENDING_PREFIX}${crypto.randomUUID()}`,
         role: 'user',
@@ -370,7 +387,7 @@ export const useRunsStore = create<RunsState>()((set, get) => {
             text: input.text,
             attachmentIds: input.attachments.map((a) => a.id),
             model: input.model,
-            ...(input.effort !== undefined ? { effort: input.effort } : {}),
+            ...(effort !== undefined ? { effort } : {}),
           },
           controller.signal,
         ),
@@ -379,6 +396,7 @@ export const useRunsStore = create<RunsState>()((set, get) => {
 
     async retry(deps, chatId, model, effort) {
       if (isActive(chatId)) return;
+      const requestEffort = effectiveEffort(deps.queryClient, model, effort);
       const unsent = get().runs[chatId]?.unsent;
       if (unsent) {
         set((s) => {
@@ -402,7 +420,11 @@ export const useRunsStore = create<RunsState>()((set, get) => {
       get().setChatModel(chatId, model);
       if (effort !== undefined) get().setChatEffort(chatId, effort);
       await consume(deps, chatId, token, controller, () =>
-        deps.api.retry(chatId, { model, ...(effort !== undefined ? { effort } : {}) }, controller.signal),
+        deps.api.retry(
+          chatId,
+          { model, ...(requestEffort !== undefined ? { effort: requestEffort } : {}) },
+          controller.signal,
+        ),
       );
     },
 

@@ -1,5 +1,6 @@
 // In-memory fakes of the S1/S2/S3 services, for testing the agent in isolation (test-only; not exported from index.ts).
 
+import { REASONING_EFFORTS } from '@shared/constants';
 import type { AgentEvent } from '@shared/events';
 import type {
   AttachmentRef,
@@ -11,6 +12,7 @@ import type {
   ModelInfo,
   Project,
   ProjectListItem,
+  ReasoningEffort,
 } from '@shared/types';
 import { CoreError } from '../errors';
 import { createFakeProvider, type FakeProvider, type FakeScript } from '../providers/fake';
@@ -238,14 +240,28 @@ export function createFakeProjects(projects: Project[] = []): ProjectsService & 
   };
 }
 
-export function model(id: string, caps: { tools?: boolean; images?: boolean; reasoning?: boolean } = {}): ModelInfo {
+export function model(
+  id: string,
+  caps: {
+    tools?: boolean;
+    images?: boolean;
+    reasoning?: boolean;
+    /** F3: levels the model accepts. Default: every level when `reasoning` is true, none otherwise. */
+    efforts?: ReasoningEffort[];
+    defaultEffort?: ReasoningEffort;
+  } = {},
+): ModelInfo {
+  const reasoning = caps.reasoning ?? false;
+  const efforts = caps.efforts ? [...caps.efforts] : reasoning ? [...REASONING_EFFORTS] : [];
   return {
     id,
     name: id,
     contextLength: 100_000,
     supportsTools: caps.tools ?? true,
     supportsImages: caps.images ?? false,
-    supportsReasoning: caps.reasoning ?? false,
+    supportsReasoning: reasoning,
+    ...(efforts.length > 0 ? { reasoningEfforts: efforts } : {}),
+    ...(caps.defaultEffort !== undefined ? { defaultEffort: caps.defaultEffort } : {}),
     promptPricePerMTok: null,
     completionPricePerMTok: null,
   };

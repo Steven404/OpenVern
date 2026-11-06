@@ -130,6 +130,16 @@ export interface ModelInfo {
    * missing counts as false.
    */
   supportsReasoning?: boolean;
+  /**
+   * F3 follow-up: the levels OpenRouter says the model accepts, ordered as in `REASONING_EFFORTS` (none→max).
+   * Optional and absent when the model publishes none: the picker is then hidden and no `reasoning.effort` is sent.
+   */
+  reasoningEfforts?: ReasoningEffort[];
+  /**
+   * F3 follow-up: OpenRouter's default level for the model, when it is a level we know. Display only; choosing
+   * Default always sends no `reasoning` field.
+   */
+  defaultEffort?: ReasoningEffort;
 }
 
 export interface PublicSettings {

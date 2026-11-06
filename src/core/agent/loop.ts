@@ -216,8 +216,13 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
     }
 
     // Context for the requests.
+    // F3 follow-up: only send a level the model actually publishes. Default (`null`), a model with no published
+    // levels, or one that does not list this level all send no `reasoning` field; the chat still stores the choice.
     const modelInfo = await models.get(model);
-    const reasoningEffort = modelInfo.supportsReasoning === true && effort !== null ? effort : undefined;
+    const reasoningEffort =
+      modelInfo.supportsReasoning === true && effort !== null && modelInfo.reasoningEfforts?.includes(effort)
+        ? effort
+        : undefined;
     let project: Project | undefined;
     if (chat.projectId) {
       try {
