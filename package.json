@@ -15,6 +15,8 @@
     "dev:server": "tsx watch --clear-screen=false --tsconfig tsconfig.node.json src/server/dev.ts",
     "dev:web": "concurrently -k -n server,web -c yellow,cyan \"npm:dev:server\" \"vite --config vite.web.config.ts\"",
     "dev": "concurrently -k -n server,electron -c yellow,cyan \"npm:dev:server\" \"electron-vite dev\"",
+    "predev": "node scripts/ensure-electron.mjs",
+    "prepreview": "node scripts/ensure-electron.mjs",
     "build": "electron-vite build",
     "preview": "electron-vite build && OPENVERN_DATA_DIR=./.dev-data-preview electron-vite preview --skipBuild",
     "dist": "electron-vite build && electron-builder --linux AppImage",
