@@ -1,7 +1,7 @@
 {
   "name": "openvern",
   "productName": "OpenVern",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "OpenVern: a desktop app to chat with LLMs about your local code projects and review the edits they propose.",
   "author": "Stefanos Michelakis",
