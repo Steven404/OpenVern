@@ -63,7 +63,7 @@ export function useRightPanelTarget(): { chatId: Id; projectId: Id | null | unde
 }
 
 /**
- * Where "New chat" / `Ctrl+N` go: `#/new`, with the project of the chat on screen preselected (S7.15), if any.
+ * Where "New chat" / `Ctrl+N` (`⌘N` on macOS) go: `#/new`, with the project of the chat on screen preselected (S7.15), if any.
  * Chats without a project, or any other screen, give plain `#/new`.
  */
 export function useNewChatPath(): string {

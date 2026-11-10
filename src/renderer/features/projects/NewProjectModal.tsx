@@ -116,7 +116,7 @@ function NewProjectForm() {
             label="Folder"
             value={path}
             onChange={(event) => changePath(event.target.value)}
-            placeholder="/home/you/code/my-app"
+            placeholder="~/code/my-app"
             hint="Absolute path to the project folder. “~” is allowed."
             error={pathError}
             autoComplete="off"

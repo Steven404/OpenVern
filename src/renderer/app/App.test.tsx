@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { location, renderApp, resetUi, seededClient } from './test-utils';
 
@@ -10,7 +10,26 @@ afterEach(() => {
 
 const seeded = seededClient;
 
-const ctrl = (key: string) => fireEvent.keyDown(window, { key, ctrlKey: true });
+/** The primary modifier, as Windows/Linux (`Ctrl`) and macOS (`Cmd`) send it. Every shortcut must accept both. */
+const MODIFIERS: { label: string; init: Record<string, boolean> }[] = [
+  { label: 'Ctrl', init: { ctrlKey: true } },
+  { label: 'Cmd', init: { metaKey: true } },
+];
+const press = (key: string, init: Record<string, boolean>) => fireEvent.keyDown(window, { key, ...init });
+
+/** Stubs a macOS or Linux navigator. Every field is set, so detection agrees with itself. */
+function stubPlatform(platform: 'mac' | 'linux') {
+  vi.stubGlobal(
+    'navigator',
+    platform === 'mac'
+      ? { userAgentData: { platform: 'macOS' }, platform: 'MacIntel', userAgent: 'Mozilla/5.0 (Macintosh)' }
+      : {
+          userAgentData: { platform: 'Linux' },
+          platform: 'Linux x86_64',
+          userAgent: 'Mozilla/5.0 (X11; Linux x86_64)',
+        },
+  );
+}
 
 describe('App shell and routing', () => {
   it('shows the sidebar and the New chat screen at #/new, with New chat marked current', async () => {
@@ -44,14 +63,32 @@ describe('App shell and routing', () => {
   });
 });
 
-describe('Ctrl+N', () => {
+describe('platform shortcut labels (AS-03)', () => {
+  it('shows ⌘ N on the New chat button on macOS', async () => {
+    stubPlatform('mac');
+    renderApp({ route: '/new' });
+    const newChat = await screen.findByRole('button', { name: /New chat/ });
+    expect(within(newChat).getByText('⌘ N')).toBeTruthy();
+    expect(newChat.textContent).not.toContain('Ctrl');
+  });
+
+  it('shows Ctrl N on the New chat button on Linux', async () => {
+    stubPlatform('linux');
+    renderApp({ route: '/new' });
+    const newChat = await screen.findByRole('button', { name: /New chat/ });
+    expect(within(newChat).getByText('Ctrl N')).toBeTruthy();
+    expect(newChat.textContent).not.toContain('⌘');
+  });
+});
+
+describe.each(MODIFIERS)('$label+N (New chat)', ({ init }) => {
   it('opens New chat with the current chat’s project preselected', async () => {
     const { client, chat } = await seeded();
     renderApp({ client, route: `/chat/${chat.id}` });
     await screen.findByRole('region', { name: 'Conversation' });
     // The shortcut reads the project from the chats list: wait until it has loaded.
     await screen.findAllByRole('link', { name: chat.title });
-    ctrl('n');
+    press('n', init);
     await waitFor(() => expect(location()).toBe(`/new?project=${chat.projectId}`));
   });
 
@@ -59,8 +96,21 @@ describe('Ctrl+N', () => {
     renderApp({ route: '/chat/does-not-exist' });
     fireEvent.click(await screen.findByRole('button', { name: 'Settings' }));
     await screen.findByRole('dialog', { name: 'Settings' });
-    ctrl('n');
+    press('n', init);
     expect(location()).toBe('/chat/does-not-exist');
+  });
+
+  it('is ignored while a menu is open, and works again once it closes', async () => {
+    renderApp({ route: '/chat/does-not-exist' });
+    await screen.findByText(/doesn't exist/);
+    const menu = document.createElement('div');
+    menu.setAttribute('role', 'menu');
+    document.body.append(menu);
+    press('n', init);
+    expect(location()).toBe('/chat/does-not-exist');
+    menu.remove();
+    press('n', init);
+    await waitFor(() => expect(location()).toBe('/new'));
   });
 });
 
@@ -78,12 +128,12 @@ describe('sidebar collapse (D2) and responsive (D19)', () => {
     await waitFor(() => expect(document.activeElement?.getAttribute('aria-label')).toBe('Collapse sidebar'));
   });
 
-  it('Ctrl+B toggles the sidebar', async () => {
+  it.each(MODIFIERS)('$label+B toggles the sidebar', async ({ init }) => {
     renderApp();
     await screen.findByRole('complementary');
-    ctrl('b');
+    press('b', init);
     expect(screen.queryByRole('complementary')).toBeNull();
-    ctrl('b');
+    press('b', init);
     expect(screen.getByRole('complementary')).toBeTruthy();
   });
 });

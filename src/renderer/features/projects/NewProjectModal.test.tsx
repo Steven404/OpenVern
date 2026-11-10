@@ -76,6 +76,15 @@ describe('NewProjectModal in the browser', () => {
     expect(await within(dialog).findByText('This folder is already a project.')).toBeTruthy();
   });
 
+  it('shows the platform-neutral ~/code/my-app placeholder and accepts a ~ path', async () => {
+    const { dialog } = await openModal();
+    const folder = within(dialog).getByLabelText('Folder') as HTMLInputElement;
+    expect(folder.placeholder).toBe('~/code/my-app');
+    fireEvent.change(folder, { target: { value: '~/code/my-app' } });
+    expect(within(dialog).queryByText('Enter an absolute path to a folder.')).toBeNull();
+    expect((within(dialog).getByRole('button', { name: 'Add project' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it('starts empty each time it opens', async () => {
     const { dialog } = await openModal();
     fireEvent.change(within(dialog).getByLabelText('Folder'), { target: { value: '/tmp/abc' } });

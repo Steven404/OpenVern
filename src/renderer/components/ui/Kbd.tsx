@@ -1,7 +1,7 @@
 import type { HTMLAttributes } from 'react';
 import { cx } from './cx';
 
-/** Keyboard hint, e.g. `<Kbd>Ctrl N</Kbd>`. */
+/** Keyboard hint, e.g. `<Kbd>Ctrl N</Kbd>` or `<Kbd>⌘ N</Kbd>` on macOS (see `modKeyLabel`). */
 export function Kbd({ className, ...props }: HTMLAttributes<HTMLElement>) {
   return (
     <kbd

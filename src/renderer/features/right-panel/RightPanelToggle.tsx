@@ -1,9 +1,10 @@
 import { IconButton } from '@renderer/components/ui';
+import { modKeyLabel } from '@renderer/lib/platform';
 import { useUiStore } from '@renderer/stores/ui';
 import { RightPanelIcon } from './icons';
 import { RIGHT_PANEL_TOGGLE_ID } from './RightPanel';
 
-/** Chat-header button for the right panel (also `Ctrl+]`). */
+/** Chat-header button for the right panel (also `Ctrl+]`, or `⌘]` on macOS). */
 export function RightPanelToggle() {
   const open = useUiStore((s) => s.rightPanelOpen);
   const toggle = useUiStore((s) => s.toggleRightPanel);
@@ -14,7 +15,7 @@ export function RightPanelToggle() {
       aria-label="Toggle right panel"
       aria-pressed={open}
       aria-controls="right-panel"
-      tooltip="Toggle right panel (Ctrl ])"
+      tooltip={`Toggle right panel (${modKeyLabel()} ])`}
       onClick={toggle}
       className="aria-pressed:bg-surface-raised aria-pressed:text-text"
     >

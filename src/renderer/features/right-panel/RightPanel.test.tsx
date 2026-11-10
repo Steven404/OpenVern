@@ -13,6 +13,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 const toggle = () => screen.getByRole('button', { name: 'Toggle right panel' });
@@ -27,19 +28,40 @@ async function renderChat(opts: { loose?: boolean } = {}) {
 }
 
 const openPanel = () => fireEvent.click(toggle());
-const ctrlBracket = () => fireEvent.keyDown(window, { key: ']', ctrlKey: true });
+/** The primary modifier, as Windows/Linux (`Ctrl`) and macOS (`Cmd`) send it. Every shortcut must accept both. */
+const MODIFIERS: { label: string; init: Record<string, boolean> }[] = [
+  { label: 'Ctrl', init: { ctrlKey: true } },
+  { label: 'Cmd', init: { metaKey: true } },
+];
+const pressBracket = (init: Record<string, boolean> = { ctrlKey: true }) =>
+  fireEvent.keyDown(window, { key: ']', ...init });
+const ctrlBracket = () => pressBracket();
+
+/** Stubs a macOS or Linux navigator. Every field is set, so detection agrees with itself. */
+function stubPlatform(platform: 'mac' | 'linux') {
+  vi.stubGlobal(
+    'navigator',
+    platform === 'mac'
+      ? { userAgentData: { platform: 'macOS' }, platform: 'MacIntel', userAgent: 'Mozilla/5.0 (Macintosh)' }
+      : {
+          userAgentData: { platform: 'Linux' },
+          platform: 'Linux x86_64',
+          userAgent: 'Mozilla/5.0 (X11; Linux x86_64)',
+        },
+  );
+}
 
 describe('right panel shell', () => {
-  it('toggles from the header and Ctrl+], with aria state', async () => {
+  it.each(MODIFIERS)('toggles from the header and $label+], with aria state', async ({ init }) => {
     await renderChat();
     expect(toggle().getAttribute('aria-pressed')).toBe('false');
     expect(toggle().getAttribute('aria-controls')).toBe('right-panel');
     openPanel();
     expect(panel()).toBeTruthy();
     expect(toggle().getAttribute('aria-pressed')).toBe('true');
-    ctrlBracket();
+    pressBracket(init);
     expect(screen.queryByRole('complementary', { name: 'Right panel' })).toBeNull();
-    ctrlBracket();
+    pressBracket(init);
     expect(panel()).toBeTruthy();
     fireEvent.click(within(panel()).getByRole('button', { name: 'Close panel' }));
     expect(screen.queryByRole('complementary', { name: 'Right panel' })).toBeNull();
@@ -55,16 +77,50 @@ describe('right panel shell', () => {
     expect(readPersistedUi().rightPanelOpen).toBe(false);
   });
 
-  it('ignores Ctrl+] while a dialog is open', async () => {
+  it.each(MODIFIERS)('ignores $label+] while a dialog is open', async ({ init }) => {
     await renderChat();
     const dialog = document.createElement('div');
     dialog.setAttribute('role', 'dialog');
     document.body.append(dialog);
-    ctrlBracket();
+    pressBracket(init);
     expect(screen.queryByRole('complementary', { name: 'Right panel' })).toBeNull();
     dialog.remove();
-    ctrlBracket();
+    pressBracket(init);
     expect(panel()).toBeTruthy();
+  });
+
+  it.each(MODIFIERS)('ignores $label+] while a menu is open', async ({ init }) => {
+    await renderChat();
+    const menu = document.createElement('div');
+    menu.setAttribute('role', 'menu');
+    document.body.append(menu);
+    pressBracket(init);
+    expect(screen.queryByRole('complementary', { name: 'Right panel' })).toBeNull();
+    menu.remove();
+    pressBracket(init);
+    expect(panel()).toBeTruthy();
+  });
+
+  it.each([
+    ['macOS', 'mac', 'Toggle right panel (⌘ ])'],
+    ['Linux', 'linux', 'Toggle right panel (Ctrl ])'],
+  ] as const)(
+    'labels the header button for %s: tooltip shows the shortcut, accessible name is unchanged',
+    async (_os, platform, tooltip) => {
+      stubPlatform(platform);
+      await renderChat();
+      expect(toggle().getAttribute('title')).toBe(tooltip);
+      expect(toggle().getAttribute('aria-label')).toBe('Toggle right panel');
+      openPanel();
+      expect(toggle().getAttribute('aria-pressed')).toBe('true');
+    },
+  );
+
+  it('labels the new chat screen toggle with ⌘ on macOS', async () => {
+    stubPlatform('mac');
+    renderApp({ route: '/new' });
+    await screen.findByRole('heading', { name: 'What are we building?' });
+    expect(toggle().getAttribute('title')).toBe('Toggle right panel (⌘ ])');
   });
 
   it('opens on Files in a project chat', async () => {

@@ -1,5 +1,6 @@
 import { useChats, useCurrentChatId, useNewChatPath, useProjects } from '@renderer/app/queries';
 import { Button, cx, IconButton, Kbd } from '@renderer/components/ui';
+import { modKeyLabel } from '@renderer/lib/platform';
 import { useUiStore } from '@renderer/stores/ui';
 import { APP_NAME } from '@shared/constants';
 import type { ChatSummary } from '@shared/types';
@@ -92,7 +93,7 @@ export function Sidebar({ onCollapse, className }: { onCollapse: () => void; cla
         >
           <PlusIcon />
           <span className="flex-1 text-left">New chat</span>
-          <Kbd>Ctrl N</Kbd>
+          <Kbd>{`${modKeyLabel()} N`}</Kbd>
         </button>
       </div>
 

@@ -17,7 +17,8 @@ export interface GlobalShortcutHandlers {
 
 /**
  * Global keyboard shortcuts (S6.9): `Ctrl+N` → New chat (with the current chat's project preselected),
- * `Ctrl+B` → toggle the sidebar, `Ctrl+]` → toggle the right panel (a chat, or the new-chat screen). `Cmd` works like `Ctrl`.
+ * `Ctrl+B` → toggle the sidebar, `Ctrl+]` → toggle the right panel (a chat, or the new-chat screen). `Cmd` works like `Ctrl`
+ * (labels show `⌘` on macOS, see `modKeyLabel`).
  * Ignored while a dialog or menu is open. (Browsers reserve `Ctrl+N`; it works in Electron.)
  */
 export function useGlobalShortcuts({ toggleSidebar, toggleRightPanel }: GlobalShortcutHandlers): void {
