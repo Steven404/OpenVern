@@ -12,13 +12,14 @@ export function getMainWindow(): BrowserWindow | null {
   return mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
 }
 
-/** Bring the existing window to the front (second launch). */
-export function focusMainWindow(): void {
+/** Bring the existing window to the front, returning whether one exists. */
+export function focusMainWindow(): boolean {
   const win = getMainWindow();
-  if (!win) return;
+  if (!win) return false;
   if (win.isMinimized()) win.restore();
   win.show();
   win.focus();
+  return true;
 }
 
 function isExternalWebUrl(url: string): boolean {

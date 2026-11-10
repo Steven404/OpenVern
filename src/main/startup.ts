@@ -30,6 +30,7 @@ function resolveDataDirSync(raw: string): string {
  * With `OPENVERN_DATA_DIR` (any mode): `<data dir>/electron-profile`, so a test run is isolated from the installed app.
  * Otherwise packaged: `~/.config/openvern`; unpackaged: `openvern-dev` (`npm run dev`) or `openvern-preview`
  * (`npm run preview`, bare `electron .`), so each mode has its own Chromium profile and lock.
+ * On macOS these are under `~/Library/Application Support/`: `openvern`, `openvern-dev`, `openvern-preview`.
  */
 export function resolveUserDataDir(i: UserDataInput): string | null {
   if (i.hasUserDataDirSwitch) return null;
@@ -43,6 +44,12 @@ export const NO_SANDBOX_WARNING =
   '[openvern] WARNING: running with --no-sandbox; renderers are not OS-sandboxed. ' +
   'If this is the AppImage, enable unprivileged user namespaces (or the chrome-sandbox SUID helper).';
 
-export function noSandboxWarning(hasNoSandboxSwitch: boolean): string | null {
-  return hasNoSandboxSwitch ? NO_SANDBOX_WARNING : null;
+export function noSandboxWarning(
+  hasNoSandboxSwitch: boolean,
+  platform: NodeJS.Platform = process.platform,
+): string | null {
+  if (!hasNoSandboxSwitch) return null;
+  return platform === 'linux'
+    ? NO_SANDBOX_WARNING
+    : '[openvern] WARNING: running with --no-sandbox; renderers are not OS-sandboxed.';
 }

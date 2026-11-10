@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { resolveDataDir as backendResolve } from '../core/storage/paths';
-import { noSandboxWarning, resolveUserDataDir } from './startup';
+import { NO_SANDBOX_WARNING, noSandboxWarning, resolveUserDataDir } from './startup';
 
 const appDataDir = '/home/u/.config';
 const base = { isPackaged: false, isDev: false, hasUserDataDirSwitch: false, appDataDir };
@@ -69,5 +69,43 @@ describe('noSandboxWarning (S8-N2)', () => {
   it('warns only when --no-sandbox is set', () => {
     expect(noSandboxWarning(true)).toContain('--no-sandbox');
     expect(noSandboxWarning(false)).toBeNull();
+  });
+});
+
+describe('resolveUserDataDir on macOS (AS-04 d)', () => {
+  const macAppData = '/Users/u/Library/Application Support';
+  const mac = { ...base, appDataDir: macAppData };
+
+  it('uses openvern, openvern-dev and openvern-preview under Application Support', () => {
+    expect(resolveUserDataDir({ ...mac, isPackaged: true })).toBe(path.join(macAppData, 'openvern'));
+    expect(resolveUserDataDir({ ...mac, isDev: true })).toBe(path.join(macAppData, 'openvern-dev'));
+    expect(resolveUserDataDir(mac)).toBe(path.join(macAppData, 'openvern-preview'));
+  });
+
+  it('OPENVERN_DATA_DIR gives <dir>/electron-profile and an explicit --user-data-dir gives null', () => {
+    const dir = '/Users/u/openvern-test';
+    expect(resolveUserDataDir({ ...mac, isPackaged: true, dataDirEnv: dir })).toBe(path.join(dir, 'electron-profile'));
+    expect(resolveUserDataDir({ ...mac, dataDirEnv: dir })).toBe(path.join(dir, 'electron-profile'));
+    expect(resolveUserDataDir({ ...mac, isPackaged: true, hasUserDataDirSwitch: true })).toBeNull();
+  });
+});
+
+describe('noSandboxWarning by platform (AS-04 e)', () => {
+  it('Linux text is unchanged byte for byte (historical literal)', () => {
+    expect(NO_SANDBOX_WARNING).toBe(
+      '[openvern] WARNING: running with --no-sandbox; renderers are not OS-sandboxed. ' +
+        'If this is the AppImage, enable unprivileged user namespaces (or the chrome-sandbox SUID helper).',
+    );
+    expect(noSandboxWarning(true, 'linux')).toBe(NO_SANDBOX_WARNING);
+  });
+
+  it.each(['darwin', 'win32'] as const)('%s text contains --no-sandbox and not AppImage', (platform) => {
+    const text = noSandboxWarning(true, platform);
+    expect(text).toContain('--no-sandbox');
+    expect(text).not.toContain('AppImage');
+  });
+
+  it.each(['linux', 'darwin', 'win32'] as const)('%s returns null without --no-sandbox', (platform) => {
+    expect(noSandboxWarning(false, platform)).toBeNull();
   });
 });

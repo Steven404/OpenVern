@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { app, BrowserWindow, dialog, Menu } from 'electron';
 import { createBackend } from './backend';
 import { registerIpc } from './ipc';
+import { buildAppMenuTemplate } from './menu';
 import { isDev } from './origin';
 import { handleAppProtocol, registerAppScheme } from './protocol';
 import { noSandboxWarning, resolveUserDataDir } from './startup';
@@ -31,11 +32,10 @@ if (sandboxWarning) console.warn(sandboxWarning);
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on('second-instance', () => focusMainWindow());
-
   void app.whenReady().then(async () => {
     if (!isDev()) {
-      Menu.setApplicationMenu(null); // dev keeps the default menu (DevTools, reload)
+      const template = buildAppMenuTemplate(process.platform);
+      Menu.setApplicationMenu(template ? Menu.buildFromTemplate(template) : null); // dev keeps the default menu (DevTools, reload)
       let backend: Awaited<ReturnType<typeof createBackend>>;
       try {
         backend = await createBackend();
@@ -50,6 +50,12 @@ if (!app.requestSingleInstanceLock()) {
     }
     registerIpc();
     createMainWindow();
+
+    // Register after startup: a second instance can arrive during createBackend (including a Keychain wait),
+    // before the protocol and first window are ready.
+    app.on('second-instance', () => {
+      if (!focusMainWindow()) createMainWindow();
+    });
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
