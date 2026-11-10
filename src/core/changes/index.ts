@@ -19,7 +19,7 @@ import { z } from 'zod';
 import { CoreError } from '../errors';
 import { JsonFile, type StorageLogger, writeFileAtomic } from '../storage/json-file';
 import { type DataPaths, dataPaths } from '../storage/paths';
-import { resolveInProject, type SandboxOptions } from '../tools/sandbox';
+import { resolveInProject, type SandboxOptions, sameFoldedRel } from '../tools/sandbox';
 import type { ToolChanges } from '../tools/types';
 import type { ChangesService } from '../types';
 import { applyHunks, detectEol, diffFile, finishFileChange, sameLines } from './diff';
@@ -203,7 +203,12 @@ async function resolveTarget(root: string, relPath: string, sandbox: SandboxOpti
     const lexical = path.relative(res.root, path.resolve(res.root, relPath)).split(path.sep).join('/');
     const info = await fs.lstat(res.abs).catch(() => null);
     if (!info || info.isSymbolicLink() || lexical !== res.rel) {
-      return { ok: false, kind: 'link', message: 'Path goes through a symbolic link' };
+      // Still rejected; the message only names the canonical spelling when the two differ by case or Unicode form.
+      const respelled = info !== null && !info.isSymbolicLink() && sameFoldedRel(lexical, res.rel);
+      const message = respelled
+        ? `Path differs from its on-disk spelling "${res.rel}" (letter case or Unicode form) or goes through a symbolic link`
+        : 'Path goes through a symbolic link';
+      return { ok: false, kind: 'link', message };
     }
     return { ok: true, abs: res.abs, rel: res.rel, exists: true, root: res.root };
   }

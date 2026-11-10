@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import * as sandbox from './sandbox';
 import { BLOCKED_MESSAGE, isDeniedPath, OUTSIDE_MESSAGE, resolveInProject } from './sandbox';
 import { createFixture, type Fixture } from './test-fixture';
 
@@ -220,5 +221,68 @@ describe('deniedRoots (S1-M1)', () => {
   it('without deniedRoots a data dir is still denied by name, but other files stay ordinary', async () => {
     expect(await resolveInProject(proj, '.dev-data/secrets.json')).toMatchObject(blocked);
     expect(await resolveInProject(proj, 'README.md')).toMatchObject({ ok: true, exists: true });
+  });
+});
+
+describe('AS-06 R4 pure name and spelling policy (platform injected)', () => {
+  // The R4 signatures are reached through the namespace and these local types, so the file typechecks before the
+  // product gains the trailing `platform` parameter and `sameFoldedRel`; only the tests that need them fail.
+  type NamePolicy = (name: string, platform?: NodeJS.Platform) => boolean;
+  type SameRel = (a: string, b: string, platform?: NodeJS.Platform) => boolean;
+  const deniedPath = sandbox.isDeniedPath as NamePolicy;
+  const deniedEntry = sandbox.isDeniedEntryName as NamePolicy;
+  const r4 = sandbox as unknown as { sameFoldedRel?: SameRel };
+
+  const aliases = ['secretſ.json', 'ſecrets.json', 'SECRETſ.JSON', 'id_rſa', '.git-credentialſ'];
+  const nested = aliases.map((a) => `config/${a}`);
+
+  it.each(aliases)('A6-P2-5 darwin denies the APFS alias %s', (name) => {
+    expect(deniedPath(name, 'darwin')).toBe(true);
+    expect(deniedPath(`config/${name}`, 'darwin'), 'as a nested segment').toBe(true);
+  });
+  it.each(aliases)('A6-P2-5 control: injected linux keeps exact matching and allows %s', (name) => {
+    expect(deniedPath(name, 'linux')).toBe(false);
+    expect(deniedPath(`config/${name}`, 'linux')).toBe(false);
+  });
+
+  it('A6-P2-6 control: the entry and path policies agree for every P2 name, injected and by default', () => {
+    for (const name of [...aliases, ...['secrets.json', '.env.example', '.env.ſample', '.env.ｅxample', 'README.md']])
+      for (const platform of ['darwin', 'linux'] as const) {
+        expect.soft(deniedEntry(name, platform), `${name} ${platform}`).toBe(deniedPath(name, platform));
+        expect.soft(deniedEntry(name), `${name} default`).toBe(deniedPath(name));
+      }
+    expect(nested.every((rel) => deniedPath(rel, 'linux') === deniedPath(rel.split('/')[1] ?? '', 'linux'))).toBe(true);
+  });
+
+  it('A6-P2-4 control: env exceptions stay per spelling on darwin, and old denials stay', () => {
+    for (const name of ['.env.example', '.env.sample', '.ENV.EXAMPLE'])
+      expect.soft(deniedPath(name, 'darwin'), `${name} allowed`).toBe(false);
+    for (const name of ['.env.ſample', '.env.ｅxample', 'secrets.json', 'SECRETS.JSON', '.env', 'id_rsa'])
+      expect.soft(deniedPath(name, 'darwin'), `${name} denied`).toBe(true);
+  });
+
+  it('A6-P3-5 sameFoldedRel: NFC + lower case off darwin; per-segment fold on darwin', () => {
+    expect(typeof r4.sameFoldedRel, 'sameFoldedRel is exported').toBe('function');
+    const same = r4.sameFoldedRel as SameRel;
+    for (const platform of ['linux', 'win32'] as const) {
+      expect.soft(same('Readme.md', 'README.md', platform), `${platform}: case`).toBe(true);
+      expect.soft(same('dir/é.txt', 'dir/é.txt', platform), `${platform}: NFC/NFD`).toBe(true);
+      expect.soft(same('poſt.txt', 'post.txt', platform), `${platform}: ſ/s`).toBe(false);
+      expect.soft(same('straße.txt', 'strasse.txt', platform), `${platform}: ß/ss`).toBe(false);
+      expect.soft(same('a/b.txt', 'a/c.txt', platform), `${platform}: different names`).toBe(false);
+    }
+    for (const [a, b] of [
+      ['poſt.txt', 'post.txt'],
+      ['straße.txt', 'strasse.txt'],
+      ['notes/poſt.txt', 'Notes/post.txt'],
+      ['Readme.md', 'README.md'],
+      ['dir/é.txt', 'dir/é.txt'],
+    ] as const) {
+      expect.soft(same(a, b, 'darwin'), `darwin ${a} ~ ${b}`).toBe(true);
+      expect.soft(same(b, a, 'darwin'), `darwin ${b} ~ ${a}`).toBe(true);
+    }
+    expect.soft(same('a/post.txt', 'post.txt', 'darwin'), 'different segment counts').toBe(false);
+    expect.soft(same('a/post.txt', 'b/poſt.txt', 'darwin'), 'different directories').toBe(false);
+    expect.soft(same('post.txt', 'past.txt', 'darwin'), 'different names').toBe(false);
   });
 });
