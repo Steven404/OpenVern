@@ -101,7 +101,14 @@ describe('project files', () => {
 
   it('refuses traversal, absolute paths, denied files and symlink escapes', async () => {
     const p = await newProject();
-    await symlink('/etc/hostname', path.join(h.projectDir, 'link'));
+    // A real file just outside the project root (still inside the harness temp dir), so the link is an escape on every
+    // OS. `/etc/*` targets are not portable: on macOS the link would dangle and answer 404 instead of 400.
+    const outside = path.join(path.dirname(h.projectDir), 'outside.txt');
+    await writeFile(outside, 'outside the project\n');
+    await symlink(outside, path.join(h.projectDir, 'link'));
+    const projectReal = await realpath(h.projectDir);
+    expect(await realpath(path.join(h.projectDir, 'link'))).toBe(await realpath(outside));
+    expect(path.relative(projectReal, await realpath(outside)).startsWith(`..${path.sep}`)).toBe(true);
     for (const bad of ['../x', '/etc/passwd', `${h.projectDir}/../x`, '.env', 'link', '.git/config']) {
       const res = await h.call(`/api/projects/${p.id}/files/content?path=${encodeURIComponent(bad)}`);
       expect(res.status, bad).toBe(400);
