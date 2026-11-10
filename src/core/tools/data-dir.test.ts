@@ -1,13 +1,14 @@
 // S1-M1: the app's data dir is unreachable from the project tools even when the project folder contains it.
 // Deliberately no `.gitignore` in the fixture: the deny must not depend on ignore rules.
 
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { defaultDataDirRoots } from '../index';
 import { getProjectTools, renderTree } from './index';
 import { BLOCKED_MESSAGE } from './sandbox';
+import { createFakeChangesService } from './test-changes';
 import type { Tool, ToolContext } from './types';
 
 const SECRET = 'sk-or-SECRET';
@@ -191,17 +192,17 @@ describe('default production data dir', () => {
     const base2 = await realpath(await mkdtemp(path.join(tmpdir(), 'openvern-xdg-')));
     try {
       const xdg = path.join(base2, 'xdg');
-      expect(await defaultDataDirRoots({ XDG_CONFIG_HOME: xdg }, base2)).toEqual([
+      expect(await defaultDataDirRoots({ XDG_CONFIG_HOME: xdg }, base2, 'linux')).toEqual([
         path.join(xdg, 'openvern'),
         path.join(xdg, 'harness'),
       ]);
-      expect(await defaultDataDirRoots({}, base2)).toEqual([
+      expect(await defaultDataDirRoots({}, base2, 'linux')).toEqual([
         path.join(base2, '.config', 'openvern'),
         path.join(base2, '.config', 'harness'),
       ]);
       await mkdir(path.join(base2, 'real', 'openvern'), { recursive: true });
       await symlink(path.join(base2, 'real'), xdg);
-      const [d] = await defaultDataDirRoots({ XDG_CONFIG_HOME: xdg }, base2);
+      const [d] = await defaultDataDirRoots({ XDG_CONFIG_HOME: xdg }, base2, 'linux');
       expect(d).toBe(path.join(base2, 'real', 'openvern'));
       // through the tools: a "~" project cannot reach it, even via the symlink
       await writeFile(path.join(d as string, 'x.txt'), 'PRODSECRET');
@@ -217,4 +218,101 @@ describe('default production data dir', () => {
       await rm(base2, { recursive: true, force: true });
     }
   });
+});
+
+describe('platform default roots', () => {
+  it('preserves the non-darwin pair, including canonical duplicates', async () => {
+    const home = await realpath(await mkdtemp(path.join(tmpdir(), 'roots-')));
+    try {
+      const config = path.join(home, '.config');
+      await mkdir(path.join(config, 'openvern'), { recursive: true });
+      await symlink(path.join(config, 'openvern'), path.join(config, 'harness'));
+      for (const platform of ['linux', 'win32'] as const) {
+        expect(await defaultDataDirRoots({ XDG_CONFIG_HOME: '  ' }, home, platform)).toEqual([
+          path.join(config, 'openvern'),
+          path.join(config, 'openvern'),
+        ]);
+      }
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it('combines macOS and XDG roots, canonicalizes existing roots and deduplicates', async () => {
+    const home = await realpath(await mkdtemp(path.join(tmpdir(), 'roots-')));
+    try {
+      const app = path.join(home, 'Library', 'Application Support');
+      const xdg = path.join(home, 'xdg');
+      expect(await defaultDataDirRoots({}, home, 'darwin')).toEqual([
+        path.join(app, 'openvern'),
+        path.join(app, 'harness'),
+        path.join(home, '.config', 'openvern'),
+        path.join(home, '.config', 'harness'),
+      ]);
+      await mkdir(path.join(home, 'real', 'openvern'), { recursive: true });
+      await mkdir(path.dirname(app), { recursive: true });
+      await symlink(path.join(home, 'real'), app);
+      expect(await defaultDataDirRoots({ XDG_CONFIG_HOME: xdg }, home, 'darwin')).toEqual([
+        path.join(home, 'real', 'openvern'),
+        path.join(app, 'harness'),
+        path.join(xdg, 'openvern'),
+        path.join(xdg, 'harness'),
+      ]);
+      expect(await defaultDataDirRoots({ XDG_CONFIG_HOME: app }, home, 'darwin')).toEqual([
+        path.join(home, 'real', 'openvern'),
+        path.join(app, 'harness'),
+      ]);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+});
+
+it('denies tools access to both macOS and retained config roots', async () => {
+  const home = await realpath(await mkdtemp(path.join(tmpdir(), 'roots-tools-')));
+  try {
+    const roots = ['Library/Application Support/openvern', '.config/openvern'];
+    for (const [i, root] of roots.entries()) {
+      await mkdir(path.join(home, root), { recursive: true });
+      await writeFile(path.join(home, root, 'note.txt'), 'hidden sentinel');
+      await symlink(path.join(home, root), path.join(home, `alias${i}`));
+    }
+    await writeFile(path.join(home, 'control.txt'), 'ordinary control');
+    const changes = createFakeChangesService();
+    const context = {
+      projectRoot: home,
+      signal: new AbortController().signal,
+      changes: changes.tools({ chatId: 'c', projectRoot: home, messageId: 'm' }),
+    };
+    const projectTools = getProjectTools({ deniedRoots: await defaultDataDirRoots({}, home, 'darwin') });
+    const runTool = (name: string, args: unknown) => {
+      const tool = projectTools.find((t) => t.spec.name === name);
+      if (!tool) throw new Error(name);
+      return tool.run(args, context);
+    };
+    for (const root of [...roots, 'alias0', 'alias1']) {
+      for (const [name, args] of [
+        ['read_file', { path: `${root}/note.txt` }],
+        ['list_files', { path: root }],
+        ['search', { path: root, query: 'sentinel' }],
+        ['edit_file', { path: `${root}/note.txt`, old_string: 'hidden', new_string: 'changed' }],
+        ['write_file', { path: `${root}/new.txt`, content: 'changed' }],
+        ['delete_file', { path: `${root}/note.txt` }],
+      ] as const) {
+        const result = await runTool(name, args);
+        expect(result.ok, `${name} ${root}`).toBe(false);
+        expect(result.output).not.toContain('hidden sentinel');
+      }
+    }
+    expect(changes.pending.get('c')?.size ?? 0).toBe(0);
+    for (const root of roots) expect(await readFile(path.join(home, root, 'note.txt'), 'utf8')).toBe('hidden sentinel');
+    expect((await runTool('read_file', { path: 'control.txt' })).ok).toBe(true);
+    expect((await runTool('list_files', { path: '.' })).output).toContain('control.txt');
+    expect((await runTool('search', { query: 'ordinary' })).output).toContain('control.txt');
+    expect(
+      (await runTool('edit_file', { path: 'control.txt', old_string: 'ordinary', new_string: 'changed' })).ok,
+    ).toBe(true);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
 });

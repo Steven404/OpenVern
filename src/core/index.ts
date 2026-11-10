@@ -15,20 +15,31 @@ import type { Core, CoreDeps } from './types';
 
 /**
  * Default production data dir(s), denied to the tools whichever instance is running: `$XDG_CONFIG_HOME/openvern`, else
- * `~/.config/openvern`, plus the legacy 0.1 dir `…/harness` (it still holds the old chats and key). Realpath when it exists, the lexical path otherwise.
+ * `~/.config/openvern`, plus the legacy 0.1 dir `…/harness` (it still holds the old chats and key).
+ * On macOS the packaged app keeps its data in Electron's `appData` (`~/Library/Application Support/openvern`), so
+ * darwin denies the union: `~/Library/Application Support/{openvern,harness}` first, then the XDG / `~/.config` pair
+ * above (denying more is fail-safe). Other platforms get only the XDG / `~/.config` pair, in that order.
+ * Each entry is the realpath when it exists, the lexical path otherwise; on macOS, duplicates (e.g.
+ * `XDG_CONFIG_HOME` pointing at `~/Library/Application Support`) are dropped, keeping the first. Case and Unicode variants of a root are not
+ * listed here; the sandbox's comparison owns that.
  */
 export async function defaultDataDirRoots(
   env: NodeJS.ProcessEnv = process.env,
   home: string = os.homedir(),
+  platform: NodeJS.Platform = process.platform,
 ): Promise<string[]> {
   const xdg = env.XDG_CONFIG_HOME?.trim();
-  const base = path.resolve(xdg ? xdg : path.join(home, '.config'));
-  return Promise.all(
-    [APP_SLUG, LEGACY_SLUG].map((slug) => {
-      const dir = path.join(base, slug);
-      return realpath(dir).catch(() => dir);
-    }),
+  const bases = [path.resolve(xdg ? xdg : path.join(home, '.config'))];
+  if (platform === 'darwin') bases.unshift(path.resolve(home, 'Library', 'Application Support'));
+  const roots = await Promise.all(
+    bases.flatMap((base) =>
+      [APP_SLUG, LEGACY_SLUG].map((slug) => {
+        const dir = path.join(base, slug);
+        return realpath(dir).catch(() => dir);
+      }),
+    ),
   );
+  return platform === 'darwin' ? [...new Set(roots)] : roots;
 }
 
 export async function createCore(deps: CoreDeps): Promise<Core> {

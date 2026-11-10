@@ -6,8 +6,8 @@ import { createCore } from '@core/index';
 import { createFakeProvider } from '@core/providers/fake';
 import { LEGACY_SLUG, migrateLegacyDataDir, resolveDataDir } from '@core/storage';
 import { createApp } from '@server/app';
-import { APP_SLUG } from '@shared/constants';
 import { app, safeStorage } from 'electron';
+import { shouldMigrateLegacy } from './migration-policy';
 import { createSecretStore } from './safe-storage-secret-store';
 
 export interface Backend {
@@ -16,15 +16,18 @@ export interface Backend {
 }
 
 /**
- * Data dir: `OPENVERN_DATA_DIR`, else Electron's `userData`, which depends on the mode (startup.ts): `~/.config/openvern`
- * packaged, `~/.config/openvern-preview` for an unpackaged non-dev run, or the `--user-data-dir` switch.
+ * Data dir: `OPENVERN_DATA_DIR`, else Electron's `userData`, which depends on the mode (startup.ts): `<appData>/openvern`
+ * packaged, `<appData>/openvern-dev` for `npm run dev`, `<appData>/openvern-preview` for another unpackaged run, or the
+ * `--user-data-dir` switch. `<appData>` is `$XDG_CONFIG_HOME` or `~/.config` on Linux and
+ * `~/Library/Application Support` on macOS (so the packaged macOS data dir is `~/Library/Application Support/openvern`).
  * Dev aid: `OPENVERN_FAKE_PROVIDER=1` swaps OpenRouter for the scripted fake provider (no key, no network), also in
  * the packaged app.
  */
 export async function createBackend(): Promise<Backend> {
   const userData = app.getPath('userData');
   // 0.1 kept its data in `<config>/harness`; the packaged app's new default is `<config>/openvern` (G0.4).
-  if (!process.env.OPENVERN_DATA_DIR?.trim() && path.basename(userData) === APP_SLUG) {
+  // Never on macOS, where 0.1 never shipped; unchanged elsewhere (migration-policy.ts).
+  if (shouldMigrateLegacy({ platform: process.platform, dataDirEnv: process.env.OPENVERN_DATA_DIR, userData })) {
     await migrateLegacyDataDir({ dataDir: userData, legacyDir: path.join(path.dirname(userData), LEGACY_SLUG) });
   }
   const dataDir = await resolveDataDir(userData);
