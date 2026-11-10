@@ -12,12 +12,23 @@ unset ELECTRON_RUN_AS_NODE
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 cd "$E2E_ROOT"
 
-ELECTRON="$E2E_ROOT/node_modules/electron/dist/electron"
-if [ ! -x "$ELECTRON" ]; then
+# The electron package knows where its binary is (dist/electron on Linux, dist/Electron.app/… on macOS). If the binary
+# was never downloaded, require() throws and the hint below is printed.
+ELECTRON="$(cd "$E2E_ROOT" && node -p "require('electron')")" || ELECTRON=""
+if [ -z "$ELECTRON" ] || [ ! -x "$ELECTRON" ]; then
   echo "Electron binary missing; run: node node_modules/electron/install.js" >&2
   exit 2
 fi
-if [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then echo "no display (DISPLAY / WAYLAND_DISPLAY unset)" >&2; exit 2; fi
+if [ "$(uname -s)" = Darwin ]; then
+  # macOS needs a logged-in GUI session. launchctl reports "Aqua" there and something else over plain SSH.
+  if [ "$(launchctl managername 2>/dev/null)" != Aqua ]; then
+    echo "needs a logged-in GUI session (not plain SSH)" >&2
+    exit 2
+  fi
+elif [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+  echo "no display (DISPLAY / WAYLAND_DISPLAY unset)" >&2
+  exit 2
+fi
 
 if [ "${E2E_SKIP_BUILD:-0}" != 1 ]; then npm run build >/dev/null || { echo "build failed" >&2; exit 1; }; fi
 
@@ -26,7 +37,7 @@ CDP="$(free_port)"
 
 start_app() {
   OPENVERN_FAKE_PROVIDER=1 OPENVERN_DATA_DIR="$DATA" start_bg electron "$ELECTRON" . \
-    --remote-debugging-port="$CDP" --user-data-dir="$OUT/userdata"
+    --remote-debugging-port="$CDP" --user-data-dir="$OUT/userdata" || return 1
   APP_PGID=$LAST_PGID
   wait_for "Electron window" 40 bash -c "curl -sf http://127.0.0.1:$CDP/json | grep -q '\"url\": \"app://'"
 }

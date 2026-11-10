@@ -161,6 +161,11 @@ async function pickModel(name) {
     `document.querySelector('button[aria-label^="Model:"]')?.getAttribute('aria-label').includes(${JSON.stringify(name)})`,
     `model ${name} selected`,
   );
+  // Radix restores focus after closing the picker; wait before a later send focuses the composer.
+  await waitFor(
+    `document.activeElement?.getAttribute('aria-label')?.startsWith('Model:')`,
+    'focus restored to the model picker',
+  );
 }
 
 /** Opens a Radix submenu: a click usually does it; ArrowRight is the keyboard fallback. */
@@ -190,14 +195,13 @@ const itemSettled = (role, text) => `(() => {
  * Picks an item in a Radix submenu: opens it, waits until the item is visible and has stopped moving, then clicks.
  * Radix can close the submenu between opening and clicking, so a failed attempt re-opens it (3 tries in all).
  */
-async function chooseInSubmenu(label, role, itemText, { shotName } = {}) {
+async function chooseInSubmenu(label, role, itemText) {
   const item = byText(`[role=${role}]`, itemText, true);
   for (let attempt = 1; ; attempt++) {
     try {
       await openSubmenu(label, role, itemText);
       await ev('delete window.__e2eSettleBox');
       await waitFor(itemSettled(role, itemText), `${itemText} settled in submenu`, 1500);
-      if (shotName) await shot(shotName);
       await click(item, itemText);
       return;
     } catch (err) {
@@ -376,7 +380,7 @@ async function mainPhase() {
     }
     await waitFor(`document.querySelector('aside')?.innerText.includes('e2e-proj-b')`, 'both projects in the sidebar');
     const rows = await ev(
-      `[...document.querySelectorAll('aside button[aria-expanded]:not([aria-haspopup])')].map((b) => b.innerText.replace(/\\s+/g, ' '))`,
+      `[...document.querySelectorAll('aside button[aria-expanded]:not([aria-haspopup])')].map((b) => b.textContent.replace(/\\s+/g, ' ').trim())`,
     );
     check(
       'A4 projects listed with count 0',
@@ -662,7 +666,7 @@ async function mainPhase() {
 
     await click(chatOptions, 'Chat options');
     await waitFor(`!!${byText('[role=menuitem]', 'Move to project')}`, 'menu');
-    await chooseInSubmenu('Move to project', 'menuitemradio', 'e2e-proj-b', { shotName: 'a13-move-menu' });
+    await chooseInSubmenu('Move to project', 'menuitemradio', 'e2e-proj-b');
     await waitFor(
       `(document.querySelector('main header')?.innerText ?? '').toUpperCase().includes('E2E-PROJ-B')`,
       'moved to B',
@@ -795,6 +799,20 @@ async function mainPhase() {
       () => check(`A15 Ctrl+N opens New chat${electron ? '' : ' (browsers may reserve it for real keypresses)'}`, true),
       () => check('A15 Ctrl+N opens New chat', false, 'hash did not change'),
     );
+
+    // Cmd+N (Meta, modifier 4) on macOS: the same shortcut, with the key the Mac user presses. The renderer accepts
+    // ctrlKey or metaKey (shortcuts.ts), so this proves the Cmd path with real CDP key events.
+    if (process.platform === 'darwin') {
+      await click(`document.querySelector('aside a[href*="#/chat/"]')`, 'a chat');
+      await waitFor(`location.hash.startsWith('#/chat/')`, 'chat open (Cmd+N)');
+      await ev(`document.activeElement?.blur()`);
+      await key('n', 4);
+      await waitFor(`location.hash.startsWith('#/new')`, 'Cmd+N → new chat', 3000).then(
+        () =>
+          check(`A15 Cmd+N opens New chat${electron ? '' : ' (browsers may reserve it for real keypresses)'}`, true),
+        () => check('A15 Cmd+N opens New chat', false, 'hash did not change'),
+      );
+    }
   });
 
   await section('A16', async () => {
