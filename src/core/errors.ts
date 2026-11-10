@@ -24,3 +24,30 @@ export function toErrorInfo(err: unknown): ApiErrorInfo {
   if (err instanceof ProviderError) return { code: err.code, message: err.message, retryable: err.retryable };
   return errorInfo('internal');
 }
+
+const ACCESS_DENIED = {
+  folder: {
+    EPERM:
+      'macOS blocked access to this folder. Allow access in System Settings › Privacy & Security › Files & Folders.',
+    EACCES: "You don't have permission to read this folder. Check its permissions in Finder (File › Get Info).",
+  },
+  file: {
+    EPERM: 'macOS blocked access to this file. Allow access in System Settings › Privacy & Security › Files & Folders.',
+    EACCES: "You don't have permission to read this file. Check its permissions in Finder (File › Get Info).",
+  },
+} as const;
+
+/**
+ * On macOS, the `path_invalid` error for a filesystem access denial (AS-08): `EPERM` is a privacy control (TCC),
+ * `EACCES` ordinary permissions. `undefined` for any other error and on every other platform, so callers keep
+ * today's behaviour there.
+ */
+export function accessDeniedError(
+  err: unknown,
+  target: 'folder' | 'file',
+  platform: NodeJS.Platform = process.platform,
+): CoreError | undefined {
+  if (platform !== 'darwin') return undefined;
+  const code = (err as NodeJS.ErrnoException | null | undefined)?.code;
+  return code === 'EPERM' || code === 'EACCES' ? new CoreError('path_invalid', ACCESS_DENIED[target][code]) : undefined;
+}

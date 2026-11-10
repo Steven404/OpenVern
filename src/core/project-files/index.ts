@@ -3,13 +3,19 @@
 // The home folder (chats without a project) adds a home-only deny layer (`home-deny.ts`: top-level dotfiles, app-data
 // folders, credential folders at any depth, symlinked targets of those) and rejects hardlinked files.
 
-import { open, readFile, realpath, stat } from 'node:fs/promises';
+import { type FileHandle, open, readdir, readFile, realpath, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { LIMITS } from '@shared/constants';
 import type { HomeFileTree, ProjectFileContent, ProjectFileEntry, ProjectFileTree } from '@shared/types';
-import { CoreError } from '../errors';
-import { BLOCKED_MESSAGE, resolveInProject, type SandboxOptions } from '../tools/sandbox';
+import { accessDeniedError, CoreError } from '../errors';
+import {
+  BLOCKED_MESSAGE,
+  isInsideOpenVernDataDir,
+  isWithinAny,
+  resolveInProject,
+  type SandboxOptions,
+} from '../tools/sandbox';
 import { walk } from '../tools/walk';
 import type { ProjectFilesService, ProjectsService } from '../types';
 import { homeSymlinkDeniedRoots, isHomeDeniedRel } from './home-deny';
@@ -25,6 +31,8 @@ export interface ProjectFilesDeps extends SandboxOptions {
   projects: Pick<ProjectsService, 'get'>;
   /** Root for `homeTree` / `homeRead`. Defaults to `os.homedir()`. */
   homeDir?: string;
+  /** Picks the macOS access-denial handling (AS-08). Defaults to process.platform; tests inject it. */
+  platform?: NodeJS.Platform;
 }
 
 const byName = (a: string, b: string): number => {
@@ -81,6 +89,7 @@ function trimPartialUtf8(buf: Buffer): Buffer {
 export function createProjectFilesService(deps: ProjectFilesDeps): ProjectFilesService {
   const sandbox: SandboxOptions = { deniedRoots: deps.deniedRoots, deniedFiles: deps.deniedFiles };
   const homeDir = () => deps.homeDir ?? os.homedir();
+  const platform = deps.platform ?? process.platform;
 
   /** Sandbox for the home folder, rebuilt per call so newly created symlinks are seen. */
   async function homeSandbox(): Promise<FileOptions> {
@@ -116,16 +125,17 @@ export function createProjectFilesService(deps: ProjectFilesDeps): ProjectFilesS
     let root: string;
     try {
       root = await realpath(rootPath);
-    } catch {
-      throw new CoreError('path_invalid');
+    } catch (err) {
+      throw accessDeniedError(err, 'folder', platform) ?? new CoreError('path_invalid');
     }
+    const abort = signal ?? new AbortController().signal;
     const entries: ProjectFileEntry[] = [];
     let truncated = false;
     for await (const e of walk({
       root,
       startRel: '',
       maxDepth: Number.MAX_SAFE_INTEGER,
-      signal: signal ?? new AbortController().signal,
+      signal: abort,
       deniedRoots: opts.deniedRoots,
       isDeniedRel: opts.isDeniedRel,
     })) {
@@ -136,12 +146,33 @@ export function createProjectFilesService(deps: ProjectFilesDeps): ProjectFilesS
       }
       entries.push({ path: e.rel, type: e.kind });
     }
+    if (entries.length === 0 && platform === 'darwin' && !abort.aborted) await assertRootListable(root, opts);
     return { root, entries: sortDepthFirst(entries), truncated };
+  }
+
+  /**
+   * darwin only (AS-08). The walker skips a root it can't read (walk.ts:104-108), so a macOS privacy denial would list
+   * as an empty project. Repeats the walker's own root call, only where the walker made it (its root guards,
+   * walk.ts:82-84), and turns EPERM/EACCES into an actionable error. Any other error keeps today's empty tree.
+   */
+  async function assertRootListable(root: string, opts: FileOptions): Promise<void> {
+    if (isWithinAny(opts.deniedRoots, root) || (await isInsideOpenVernDataDir(root, root))) return;
+    try {
+      await readdir(root, { withFileTypes: true }); // result discarded: nothing is listed from here
+    } catch (err) {
+      const denied = accessDeniedError(err, 'folder', platform);
+      if (denied) throw denied;
+    }
   }
 
   async function readAt(rootPath: string, relPath: string, opts: FileOptions): Promise<ProjectFileContent> {
     const { abs, rel, size } = await resolveFileAt(rootPath, relPath, opts);
-    const fh = await open(abs, 'r');
+    let fh: FileHandle;
+    try {
+      fh = await open(abs, 'r');
+    } catch (err) {
+      throw accessDeniedError(err, 'file', platform) ?? err;
+    }
     try {
       const want = Math.min(size, LIMITS.viewerMaxBytes);
       const buf = Buffer.alloc(want);
@@ -166,7 +197,13 @@ export function createProjectFilesService(deps: ProjectFilesDeps): ProjectFilesS
   async function readBytesAt(rootPath: string, relPath: string, opts: FileOptions) {
     const { abs, size } = await resolveFileAt(rootPath, relPath, opts);
     if (size > LIMITS.imageAttachmentBytes) throw new CoreError('file_too_large');
-    return { name: path.basename(abs), bytes: new Uint8Array(await readFile(abs)) };
+    let data: Buffer;
+    try {
+      data = await readFile(abs);
+    } catch (err) {
+      throw accessDeniedError(err, 'file', platform) ?? err;
+    }
+    return { name: path.basename(abs), bytes: new Uint8Array(data) };
   }
 
   return {

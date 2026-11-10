@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { constants, promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { Id, Project, ProjectListItem } from '@shared/types';
-import { CoreError } from '../errors';
+import { accessDeniedError, CoreError } from '../errors';
 import type { ChatsService, ProjectsService } from '../types';
 import { JsonFile, type StorageLogger } from './json-file';
 import { expandHome } from './paths';
@@ -18,6 +18,8 @@ export interface ProjectsServiceOptions {
   logger?: StorageLogger;
   /** Real path of the data dir. Roots equal to it or inside it are rejected (S1-M1); roots containing it are fine. */
   dataDir?: string;
+  /** Picks the macOS access-denial messages (AS-08). Defaults to process.platform; tests inject it. */
+  platform?: NodeJS.Platform;
 }
 
 function isInside(root: string, target: string): boolean {
@@ -29,7 +31,11 @@ function isInside(root: string, target: string): boolean {
  * Expands `~`, requires an absolute path (S1-N1: never resolved against the cwd), resolves to a realpath and
  * checks it is a readable directory outside the data dir. Throws `path_invalid`.
  */
-async function resolveProjectRoot(input: string, dataDir?: string): Promise<string> {
+async function resolveProjectRoot(
+  input: string,
+  dataDir?: string,
+  platform: NodeJS.Platform = process.platform,
+): Promise<string> {
   const invalid = () => new CoreError('path_invalid');
   const expanded = expandHome(input.trim());
   if (!expanded) throw invalid();
@@ -43,7 +49,8 @@ async function resolveProjectRoot(input: string, dataDir?: string): Promise<stri
     await fs.access(real, constants.R_OK | constants.X_OK);
     return real;
   } catch (err) {
-    throw err instanceof CoreError ? err : invalid();
+    if (err instanceof CoreError) throw err;
+    throw accessDeniedError(err, 'folder', platform) ?? invalid();
   }
 }
 
@@ -76,7 +83,7 @@ export function createProjectsService(opts: ProjectsServiceOptions): ProjectsSer
     get: find,
 
     async create(input) {
-      const rootPath = await resolveProjectRoot(input.rootPath, opts.dataDir);
+      const rootPath = await resolveProjectRoot(input.rootPath, opts.dataDir, opts.platform);
       const name = input.name?.trim() || path.basename(rootPath) || rootPath;
       const project: Project = { id: randomUUID(), name, rootPath, createdAt: new Date().toISOString() };
       // The duplicate check runs inside the file lock, so two concurrent adds cannot both succeed.

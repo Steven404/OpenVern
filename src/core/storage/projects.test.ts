@@ -1,7 +1,8 @@
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createProjectsService } from './projects';
 import { cleanupTempDirs, makeStorage, makeTempDir } from './test-helpers';
 
 cleanupTempDirs();
@@ -181,5 +182,81 @@ describe('ProjectsService', () => {
         .sort(),
     ).toEqual([c1.id, c2.id].sort());
     expect(await fs.readFile(path.join(dir, 'file.txt'), 'utf8')).toBe('hello');
+  });
+});
+
+describe('macOS access denials (AS-08)', () => {
+  afterEach(() => vi.restoreAllMocks());
+  const privacy =
+    'macOS blocked access to this folder. Allow access in System Settings › Privacy & Security › Files & Folders.';
+  const permission =
+    "You don't have permission to read this folder. Check its permissions in Finder (File › Get Info).";
+  const generic = 'That folder does not exist or cannot be read.';
+  async function setup(platform: NodeJS.Platform) {
+    const base = await fs.realpath(await makeTempDir());
+    const dir = path.join(base, 'project');
+    const dataDir = path.join(base, 'data');
+    await fs.mkdir(dir);
+    await fs.mkdir(dataDir);
+    const opts = {
+      filePath: path.join(dataDir, 'projects.json'),
+      dataDir,
+      platform,
+      chats: { list: async () => [], detachProject: async () => {} },
+    };
+    return { dir, dataDir, service: createProjectsService(opts) };
+  }
+  for (const [id, op, code, message] of [
+    ['5a', 'access', 'EPERM', privacy],
+    ['5b', 'realpath', 'EPERM', privacy],
+    ['5c', 'access', 'EACCES', permission],
+    ['5e', 'access', 'EPERM', generic],
+  ] as const) {
+    it(`A8-${id} maps injected ${op} ${code}`, async () => {
+      const { dir, service } = await setup(id === '5e' ? 'linux' : 'darwin');
+      const original = fs[op].bind(fs);
+      vi.spyOn(fs, op).mockImplementation(((p: unknown, ...args: unknown[]) => {
+        if (p === dir)
+          return Promise.reject(Object.assign(new Error(`${code}: injected`), { code, syscall: op, path: dir }));
+        return (original as (...a: never[]) => unknown)(...([p, ...args] as never[]));
+      }) as never);
+      await expect(service.create({ rootPath: dir })).rejects.toMatchObject({ code: 'path_invalid', message });
+      expect(await service.list()).toEqual([]);
+    });
+  }
+  // root bypasses mode bits, so chmod 000 can't produce EACCES.
+  for (const [id, platform, message] of [
+    ['5d', 'darwin', permission],
+    ['5f', 'linux', generic],
+  ] as const)
+    it.skipIf(process.getuid?.() === 0)(`A8-${id} real mode denial`, async () => {
+      const { dir, service } = await setup(platform);
+      await fs.chmod(dir, 0);
+      try {
+        await expect(service.create({ rootPath: dir })).rejects.toMatchObject({ code: 'path_invalid', message });
+      } finally {
+        await fs.chmod(dir, 0o700);
+      }
+    });
+  it('A8-5g preserves validation messages', async () => {
+    const { dir, dataDir, service } = await setup('darwin');
+    const file = path.join(dir, 'file');
+    await fs.writeFile(file, 'x');
+    for (const rootPath of [path.join(dir, 'missing'), file, '   '])
+      await expect(service.create({ rootPath })).rejects.toMatchObject({ code: 'path_invalid', message: generic });
+    await expect(service.create({ rootPath: 'src' })).rejects.toMatchObject({
+      code: 'path_invalid',
+      message: 'Enter an absolute path to a folder.',
+    });
+    await expect(service.create({ rootPath: dataDir })).rejects.toMatchObject({
+      code: 'path_invalid',
+      message: 'This folder is inside the app data folder and cannot be a project.',
+    });
+  });
+  it('A8-5h accepts a symlink to a readable directory', async () => {
+    const { dir, service } = await setup('darwin');
+    const link = `${dir}-link`;
+    await fs.symlink(dir, link);
+    expect((await service.create({ rootPath: link })).rootPath).toBe(dir);
   });
 });

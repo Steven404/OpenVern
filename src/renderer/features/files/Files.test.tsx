@@ -1,4 +1,6 @@
 import { renderApp, resetUi, seededClient } from '@renderer/app/test-utils';
+import { ApiError } from '@renderer/lib/api-client';
+import { errorInfo } from '@shared/errors';
 import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { usePanelStore } from '../right-panel/panel-store';
@@ -98,5 +100,42 @@ describe('Files surface', () => {
     fireEvent.click(within(panel()).getByRole('button', { name: 'Attach' }));
     await waitFor(() => expect(screen.getAllByTestId('attachment-chip')).toHaveLength(1));
     expect(screen.getByTestId('attachment-chip').textContent).toContain('README.md');
+  });
+});
+
+describe('AS-08 Files error states', () => {
+  async function show(list: 'error' | 'empty') {
+    const seed = await seededClient();
+    const spy = vi.spyOn(seed.client, 'listProjectFiles');
+    if (list === 'error')
+      spy.mockRejectedValue(
+        new ApiError(
+          errorInfo(
+            'path_invalid',
+            'macOS blocked access to this folder. Allow access in System Settings › Privacy & Security › Files & Folders.',
+          ),
+          400,
+        ),
+      );
+    else spy.mockResolvedValue({ entries: [], truncated: false });
+    renderApp({ client: seed.client, route: `/chat/${seed.chat.id}` });
+    await screen.findByRole('heading', { level: 1, name: seed.chat.title });
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle right panel' }));
+    return spy;
+  }
+  it('A8-7a shows the denial and retries', async () => {
+    const spy = await show('error');
+    const message =
+      'macOS blocked access to this folder. Allow access in System Settings › Privacy & Security › Files & Folders.';
+    expect(await within(panel()).findByText(message)).toBeTruthy();
+    expect(within(panel()).queryByText('This project has no files.')).toBeNull();
+    fireEvent.click(within(panel()).getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
+    expect(await within(panel()).findByText(message)).toBeTruthy();
+  });
+  it('A8-7b shows the empty state', async () => {
+    await show('empty');
+    expect(await within(panel()).findByText('This project has no files.')).toBeTruthy();
+    expect(within(panel()).queryByRole('button', { name: 'Try again' })).toBeNull();
   });
 });
