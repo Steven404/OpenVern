@@ -20,6 +20,7 @@
     "build": "electron-vite build",
     "preview": "electron-vite build && OPENVERN_DATA_DIR=./.dev-data-preview electron-vite preview --skipBuild",
     "dist": "electron-vite build && electron-builder --linux AppImage",
+    "dist:mac": "electron-vite build && electron-builder --mac --arm64",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",

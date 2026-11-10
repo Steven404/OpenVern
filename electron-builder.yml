@@ -1,4 +1,4 @@
-# Linux AppImage (x86_64) packaging (plan S8.9). Run via `npm run dist` (builds `out/` first).
+# Packaging: Linux AppImage (x86_64) via `npm run dist`, macOS arm64 ad-hoc .app + .dmg via `npm run dist:mac` (both build `out/` first).
 appId: dev.stefanos.openvern
 productName: OpenVern
 executableName: openvern
@@ -20,7 +20,26 @@ files:
 electronLanguages:
   - en-US
 
+# D4 (AS-12), both platforms: no env/CLI code injection, and app code loads only from the validated app.asar.
+# Cookie encryption is left at the Electron default (enabling it is one-way).
+mac:
+  target:
+    - target: dir
+      arch: arm64
+    - target: dmg
+      arch: arm64
+  identity: "-"
+  hardenedRuntime: false
+  category: public.app-category.developer-tools
+  icon: build/icon.icns
+  artifactName: OpenVern-${version}-arm64.${ext}
+  extendInfo:
+    NSDocumentsFolderUsageDescription: OpenVern accesses Documents when you choose projects there.
+    NSDesktopFolderUsageDescription: OpenVern accesses Desktop when you choose projects there.
+    NSDownloadsFolderUsageDescription: OpenVern accesses Downloads when you choose projects there.
+
 linux:
+  artifactName: OpenVern-${version}-x86_64.${ext}
   target:
     - target: AppImage
       arch: x64
@@ -32,5 +51,3 @@ linux:
   desktop:
     entry:
       StartupWMClass: openvern
-
-artifactName: OpenVern-${version}-x86_64.${ext}
