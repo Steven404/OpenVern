@@ -2,7 +2,8 @@
 
 A desktop app to chat with LLMs about your local code projects. It talks to [OpenRouter](https://openrouter.ai)
 only, lets the model **read** a project (list, read and search files) and **propose edits** (create, edit, delete)
-through tool calls, and runs both in a browser (dev) and as a Linux AppImage. It cannot run commands.
+through tool calls, and runs both in a browser (dev) and as a desktop app: a Linux AppImage, or a locally built app on
+macOS (Apple Silicon). It cannot run commands.
 
 The plans, contracts, work sections and acceptance checklists are in [`docs/v0-plan.md`](docs/v0-plan.md) and
 [`docs/v0.2-plan.md`](docs/v0.2-plan.md).
@@ -36,6 +37,7 @@ applied from the pane) and the viewer opens files up to 1 MB. The window can't b
 
 ## Prerequisites
 
+- macOS on Apple Silicon (arm64), macOS 13 or later: see [macOS (Apple Silicon)](#macos-apple-silicon)
 - Linux x86_64 (developed on CachyOS / Arch, KDE Wayland)
 - Node.js 22 or newer, npm 10 or newer
 - `fuse2` to run the AppImage, and unprivileged user namespaces for Chromium's sandbox (enabled on Arch / CachyOS kernels)
@@ -79,6 +81,8 @@ Typical keyless session: `OPENVERN_FAKE_PROVIDER=1 npm run dev:web`, open Settin
 
 ## Build and install
 
+The Linux commands in this section are unchanged. They have not yet been re-run on the macOS-port branch.
+
 ```bash
 npm run build           # main, preload and renderer into out/ (the renderer bundle is minified)
 npm run dist            # build + package release/OpenVern-<version>-x86_64.AppImage
@@ -90,6 +94,141 @@ scripts/install-local.sh --uninstall  # remove what it installed
 `~/.local/share/icons/hicolor/512x512/apps/openvern.png` and writes `~/.local/share/applications/openvern.desktop`
 (then refreshes the desktop database if the tool exists). It also removes the `harness.*` files a 0.1 install left behind (on install and on `--uninstall`). It is idempotent. Run `openvern.AppImage` from a terminal
 to see the logs.
+
+## macOS (Apple Silicon)
+
+OpenVern runs natively on Apple Silicon Macs. Intel and universal builds are not supported. Tested on macOS 26.6 (arm64).
+
+### Requirements
+
+- Apple Silicon (arm64) with **macOS 13 or later**. The locked Electron 45.2.1 declares 13.0 as its minimum.
+- Node.js 22 or newer, arm64 build (not under Rosetta). The validation used Node 24.13.0 (arm64).
+- A logged-in GUI session for the Electron e2e runs (`npm run e2e:electron`, `npm run e2e:packaged`). Both refuse a plain SSH session.
+
+### Run from source
+
+Install and run exactly as above (`npm ci`, `npm run dev:web`, `npm run dev`, `npm run preview`). On macOS:
+
+- **`npm run dev` and `npm run dev:web` don't use the Keychain.** The backend runs in the Node dev server with the file
+  store, so the key sits in `secrets.json` (mode 0600), as on Linux. Use `OPENVERN_FAKE_PROVIDER=1` for keyless runs.
+- **`npm run preview` and the packaged app use the macOS Keychain.** They read or create the login item
+  `OpenVern Safe Storage`, so macOS may show a Keychain prompt. Answer it. Choose **Always Allow** to avoid repeated
+  prompts.
+- The browser e2e (`npm run e2e:web`) finds Playwright's Chromium in `~/Library/Caches/ms-playwright`. Set
+  `E2E_CHROME=/path/to/browser` to use another one.
+- Shortcut labels show ⌘ on macOS and Ctrl on Linux. Both Cmd and Ctrl shortcuts work.
+
+### Build and install locally
+
+```bash
+npm run dist:mac
+scripts/install-local-mac.sh              # install to ~/Applications/OpenVern.app
+scripts/install-local-mac.sh --uninstall  # remove the installed app
+```
+
+- `npm run dist:mac` builds `out/` and writes `release/OpenVern-<version>-arm64.dmg` and
+  `release/mac-arm64/openvern.app`. The app is arm64 only, **ad-hoc signed** (`identity: "-"`), **not notarized**, and
+  built without the hardened runtime.
+- A locally built app carries no quarantine attribute (only `com.apple.provenance`), so Gatekeeper doesn't block it.
+  Nothing in this repository removes quarantine.
+- `install-local-mac.sh` copies the newest `release/mac-arm64*/*.app` to `~/Applications/OpenVern.app`. It is idempotent.
+  It refuses to replace the app while OpenVern is running. It never runs `sudo`, `xattr`, `spctl` or `codesign`, and it
+  never touches your data or the Keychain. Set `OPENVERN_INSTALL_DIR=<dir>` to install somewhere else.
+- `--uninstall` removes only the installed app. It prints two things to remove by hand if you want them gone: the data
+  directory `~/Library/Application Support/openvern`, and the Keychain item `OpenVern Safe Storage`.
+- **Every rebuild changes the app's code signature.** After you reinstall a rebuilt app, expect one Keychain prompt for
+  the key and new macOS privacy prompts. This is expected for ad-hoc signing but hasn't been
+  measured yet; the check is planned for the local milestone (IG-2).
+
+### Packaged end-to-end test
+
+```bash
+E2E_APP=/path/to/validation/openvern.app npm run e2e:packaged
+```
+
+- `npm run e2e:packaged` runs the smoke, restart, persistence, edits and archive checks against a packaged `.app`. It
+  uses the fake provider and temporary data. It does not build the app, so run `npm run dist:mac` or a validation build
+  first.
+- Without `E2E_APP` it looks for a validation package at a fixed temporary path and exits with a hint if none is there.
+- It **refuses the real identity** (bundle id `dev.stefanos.openvern` or name `OpenVern`) unless
+  `E2E_ALLOW_REAL_IDENTITY=1` is set, because a real-identity run would read or create the real `OpenVern Safe Storage`
+  item. For routine runs, build a validation package with its own bundle id and product name, in the same form as the
+  validation build:
+
+  ```bash
+  npx electron-builder --mac dir --arm64 \
+    -c.appId=dev.example.openvern.validation \
+    '-c.productName=OpenVern Validation' \
+    '-c.extraMetadata.productName=OpenVern Validation' \
+    -c.directories.output=<scratch dir>
+  ```
+- Before launching, the script reads back the Electron fuses (below) and fails on any mismatch. A step that stalls,
+  for example behind a Keychain prompt, fails after `E2E_STEP_TIMEOUT` seconds (default 300) with a hint.
+
+### Privacy prompts (TCC) and denial messages
+
+The first time OpenVern reads files in Documents, Desktop or Downloads, macOS asks for permission, for example
+“OpenVern” would like to access files in your Documents folder. The app sets a purpose string for each of these
+folders (for example "OpenVern accesses Documents when you choose projects there."), but the prompt wording hasn't
+been confirmed to show it. Projects in those folders trigger the prompt. The home Files panel may too; that wasn't
+measured.
+
+If you deny access, the Files panel shows the message below, with a **Try again** button. It persists after a restart:
+
+> macOS blocked access to this folder. Allow access in System Settings › Privacy & Security › Files & Folders.
+
+A file read gets the same wording with "this file". A plain permission error, which is not a macOS privacy decision,
+reads: "You don't have permission to read this folder. Check its permissions in Finder (File › Get Info)."
+
+To allow access again, open **System Settings › Privacy & Security › Files & Folders** and turn on OpenVern for that
+folder. In the native check, adding the project folder again through **New project › Browse…** also restored reads for
+that folder.
+
+### Electron fuses (packaged builds)
+
+The packaged app has these Electron fuses set (`electronFuses` in `electron-builder.yml`). The same block applies to the Linux AppImage:
+
+| Fuse | Setting | Effect |
+|---|---|---|
+| `RunAsNode` | off | `ELECTRON_RUN_AS_NODE` does nothing |
+| `EnableNodeOptionsEnvironmentVariable` | off | `NODE_OPTIONS` is ignored |
+| `EnableNodeCliInspectArguments` | off | `--inspect` doesn't open a debugger port |
+| `OnlyLoadAppFromAsar` | on | code loads only from `app.asar` |
+| `EnableEmbeddedAsarIntegrityValidation` | on | on macOS, a modified `app.asar` refuses to launch |
+| `GrantFileProtocolExtraPrivileges` | off | the `file://` protocol gets no extra privileges |
+
+Cookie encryption stays at Electron's default. You can read the fuses back with `npx --no-install @electron/fuses read --app <app>`.
+Integrity validation doesn't apply on Linux, so no tamper refusal is claimed there.
+
+### App states
+
+| State | What it is | Status |
+|---|---|---|
+| **Dev / test** | Running from source (`dev`, `dev:web`, `preview`), tests and e2e | Works on macOS. See the table below |
+| **Local install** | The `dist:mac` build installed by `install-local-mac.sh` | Built and tested with validation builds. Not yet confirmed with the release identity |
+| **Public release** | Developer ID signed, notarized and stapled | Not available. Needs an Apple Developer Program membership and isn't planned yet |
+
+A build from this repository is meant for the Mac that built it. A copy moved to another Mac is quarantined and not
+notarized. On another Mac, use Apple's Open Anyway flow (System Settings › Privacy & Security), or the public release
+once there is one. **Never** remove the quarantine attribute, disable Gatekeeper, or start OpenVern with `--no-sandbox`.
+
+### What was run on macOS
+
+As of 2026-11-10, on macOS 26.6 (arm64):
+
+| Command | Result |
+|---|---|
+| `npm test` | Passed: 1,302 tests passed, 1 skipped |
+| `npm run typecheck`, `npm run lint` | Passed |
+| `npm run e2e:web` | Passed |
+| `npm run e2e:electron` (the standard command, real Keychain item) | Passed: 80 + 11 + 60 + 25 checks |
+| `npm run dev:web` (API checks with the fake provider) | Passed. Keychain-free |
+| `npm run dist:mac` | Passed: arm64 `.dmg` and `.app`, codesign verifies |
+| `npm run e2e:packaged` (validation build) | Passed: 176 checks |
+| `scripts/install-local-mac.sh` and `--uninstall` | Passed in a temporary folder (`OPENVERN_INSTALL_DIR`). Not yet run into `~/Applications` |
+| `npm run dev` and `npm run preview` | Not yet run in this form on macOS. Their Electron wiring was checked with isolated builds |
+
+The Linux commands in this README are unchanged. Their checks on this branch are still pending.
 
 ## Data
 
@@ -104,6 +243,10 @@ Electron's profile (Chromium state, `localStorage`, single-instance lock): `~/.c
 `~/.config/openvern-dev` for `npm run dev`, `~/.config/openvern-preview` for `npm run preview`. A run with `OPENVERN_DATA_DIR` gets its profile (and lock) at
 `<dir>/electron-profile` in every mode, so it never collides with the installed app. `--user-data-dir=<dir>`
 overrides it.
+
+On macOS the same directories live under `~/Library/Application Support/` instead of `~/.config/`. The packaged app keeps
+its data in `~/Library/Application Support/openvern`. The source-mode profiles are `openvern-dev` and `openvern-preview`.
+The Linux paths above are unchanged.
 
 **Upgrading from 0.1:** the app used to be called harness and kept its data in `~/.config/harness`. On the first start
 of the packaged app, when `~/.config/openvern` has no `settings.json`, `projects.json` or chats, OpenVern **copies**
@@ -162,13 +305,14 @@ the main screens, the Files panel, an open file and Diff (unified, and split whe
   and there is no auto mode yet (planned). Tools are sandboxed to the project root, skip ignored and secret-looking
   files (`.env`, keys), and cap file and result sizes.
 - **No** editing or regenerating past messages, branching, token or cost display (usage is stored, not shown), context
-  compaction, chat search, light theme, auto-update, pacman/AUR package, or Windows/macOS builds.
+  compaction, chat search, light theme, auto-update, pacman/AUR package, Windows builds, a notarized (public) macOS build, or Intel and universal macOS builds.
 - **Attachments**: text files and images (PNG, JPEG, WebP, GIF) through the attach menu or the Files panel's Attach
   button: no paste, no drag and drop. Text up to 512 KB, images up to 10 MB, 10 files per message.
 - `Ctrl+N` (New chat) works in the app; browsers reserve it.
 - A chat whose first reply was stopped or failed keeps the title "New chat" (titles are generated after the first
   completed turn). Failed "move to project" requests only refetch; there is no toast component.
 - The AppImage needs `fuse2` and user namespaces. It is x86_64 only. The minimum window size is 1080×720.
+- The macOS build is arm64 only, ad-hoc signed and not notarized. See [macOS (Apple Silicon)](#macos-apple-silicon).
 - Automated checks cover web dev and the built Electron app with the fake provider. Still manual: the A5 tool-row spinner and the `list_files` row (the fake provider only calls `read_file`), the A12 real offline case (the script only injects `[fake:error=network_error]`), a real key against
   OpenRouter, the native folder picker, launching from the KDE launcher after `install-local.sh`, and the AppImage on the
   Arch machine.
