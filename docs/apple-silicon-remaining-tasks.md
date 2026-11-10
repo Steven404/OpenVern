@@ -1,8 +1,10 @@
 # OpenVern — Apple Silicon remaining tasks
 
-> **Status (2026-11-10):** CB-1 approved; CB-2 pending you. AS-06 R4 and AS-08 have review approval and H4 approval.
-> AS-10 to AS-13 are implemented and reviewed on macOS (AS-13 after accuracy-review fixes) (AS-12 is conditional on LX-2 and H4). AS-01 to AS-12 are one commit
-> each on `feature/apple-silicon`, not merged or pushed. Linux runs (LX-1, LX-2), IG-1 and IG-2 are pending.
+> **Status (2026-11-10):** CB-1 approved; CB-2 PASS (you, 2026-11-10). AS-06 R4 and AS-08 have review approval and H4 approval.
+> AS-10 to AS-13 are implemented and reviewed on macOS (AS-13 after accuracy-review fixes) (AS-12 is conditional on LX-2 and H4). AS-01 to AS-13 are one commit
+> each on `feature/apple-silicon`, not merged or pushed. IG-2's macOS run (covering IG-1's macOS half, D-ORDER yes) is
+> done, and A2 passes on macOS (plan §8, §9). Pending: Linux runs (LX-1, LX-2), H4. The IG-1/IG-2 Sol max review was CONDITIONAL
+> (LX-1/LX-2 and H4); its doc fixes D1–D3 are applied.
 > **Companion to:** `docs/apple-silicon-plan.md` (the plan). The plan's §1–§6 rules, decisions and original task
 > scopes stay normative. This document lists only the **remaining deltas**, as implementation-ready cards.
 > **Orchestration:** Orchestrator Ruleset v1 (2026-11-06). Tag of this planning task: `plan` / **high** (filesystem
@@ -242,8 +244,9 @@ if already installed).
      doesn't show the unique item, stop. Don't edit `electron-builder.yml` to make it work.
 6. **Identities and signatures:**
    - **Validation identities:** evidence only, never shipped. They get their own Keychain and TCC records.
-   - **Local release identity:** `dev.stefanos.openvern` / `OpenVern`, ad-hoc signed. Each ad-hoc rebuild changes the
-     code signature, so expect one Keychain re-prompt and new TCC prompts (L7, measured once in IG-2).
+   - **Local release identity:** `dev.stefanos.openvern` / `OpenVern`, ad-hoc signed. In IG-2, repeated builds with
+     unchanged inputs kept the same code hash; one build with changed contents got a new signature and prompted once
+     for the Keychain item. TCC re-prompts after a rebuild were not measured.
      Double-clicking it uses the real profile `~/Library/Application Support/openvern` (X2).
    - **Public identity:** Developer ID (M4). Moving from ad-hoc to Developer ID prompts once more.
 7. **Never without a per-action approval (H5):** deleting or editing a Keychain item or its ACL, Keychain Access edits,

@@ -1,9 +1,10 @@
 # OpenVern — Apple Silicon (macOS arm64) plan
 
 > **Status (2026-11-10):** AS-00 to AS-13 are implemented and reviewed on macOS arm64 (AS-13 after accuracy-review fixes). AS-06 R4 and AS-08 have review
-> approval and your H4 approval (2026-11-10). Each task is one commit on `feature/apple-silicon` (AS-01 to AS-12). Nothing
-> is merged or pushed. Open: CB-2 (your manual ⌘ check in `npm run dev`), Linux runs LX-1 and LX-2 (not run), IG-1 and
-> IG-2 (not run), and AS-12's conditions (LX-2 and H4). AS-14 to AS-16 and IG-3 are optional and not started. Remaining
+> approval and your H4 approval (2026-11-10). Each task is one commit on `feature/apple-silicon` (AS-01 to AS-13). Nothing
+> is merged or pushed. CB-2 PASS (you, 2026-11-10). IG-2's macOS run (which covers IG-1's macOS half) is done: the A2
+> artifacts are built, verified, installed and pass on macOS (§8, §9). Open: Linux runs LX-1 and LX-2 (not run) and H4 for AS-05,
+> AS-07, AS-12, IG-1 and IG-2. The IG-1/IG-2 Sol max review was CONDITIONAL (LX-1/LX-2 and H4); its doc fixes D1–D3 are applied. AS-14 to AS-16 and IG-3 are optional and not started. Remaining
 > work: `docs/apple-silicon-remaining-tasks.md` · **Owner:** Stefanos · **Last updated:** 2026-11-10
 > *Original status (2026-11-08, historical):* AS-00 baseline **partial** (V1–V3, V11 and the secret scan measured; V5
 > and V14 partial, AS-04 gate cleared 2026-11-08; V4 interactive and V10 manual checks pending), no implementation task
@@ -937,19 +938,44 @@ anything merges into `main`. Nothing is pushed.
 ## 8. Acceptance checklist
 
 **Local macOS milestone (IG-2):**
-- [ ] L1 `npm ci` installs an arm64 Electron. `npm run dev`, `dev:web` and `preview` work.
-- [ ] L2 Typecheck, lint, tests, audit and secret scan pass on macOS and Linux.
-- [ ] L3 `npm run e2e` passes on macOS and Linux, and no processes are left behind.
-- [ ] L4 Labels show ⌘ on macOS and Ctrl on Linux. Cmd and Ctrl shortcuts both work.
-- [ ] L5 Native Edit shortcuts, Cmd+Q/W/M/H and Dock reopen all work in the packaged app.
-- [ ] L6 Case-variant and NFC/NFD paths can't reach denied files or data dirs (AS-06 tests run on APFS).
-- [ ] L7 The key is stored with `enc: safeStorage` in the Keychain. Deny, Always Allow and item-deleted paths behave
-      as specified, and an **ad-hoc rebuild** re-prompts once.
-- [ ] L8 `dist:mac` gives an ad-hoc signed arm64 `.app` and `.dmg` that verify and launch. The packaged e2e passes.
-- [ ] L9 Fuses read back as D4. The negative checks pass.
-- [ ] L10 `install-local-mac.sh` installs and uninstalls cleanly.
-- [ ] L11 Linux: same-named AppImage, `install-local.sh` OK, no menu bar, unchanged behaviour.
-- [ ] L12 README is accurate for macOS. No doc suggests quarantine removal, Gatekeeper disabling or `--no-sandbox`.
+*IG-2 macOS results (2026-11-10, HEAD `8e01a87`; evidence in the local `reports/apple-silicon-ig2.md`). A box is
+ticked only when every platform it names has passed. Linux (LX-1, LX-2) was not run, so no Linux claim is made.*
+
+- [x] L1 `npm ci` plus the README's Electron binary-fetch step installs an arm64 Electron. `npm run dev`, `dev:web` and `preview` work. *macOS: `npm ci` rc 0,
+      lockfile unchanged. Electron 45.2.1 has no install script, so the binary came from the README's
+      `node node_modules/electron/install.js` step (arm64 Mach-O). That is pre-existing and not macOS-specific. `dev`
+      (CB-2, you), `dev:web` (vite 200, API up) and `preview` (safeStorage selected, no prompt) all start.*
+- [ ] L2 Typecheck, lint, tests, audit and secret scan pass on macOS and Linux. *macOS PASS: lint, typecheck,
+      1,302 passed / 1 skipped, gitleaks 8.30.1 git+dir clean, prod audit 0 (full audit: 6 moderate, report-only).
+      Linux pending (LX-1).*
+- [ ] L3 `npm run e2e` passes on macOS and Linux, and no processes are left behind. *macOS PASS: web 79/11/60/25,
+      literal `e2e:electron` 80/11/60/25, all 0 failed, nothing left behind. Linux pending (LX-1).*
+- [ ] L4 Labels show ⌘ on macOS and Ctrl on Linux. Cmd and Ctrl shortcuts both work. *macOS PASS (CB-2, you, `npm run
+      dev`: ⌘ N, "Toggle right panel (⌘ ])", `~/code/my-app`, Cmd+N/B/]). Linux Ctrl pending (LX-1).*
+- [x] L5 Native Edit shortcuts, Cmd+Q/W/M/H and Dock reopen all work in the packaged app. *Installed real-identity
+      app, you: menus App/File/Edit/Window only; Cmd+A/C/X/V/Z, Shift+Cmd+Z; Cmd+M/H/W each restored from the Dock;
+      Cmd+Q quits.*
+- [x] L6 Case-variant and NFC/NFD paths can't reach denied files or data dirs (AS-06 tests run on APFS). *183/183
+      focused tests (AS-06 + AS-08), no skips, APFS boot volume.*
+- [x] L7 The key is stored with `enc: safeStorage` in the Keychain. Deny, Always Allow and item-deleted paths behave
+      as specified, and an **ad-hoc rebuild** re-prompts once. *Installed app, dummy key: `enc: safeStorage`, 0600, no
+      plaintext. Deny, Always Allow and item-deleted were measured in AS-07 (V4). In one measured run, after prompt-free
+      access was established, a rebuild with changed contents (`-c.buildVersion` override, new CDHash) prompted once,
+      then Connected. Two repeated unchanged-input builds kept the same CDHash. Later prompt behaviour depends on the
+      Keychain state and the button chosen; TCC re-prompts were not measured.*
+- [x] L8 `dist:mac` gives an ad-hoc signed arm64 `.app` and `.dmg` that verify and launch. The packaged e2e passes.
+      *`lipo` arm64, `--deep --strict` valid, `Signature=adhoc`, DMG checksum valid; Finder and Spotlight launches with
+      no Gatekeeper step; `e2e:packaged` on validation package `dev.stefanos.openvern.ig2val`: 176/0.*
+- [ ] L9 Fuses read back as D4. The negative checks pass. *macOS PASS: release, validation and installed `.app` read
+      back D4; on a validation copy, RunAsNode, `NODE_OPTIONS` and `--inspect` have no effect and a tampered `app.asar`
+      refuses to launch. AppImage read-back pending (LX-2).*
+- [x] L10 `install-local-mac.sh` installs and uninstalls cleanly. *Real `~/Applications` install ×3 and uninstall ×2
+      (idempotent); data and Keychain untouched.*
+- [ ] L11 Linux: same-named AppImage, `install-local.sh` OK, no menu bar, unchanged behaviour. *Pending (LX-2).*
+- [x] L12 README is accurate for macOS. No doc suggests quarantine removal, Gatekeeper disabling or `--no-sandbox`.
+      *No unsafe advice found. The rebuild bullet and the run-results tables were corrected after the IG-2
+      integration review (D1–D3, 2026-11-10). macOS documentation is accurate as far as reviewed; the Linux side waits
+      for LX-1/LX-2.*
 
 **Release milestone (IG-3, optional):** signed, notarized and stapled; opens on a clean Mac after download; the CI
 release run fails closed without secrets.
@@ -968,14 +994,14 @@ release run fails closed without secrets.
 | AS-05 | Opus 5.5 high; Terra medium tests | GPT 6.1 Sol max | Code/security approved, no findings. Unit1095/0/1; full web/Electron all green on macOS. Linux, packaged dummy-home migration check after AS10, and human merge approval pending. Not merged |
 | AS-06 | GPT 6.1 Terra medium → high (tests, incomplete) → Opus 5.5 high (attempt 3: tests + fix; review P1/P2 fix) → Opus 5.5 xhigh (re-review P2: dangling default-root symlink) | GPT 6.1 Sol max + you | Remediation 3 implemented on macOS; **fresh Sol max review blocked by the provider cybersecurity safety check (possible cybersecurity risk), no verdict produced**. AS-06 remains unapproved; no automatic retry of the blocked review. Dangling-root regressions PRE focused 8 fail/51 pass, POST 59/0 (+sweep in full); dependent 266/0; full 1155/0/1; web 79/11/60/25, Electron 80/11/60/25 (all 0 fail). Linux, manual dev checks, Sol review and human merge approval pending. Not merged. *2026-11-10:* resumed independent review by Kimi K3.1 Pro (`opencode` · `openrouter/moonshotai/kimi-k3.1-pro`, `variant: max`; a per-task user exception, for review only): **CHANGES REQUESTED**. P1: `/System/Volumes/Data` firmlink spellings bypass existing and missing denied roots (read, list, search, tree, stage, apply). P2: Unicode full-case aliases of denied names (`secretſ.json`) are exposed. P3: the symlink message is misleading for `poſt.txt`. The earlier remediations were re-checked as effective. The independent run (12 files 267/0/0, focused 60/0/0) doesn't cover P1–P3. With at least 3 attempts used, further implementation needs your resume decision (ruleset §8.3, §9). *Superseded by R4 (P1–P3, 2026-11-10):* implemented. Independent review GPT 6.1 Sol max **APPROVE**, no code, security or test findings. Reviewer runs: 164/0 targeted, `npm test` 1,236 passed (1 skipped). Supplied E2E: web 79/11/60/25 and literal `npm run e2e:electron` 80/11/60/25, all 0 failures. Human **H4 approval recorded 2026-11-10**. Linux LX-1 (IG-1) pending. Not merged or pushed. |
 | AS-07 | Opus 5.5 high; Terra medium tests; Opus 5.5 xhigh re-plan (2026-11-08) | GPT 6.1 Sol max + you | Implementation and unit tests: 1169/0/1 pass. Native V4: save, Allow, startup Deny, and exact user-confirmed Always Allow followed by prompt-free restart/Connected read-back measured; ciphertext unchanged/0600. Startup Deny is D15 as specified; the manual AC was corrected with no policy change. Post-selection encryption failure is fake-tested only. Item-deleted handling and dummy-key recovery/read-back measured on current tree with explicit approval; ciphertext preserved before re-entry, sanitized native decrypt warning, recovery encrypted/0600. macOS Electron e2e (attempt 3, Opus 5.5 high, 2026-11-08): the attempt-2 hang was a bootstrap deadlock (ESM top-level `await app.whenReady()`, reproduced without Keychain), not a prompt. A scratch own-signed identity with the current `out/` passed its native positive control and a full serial run of 80/0+11/0+60/0+25/0, `enc: safeStorage`, 0600, cleanup clean (V13). The standard unflagged run was not executed. Sol max fresh review 2026-11-08: CONDITIONAL, no code/security findings; independently 21/21 targeted tests and static checks passed. Integrator explicitly accepts the documented isolated 176/0 run as AS-07 macOS E2E equivalent (scope above); standard command not run, stock identity/packaging claims deferred to AS-11/IG-2. Remaining macOS review conditions recorded by integrator: isolated E2E equivalent and exact Always Allow/restart read-back. Pending: Linux `e2e:electron` and unit run, human/integration approvals, cleanup approval for own test items. Not complete or merged |
-| AS-08 *(triggered)* | Opus 5.5 high after frontier re-plan | GPT 6.1 Sol max + you | **Implemented (2026-11-10)** for the V10 denial. Files shows the macOS message instead of an empty tree, `read_file` and the viewer map `EPERM` and `EACCES`, and adding a project explains a denied folder. Scope H3a–c applied. S6 native recheck **PASS** on a fresh validation identity: Don't Allow, the message persists after restart, re-adding the folder through the picker restores reads, and a real empty folder still shows "This project has no files." S7 fresh review GPT 6.1 Sol max **APPROVE**, no code or security findings (`npm test` 1,270 passed, 1 skipped). Human **H4 approval recorded 2026-11-10**. Linux LX-1 pending. Not merged or pushed. |
+| AS-08 *(triggered)* | Opus 5.5 high after frontier re-plan | GPT 6.1 Sol max + you | **Implemented (2026-11-10)** for the V10 denial. Files shows the macOS message instead of an empty tree, the file-viewer and attachment reads map `EPERM` and `EACCES` (agent `read_file` messages unchanged, residual R6), and adding a project explains a denied folder. Scope H3a–c applied. S6 native recheck **PASS** on a fresh validation identity: Don't Allow, the message persists after restart, re-adding the folder through the picker restores reads, and a real empty folder still shows "This project has no files." S7 fresh review GPT 6.1 Sol max **APPROVE**, no code or security findings (`npm test` 1,270 passed, 1 skipped). Human **H4 approval recorded 2026-11-10**. Linux LX-1 pending. Not merged or pushed. |
 | AS-09 | Haiku 5.5 medium | Sonnet 5.5 high | Script approved; missing artifact regenerated by root after review. icon.icns109535 bytes SHA256761bc9d064e050e509d515afda45e65bf82988b587e47b0b9414dc1066e918ba matches reviewer. Linux PNG hash unchanged. Linux/native Dock-Finder look after AS10 pending. Not merged |
-| IG-1 | Opus 5.5 high | GPT 6.1 Sol max + you | [ ] |
+| IG-1 | Opus 5.5 high | GPT 6.1 Sol max + you | **macOS half done in IG-2 (2026-11-10, D-ORDER yes).** Provenance clean: the recorded hash-bearing snapshots match (AS-05/06/07/08/09/12; AS-01/02/04 and part of AS-03 checked by scope review, no historical hashes; no drift found; AS-10 N3 and AS-11 finding-1 fixes are inside blobs the AS-12 review saw in full). Combined branch review by GPT 6.1 Sol max (2026-11-10): CONDITIONAL, no code or security findings; conditions LX-1/LX-2, doc fixes D1–D3 (applied) and H4. SC-CODE and MAC-E2E green on HEAD `8e01a87`. Pending: LX-1, the R7 review and H4. |
 | AS-10 | GPT 6.1 Terra · `medium` (temporary override) | Sonnet 5.5 high | Implemented. Review **APPROVE** (Sonnet 5.5 high, 2026-11-10; nits optional). `dist:mac` passes: arm64-only `dir` and `dmg`, ad-hoc (`identity "-"`), `codesign --verify --deep --strict` valid. The Linux `artifactName` is byte-identical. Config tests pass. Real-identity launch pending IG-2. Linux build LX-2 pending. Not merged or pushed. |
 | AS-11 | Haiku 5.5 medium | Sonnet 5.5 high | Implemented. Review **APPROVE** (Sonnet 5.5 high, 2026-11-10; nits optional). Install and uninstall are idempotent in an owned temp folder. `npm run e2e:packaged` on a validation build: 176 passed (smoke 80, persist 11, edits 60, archive 25). The real `~/Applications` install (X4) and the real-identity run (IG-2) are pending. Linux pending. Not merged or pushed. |
 | AS-12 | Opus 5.5 high | GPT 6.1 Sol max + you | Implemented. Review GPT 6.1 Sol max **CONDITIONAL**, no code or security findings (2026-11-10). Read-back of all six D4 values on the release and validation `.app`. On copies, `RunAsNode`, `NODE_OPTIONS` and `--inspect` have no effect, and a tampered `app.asar` refuses to launch. `e2e:packaged` 176 passed. Conditions: LX-2 on Linux with the final tree, and H4 human approval (not yet recorded). Not merged or pushed. |
 | AS-13 | Haiku 5.5 medium | Sonnet 5.5 high | Docs written (2026-11-10): README macOS section, tracker and status updates, and a local fact list in `reports/apple-silicon-as13.md`. SC-DOC run. Sonnet 5.5 high accuracy review: CHANGES REQUESTED (5 text fixes R1–R5), fixed by the orchestrator; gitleaks/audit clean. IG-2 pending (real-identity checks and LX-2). |
-| IG-2 | Opus 5.5 high | GPT 6.1 Sol max + you | [ ] |
+| IG-2 | Opus 5.5 high | GPT 6.1 Sol max + you | **macOS run done (2026-11-10, HEAD `8e01a87`).** SC-PKG, MAC-E2E, `dist:mac` with its verify commands, and packaged e2e 176/0 all passed. Real-identity session with you: L5, L7 (exactly one re-prompt after a code-changing rebuild), L8, L10 and CB-2 pass. §8: L1 and L5–L8 and L10 ticked; L2–L4 and L9 pass on macOS, Linux pending; L11 pending; L12 closed after doc fixes D1–D3; IG-2 review GPT 6.1 Sol max CONDITIONAL (LX-1/LX-2, H4). Not complete: LX-1/LX-2 and H4. App installed as the HEAD build. |
 | AS-14 *(opt.)* | Haiku 5.5 medium | Sonnet 5.5 high | [ ] |
 | AS-15 *(opt.)* | Opus 5.5 high | GPT 6.1 Sol max + you | [ ] |
 | AS-16 *(opt.)* | Haiku 5.5 medium | GPT 6.1 Sol max + you | [ ] |

@@ -51,7 +51,7 @@ applied from the pane) and the viewer opens files up to 1 MB. The window can't b
 npm ci
 ```
 
-Electron's binary is downloaded by a postinstall step. If `npm run dev` or `npm run preview` complain that it is
+Electron's binary may not be downloaded by `npm ci`. If `npm run dev` or `npm run preview` complain that it is
 missing, fetch it with:
 
 ```bash
@@ -136,9 +136,10 @@ scripts/install-local-mac.sh --uninstall  # remove the installed app
   never touches your data or the Keychain. Set `OPENVERN_INSTALL_DIR=<dir>` to install somewhere else.
 - `--uninstall` removes only the installed app. It prints two things to remove by hand if you want them gone: the data
   directory `~/Library/Application Support/openvern`, and the Keychain item `OpenVern Safe Storage`.
-- **Every rebuild changes the app's code signature.** After you reinstall a rebuilt app, expect one Keychain prompt for
-  the key and new macOS privacy prompts. This is expected for ad-hoc signing but hasn't been
-  measured yet; the check is planned for the local milestone (IG-2).
+- **Rebuilds and the Keychain.** In one measured run on macOS, repeated builds with unchanged inputs kept the same code
+  hash. A build with changed contents got a new ad-hoc signature and prompted once for `OpenVern Safe Storage`, then
+  read the stored key. Future changed builds may prompt again. Whether macOS re-asks for folder access after a rebuild
+  hasn't been measured.
 
 ### Packaged end-to-end test
 
@@ -205,7 +206,7 @@ Integrity validation doesn't apply on Linux, so no tamper refusal is claimed the
 | State | What it is | Status |
 |---|---|---|
 | **Dev / test** | Running from source (`dev`, `dev:web`, `preview`), tests and e2e | Works on macOS. See the table below |
-| **Local install** | The `dist:mac` build installed by `install-local-mac.sh` | Built and tested with validation builds. Not yet confirmed with the release identity |
+| **Local install** | The `dist:mac` build installed by `install-local-mac.sh` | Built, installed into `~/Applications` and checked with the release identity on macOS (launch, menus, shortcuts, Keychain) |
 | **Public release** | Developer ID signed, notarized and stapled | Not available. Needs an Apple Developer Program membership and isn't planned yet |
 
 A build from this repository is meant for the Mac that built it. A copy moved to another Mac is quarantined and not
@@ -225,8 +226,8 @@ As of 2026-11-10, on macOS 26.6 (arm64):
 | `npm run dev:web` (API checks with the fake provider) | Passed. Keychain-free |
 | `npm run dist:mac` | Passed: arm64 `.dmg` and `.app`, codesign verifies |
 | `npm run e2e:packaged` (validation build) | Passed: 176 checks |
-| `scripts/install-local-mac.sh` and `--uninstall` | Passed in a temporary folder (`OPENVERN_INSTALL_DIR`). Not yet run into `~/Applications` |
-| `npm run dev` and `npm run preview` | Not yet run in this form on macOS. Their Electron wiring was checked with isolated builds |
+| `scripts/install-local-mac.sh` and `--uninstall` | Passed, in a temporary folder and into `~/Applications` |
+| `npm run dev`, `npm run dev:web` and `npm run preview` | Start on macOS. `preview` uses the Keychain item |
 
 The Linux commands in this README are unchanged. Their checks on this branch are still pending.
 
