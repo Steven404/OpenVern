@@ -207,3 +207,27 @@ describe('package.json scripts (AS-10)', () => {
   });
 });
 
+describe('electron fuses (AS-12, D4)', () => {
+  const fuses = topLevelBlock('electronFuses');
+  it('defines the fuses at top level for both platforms', () => {
+    expect(yml).toMatch(/^electronFuses:\s*$/m);
+    expect(fuses.trim()).not.toBe('');
+  });
+  it.each([
+    ['runAsNode', 'false'],
+    ['enableNodeOptionsEnvironmentVariable', 'false'],
+    ['enableNodeCliInspectArguments', 'false'],
+    ['onlyLoadAppFromAsar', 'true'],
+    ['enableEmbeddedAsarIntegrityValidation', 'true'],
+    ['grantFileProtocolExtraPrivileges', 'false'],
+  ])('sets %s to %s', (key, value) => {
+    expect(fuses).toMatch(new RegExp(`^  ${key}: ${value}\\s*(?:#.*)?$`, 'm'));
+  });
+  it('leaves cookie encryption untouched', () => {
+    expect(scalar(fuses, 'enableCookieEncryption')).toBeUndefined();
+  });
+  it('does not add signing credentials or notarization and keeps hardened runtime off', () => {
+    expect(yml).not.toMatch(/CSC_|APPLE_|notarize/i);
+    expect(scalar(mac, 'hardenedRuntime')).toBe('false');
+  });
+});

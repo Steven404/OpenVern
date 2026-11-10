@@ -22,6 +22,14 @@ electronLanguages:
 
 # D4 (AS-12), both platforms: no env/CLI code injection, and app code loads only from the validated app.asar.
 # Cookie encryption is left at the Electron default (enabling it is one-way).
+electronFuses:
+  runAsNode: false
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  onlyLoadAppFromAsar: true
+  enableEmbeddedAsarIntegrityValidation: true
+  grantFileProtocolExtraPrivileges: false
+
 mac:
   target:
     - target: dir

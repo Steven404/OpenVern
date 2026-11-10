@@ -78,6 +78,32 @@ else
 fi
 
 
+# D4: inspect the packaged Electron binary before launching it.
+if [ "$(uname -s)" = Darwin ]; then
+  fuse_output="$(npx --no-install @electron/fuses read --app "$E2E_APP")" || {
+    echo "Fuse read-back failed for $E2E_APP" >&2
+    exit 1
+  }
+  echo "$fuse_output"
+  fuse_mismatch=0
+  while IFS='|' read -r fuse state; do
+    if ! printf '%s\n' "$fuse_output" | grep -Fxq "  $fuse is $state"; then
+      echo "Fuse mismatch: expected $fuse is $state" >&2
+      fuse_mismatch=1
+    fi
+  done <<'FUSES'
+RunAsNode|Disabled
+EnableNodeOptionsEnvironmentVariable|Disabled
+EnableNodeCliInspectArguments|Disabled
+OnlyLoadAppFromAsar|Enabled
+EnableEmbeddedAsarIntegrityValidation|Enabled
+GrantFileProtocolExtraPrivileges|Disabled
+FUSES
+  if [ "$fuse_mismatch" -ne 0 ]; then exit 1; fi
+else
+  echo "Linux: run fuse read-back on the extracted AppImage (LX-2)"
+fi
+
 e2e_init
 CDP="$(free_port)"
 
