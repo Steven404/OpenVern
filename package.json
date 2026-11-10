@@ -29,6 +29,7 @@
     "e2e": "bash scripts/e2e/run-web.sh && bash scripts/e2e/run-electron.sh",
     "e2e:web": "bash scripts/e2e/run-web.sh",
     "e2e:electron": "bash scripts/e2e/run-electron.sh",
+    "e2e:packaged": "bash scripts/e2e/run-packaged.sh",
     "format": "biome check --write .",
     "try:openrouter": "tsx --tsconfig tsconfig.node.json scripts/try-openrouter.ts"
   },
