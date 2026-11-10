@@ -138,3 +138,141 @@ describe('createSecretStore', () => {
     }
   });
 });
+
+describe('AS-07 platform and failure contracts', () => {
+  it('selects Keychain without the optional backend and falls back only at startup', async () => {
+    const safe = fakeSafeStorage();
+    delete safe.getSelectedStorageBackend;
+    const logger = { info: vi.fn(), warn: vi.fn() };
+    expect(createSecretStore(await tmp(), safe, logger, { platform: 'darwin' })).toBeInstanceOf(SafeStorageSecretStore);
+    expect(logger.info).toHaveBeenCalledWith('secrets encrypted with safeStorage (macOS Keychain).');
+    const dir = await tmp();
+    const fallback = createSecretStore(dir, { ...safe, isEncryptionAvailable: () => false }, logger, {
+      platform: 'darwin',
+    });
+    expect(logger.warn).toHaveBeenCalledWith(
+      'safeStorage is unavailable (the macOS Keychain is not available); falling back to a plaintext secrets.json (mode 0600).',
+    );
+    await fallback.set('dummy', 'dummy-value');
+    const file = path.join(dir, 'secrets.json');
+    expect(JSON.parse(await fs.readFile(file, 'utf8')).dummy).toEqual({ enc: 'plain', value: 'dummy-value' });
+    expect((await fs.stat(file)).mode & 0o777).toBe(0o600);
+  });
+
+  it.each(['kwallet6', 'basic_text', 'unknown', undefined])(
+    'preserves Linux backend selection for %s',
+    async (backend) => {
+      const safe = fakeSafeStorage();
+      if (backend === undefined) delete safe.getSelectedStorageBackend;
+      else safe.getSelectedStorageBackend = () => backend;
+      const logger = { info: vi.fn(), warn: vi.fn() };
+      const store = createSecretStore(await tmp(), safe, logger, { platform: 'linux' });
+      if (backend === 'basic_text' || backend === 'unknown') {
+        expect(store).not.toBeInstanceOf(SafeStorageSecretStore);
+        expect(logger.warn).toHaveBeenCalledWith(
+          `safeStorage is unavailable (backend: ${backend}); falling back to a plaintext secrets.json (mode 0600).`,
+        );
+      } else {
+        expect(store).toBeInstanceOf(SafeStorageSecretStore);
+        expect(logger.info).toHaveBeenCalledWith(`secrets encrypted with safeStorage (backend: ${backend ?? 'n/a'}).`);
+      }
+    },
+  );
+
+  it.each(['darwin', 'linux', 'win32'] as const)('does not write on encryption failure on %s', async (platform) => {
+    const file = path.join(await tmp(), 'secrets.json');
+    const original = '{"version":1,"other":{"enc":"plain","value":"other-dummy"}}';
+    await fs.writeFile(file, original);
+    const warn = vi.fn();
+    const broken = fakeSafeStorage({
+      encryptString: () => {
+        throw new Error('native-dummy-message ciphertext-dummy plaintext-dummy');
+      },
+    });
+    const store = new SafeStorageSecretStore(file, broken, { platform, logger: { warn } });
+    let caught: unknown;
+    try {
+      await store.set('dummy', 'plaintext-dummy');
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toMatchObject({ code: 'internal' });
+    expect(String(caught)).toContain(
+      platform === 'darwin' ? 'Keychain' : platform === 'linux' ? 'keyring' : 'credential store',
+    );
+    const exposed = `${String(caught)} ${(caught as Error).stack} ${JSON.stringify(caught)} ${JSON.stringify(warn.mock.calls)} ${(caught as Error).cause}`;
+    for (const value of ['native-dummy-message', 'ciphertext-dummy', 'plaintext-dummy'])
+      expect(exposed).not.toContain(value);
+    expect(await fs.readFile(file, 'utf8')).toBe(original);
+    const missing = path.join(await tmp(), 'secrets.json');
+    await expect(
+      new SafeStorageSecretStore(missing, broken, { platform, logger: { warn } }).set('dummy', 'plaintext-dummy'),
+    ).rejects.toThrow();
+    await expect(fs.stat(missing)).rejects.toMatchObject({ code: 'ENOENT' });
+    await new SafeStorageSecretStore(file, fakeSafeStorage()).set('dummy', 'plaintext-dummy');
+    expect(await fs.readFile(file, 'utf8')).not.toContain('plaintext-dummy');
+    expect(await new SafeStorageSecretStore(file, fakeSafeStorage()).get('dummy')).toBe('plaintext-dummy');
+  });
+
+  it('retains ciphertext after decrypt failure and recovers later', async () => {
+    const file = path.join(await tmp(), 'secrets.json');
+    await new SafeStorageSecretStore(file, fakeSafeStorage()).set('dummy', 'dummy-value');
+    const before = await fs.readFile(file, 'utf8');
+    const warn = vi.fn();
+    const broken = fakeSafeStorage({
+      decryptString: () => {
+        throw new Error('native-dummy-message');
+      },
+    });
+    expect(await new SafeStorageSecretStore(file, broken, { logger: { warn } }).get('dummy')).toBeNull();
+    expect(await fs.readFile(file, 'utf8')).toBe(before);
+    expect(warn).toHaveBeenCalledWith('Could not decrypt secret "dummy"; treating it as not set (Error).');
+    expect(await new SafeStorageSecretStore(file, fakeSafeStorage()).get('dummy')).toBe('dummy-value');
+  });
+
+  it('retains plain bytes and returns the value when migration fails', async () => {
+    const file = path.join(await tmp(), 'secrets.json');
+    const before = '{ "version": 1, "dummy": { "enc": "plain", "value": "dummy-value" } }';
+    await fs.writeFile(file, before);
+    const warn = vi.fn();
+    const safe = fakeSafeStorage({
+      encryptString: () => {
+        throw new Error('native-dummy-message');
+      },
+    });
+    expect(await new SafeStorageSecretStore(file, safe, { logger: { warn } }).get('dummy')).toBe('dummy-value');
+    expect(await fs.readFile(file, 'utf8')).toBe(before);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('native-dummy-message');
+  });
+
+  it.each([
+    ['Error', 'EACCES', 'Error EACCES'],
+    ['malicious-dummy-name', 'bad-dummy-code', 'Error'],
+    ['Error', 'EPRIVATE_TEST_VALUE', 'Error'],
+  ])('sanitizes error metadata %s %s', async (name, code, label) => {
+    const warn = vi.fn();
+    const err = Object.assign(new Error('native-dummy-message'), { name, code });
+    const safe = fakeSafeStorage({
+      encryptString: () => {
+        throw err;
+      },
+    });
+    await expect(
+      new SafeStorageSecretStore(path.join(await tmp(), 'secrets.json'), safe, { logger: { warn } }).set(
+        'dummy',
+        'dummy-value',
+      ),
+    ).rejects.toThrow();
+    expect(warn).toHaveBeenCalledWith(`Could not encrypt secret "dummy"; it was not saved (${label}).`);
+  });
+
+  it('defaults to the actual platform', async () => {
+    const safe = fakeSafeStorage();
+    delete safe.getSelectedStorageBackend;
+    const implicit = { info: vi.fn(), warn: vi.fn() };
+    const explicit = { info: vi.fn(), warn: vi.fn() };
+    createSecretStore(await tmp(), safe, implicit);
+    createSecretStore(await tmp(), safe, explicit, { platform: process.platform });
+    expect(implicit.info.mock.calls).toEqual(explicit.info.mock.calls);
+  });
+});
