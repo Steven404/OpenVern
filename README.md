@@ -168,11 +168,12 @@ E2E_APP=/path/to/validation/openvern.app npm run e2e:packaged
 
 ### Privacy prompts (TCC) and denial messages
 
-The first time OpenVern reads files in Documents, Desktop or Downloads, macOS asks for permission, for example
-“OpenVern” would like to access files in your Documents folder. The app sets a purpose string for each of these
-folders (for example "OpenVern accesses Documents when you choose projects there."), but the prompt wording hasn't
-been confirmed to show it. Projects in those folders trigger the prompt. The home Files panel may too; that wasn't
-measured.
+The first time OpenVern reads files in Documents, Desktop or Downloads, macOS asks for permission. On the installed
+app, a project on the Desktop showed: "OpenVern" would like to access files in your Desktop folder. Choosing a folder
+with **New project › Browse…** doesn't prompt, because picking it counts as permission; the prompt appeared after
+quitting and reopening OpenVern, when it read the saved project. The app sets a purpose string for each of these
+folders (for example "OpenVern accesses Desktop when you choose projects there."); whether the prompt shows it wasn't
+recorded. The home Files panel may prompt too; that wasn't measured.
 
 If you deny access, the Files panel shows the message below, with a **Try again** button. It persists after a restart:
 
