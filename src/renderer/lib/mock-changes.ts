@@ -1,6 +1,7 @@
 // Sample data for the v0.2 mock API: the design's "Review changes" proposal (3 files, 4 hunks) and a project file
 // tree (docs/design/FilesPanel.dc.html, Files panel). Used by `MockApiClient` only.
 
+import { LIMITS } from '@shared/constants';
 import type {
   ChangeKind,
   ChangeSummary,
@@ -10,7 +11,8 @@ import type {
   Id,
   ProjectFileContent,
   ProjectFileEntry,
-  ProjectFileTree,
+  ProjectFileListing,
+  ProjectFileSearchResult,
 } from '@shared/types';
 
 /** 8-char FNV-1a hex of the hunk's lines (the mock's stand-in for the server's hash). */
@@ -171,7 +173,7 @@ const SAMPLE_FILE_PATHS = [
 const byName = (a: string, b: string) => a.toLowerCase().localeCompare(b.toLowerCase());
 
 /** Flat, depth-first listing: directories before files at each level, then case-insensitive name. */
-export function sampleFileTree(): ProjectFileTree {
+function sampleFileTree(): ProjectFileEntry[] {
   type Node = { dirs: Map<string, Node>; files: string[] };
   const root: Node = { dirs: new Map(), files: [] };
   for (const p of SAMPLE_FILE_PATHS) {
@@ -193,7 +195,32 @@ export function sampleFileTree(): ProjectFileTree {
     for (const f of [...node.files].sort(byName)) entries.push({ path: `${prefix}${f}`, type: 'file' });
   };
   walk(root, '');
-  return { entries, truncated: false };
+  return entries;
+}
+
+const parentOf = (p: string) => p.slice(0, Math.max(0, p.lastIndexOf('/')));
+
+/**
+ * One folder of the sample tree, its direct children only (`GET /files?path=`). `'missing'` when there is no such path,
+ * `'file'` when the path is a file (the server answers 404 and 400 for those).
+ */
+export function sampleFolder(dir: string): ProjectFileListing | 'missing' | 'file' {
+  const all = sampleFileTree();
+  if (dir !== '') {
+    const hit = all.find((e) => e.path === dir);
+    if (!hit) return 'missing';
+    if (hit.type === 'file') return 'file';
+  }
+  return { path: dir, entries: all.filter((e) => parentOf(e.path) === dir), truncated: false };
+}
+
+/** Sample files whose path contains `query` (case-insensitive), like `GET /files/search`. */
+export function sampleSearch(query: string): ProjectFileSearchResult {
+  const q = query.trim().toLowerCase();
+  const hits = sampleFileTree().filter((e) => e.type === 'file' && e.path.toLowerCase().includes(q));
+  return hits.length > LIMITS.fileSearchMaxResults
+    ? { entries: hits.slice(0, LIMITS.fileSearchMaxResults), truncated: 'results' }
+    : { entries: hits, truncated: false };
 }
 
 const SAMPLE_CONTENT: Record<string, string> = {

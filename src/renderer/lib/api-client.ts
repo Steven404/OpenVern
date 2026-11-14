@@ -8,12 +8,13 @@ import type {
   Chat,
   ChatChanges,
   ChatSummary,
-  HomeFileTree,
+  HomeFileListing,
   Id,
   ModelInfo,
   Project,
   ProjectFileContent,
-  ProjectFileTree,
+  ProjectFileListing,
+  ProjectFileSearchResult,
   ProjectListItem,
   PublicSettings,
   ReasoningEffort,
@@ -49,11 +50,15 @@ export interface ApiClient {
   deleteAttachment(id: Id): Promise<void>;
   attachmentUrl(id: Id): string;
   // v0.2 (plan §4.8)
-  listProjectFiles(projectId: Id): Promise<ProjectFileTree>;
+  /** Direct children of one project folder (`dir`, project-relative POSIX; default the root). */
+  listProjectFiles(projectId: Id, dir?: string, signal?: AbortSignal): Promise<ProjectFileListing>;
+  /** Files whose project-relative path contains `query`, case-insensitive (the Files filter). */
+  searchProjectFiles(projectId: Id, query: string, signal?: AbortSignal): Promise<ProjectFileSearchResult>;
   readProjectFile(projectId: Id, path: string): Promise<ProjectFileContent>;
   attachProjectFile(projectId: Id, path: string): Promise<AttachmentRef>;
   /** Home directory, used when a chat has no project. */
-  listHomeFiles(): Promise<HomeFileTree>;
+  listHomeFiles(dir?: string, signal?: AbortSignal): Promise<HomeFileListing>;
+  searchHomeFiles(query: string, signal?: AbortSignal): Promise<ProjectFileSearchResult>;
   readHomeFile(path: string): Promise<ProjectFileContent>;
   attachHomeFile(path: string): Promise<AttachmentRef>;
   getChatChanges(chatId: Id): Promise<ChatChanges>;

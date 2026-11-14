@@ -58,7 +58,7 @@ export function RightPanel({ chatId, projectId }: { chatId: Id; projectId: Id | 
   const show = usePanelStore((s) => s.show);
   const closeTab = usePanelStore((s) => s.closeTab);
   const openSurface = usePanelStore((s) => s.openSurface);
-  useRefreshProjectFiles(chatId, projectId ?? null);
+  useRefreshProjectFiles(chatId, projectId);
 
   const ctx: SurfaceContext = { chatId, projectId: projectId ?? null, hasChanges };
   const filesEnabled = getSurface('files')?.availability(ctx).enabled ?? false;

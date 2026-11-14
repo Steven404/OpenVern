@@ -9,7 +9,7 @@ import type {
   Chat,
   ChatChanges,
   ChatSummary,
-  HomeFileTree,
+  HomeFileListing,
   HunkDecision,
   Id,
   IsoDate,
@@ -17,7 +17,8 @@ import type {
   ModelInfo,
   Project,
   ProjectFileContent,
-  ProjectFileTree,
+  ProjectFileListing,
+  ProjectFileSearchResult,
   ProjectListItem,
   PublicSettings,
   ReasoningEffort,
@@ -192,12 +193,16 @@ export interface ChangesService {
 }
 
 export interface ProjectFilesService {
-  tree(projectId: Id, signal?: AbortSignal): Promise<ProjectFileTree>;
+  /** Direct children of the project folder `dir` (`''` = root). Refuses folders the full walk would never show. */
+  list(projectId: Id, dir: string, signal?: AbortSignal): Promise<ProjectFileListing>;
+  /** Files whose project-relative path contains `query` (case-insensitive). Same walker and rules as `list`. */
+  search(projectId: Id, query: string, signal?: AbortSignal): Promise<ProjectFileSearchResult>;
   read(projectId: Id, relPath: string): Promise<ProjectFileContent>;
   /** Raw bytes for "Attach" (images aren't text). Same sandbox as `read`; throws `file_too_large` over the image limit. */
   readBytes(projectId: Id, relPath: string): Promise<{ name: string; bytes: Uint8Array }>;
-  /** Home directory listing for a chat that has no project. Same walker, ignore rules and deny list as `tree`. */
-  homeTree(signal?: AbortSignal): Promise<HomeFileTree>;
+  /** Home directory listing for a chat that has no project. Same walker and rules as `list`, plus the home deny layer. */
+  homeList(dir: string, signal?: AbortSignal): Promise<HomeFileListing>;
+  homeSearch(query: string, signal?: AbortSignal): Promise<ProjectFileSearchResult>;
   homeRead(relPath: string): Promise<ProjectFileContent>;
   homeReadBytes(relPath: string): Promise<{ name: string; bytes: Uint8Array }>;
 }

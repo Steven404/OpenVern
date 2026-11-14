@@ -3,7 +3,7 @@
 
 import type { ApplyChangesBody, ApplyChangesResponse } from '@shared/api';
 import { sniffAttachmentBytes } from '@shared/attachment-sniff';
-import { DEFAULT_MODEL, NEW_CHAT_TITLE } from '@shared/constants';
+import { DEFAULT_MODEL, LIMITS, NEW_CHAT_TITLE } from '@shared/constants';
 import { type ErrorCode, errorInfo } from '@shared/errors';
 import type { AgentEvent } from '@shared/events';
 import { SAMPLE_MODELS, SAMPLE_USAGE } from '@shared/sample-data';
@@ -15,13 +15,14 @@ import type {
   ChatSummary,
   ChatUsage,
   FileChange,
-  HomeFileTree,
+  HomeFileListing,
   Id,
   Message,
   ModelInfo,
   Project,
   ProjectFileContent,
-  ProjectFileTree,
+  ProjectFileListing,
+  ProjectFileSearchResult,
   ProjectListItem,
   PublicSettings,
   ReasoningEffort,
@@ -31,7 +32,7 @@ import type {
   UserMessage,
 } from '@shared/types';
 import { type ApiClient, ApiError } from './api-client';
-import { acceptedOnly, sampleFileContent, sampleFileTree, sampleProposal, summarize } from './mock-changes';
+import { acceptedOnly, sampleFileContent, sampleFolder, sampleProposal, sampleSearch, summarize } from './mock-changes';
 
 export interface MockApiClientOptions {
   /** Pause between streamed events, in ms. Default 30; use 0 in tests. */
@@ -54,6 +55,23 @@ const fail = (code: ErrorCode, status: number, message?: string): never => {
 };
 
 const clone = <T>(v: T): T => structuredClone(v);
+
+/** A sample folder, failing like the server (`resolveListedDir`): 404 for a missing path, 400 for a file. */
+function mockFolder(dir: string): ProjectFileListing {
+  const listing = sampleFolder(dir);
+  if (listing === 'missing') return fail('not_found', 404, `Folder not found: ${dir}`);
+  if (listing === 'file') return fail('invalid_request', 400, `${dir} is not a folder.`);
+  return listing;
+}
+
+/** A sample search, with the server's query rules (`searchAt`): empty and overlong queries are 400. */
+function mockSearch(query: string): ProjectFileSearchResult {
+  const q = query.trim();
+  if (q === '') return fail('invalid_request', 400, 'Missing search text.');
+  if (q.toLowerCase().length > LIMITS.fileSearchMaxQueryLength)
+    return fail('invalid_request', 400, 'The search text is too long.');
+  return sampleSearch(q);
+}
 const now = () => new Date().toISOString();
 const minutesAgo = (n: number) => new Date(Date.now() - n * 60_000).toISOString();
 
@@ -484,10 +502,16 @@ export class MockApiClient implements ApiClient {
 
   // ── project files and proposed edits (v0.2) ───────────────────────────────
 
-  async listProjectFiles(projectId: Id): Promise<ProjectFileTree> {
-    await this.pause(this.delayMs);
+  async listProjectFiles(projectId: Id, dir = '', signal?: AbortSignal): Promise<ProjectFileListing> {
+    await this.pause(this.delayMs, signal);
     this.project(projectId);
-    return sampleFileTree();
+    return mockFolder(dir);
+  }
+
+  async searchProjectFiles(projectId: Id, query: string, signal?: AbortSignal): Promise<ProjectFileSearchResult> {
+    await this.pause(this.delayMs, signal);
+    this.project(projectId);
+    return mockSearch(query);
   }
 
   async readProjectFile(projectId: Id, path: string): Promise<ProjectFileContent> {
@@ -501,9 +525,14 @@ export class MockApiClient implements ApiClient {
     return this.attachListed(file);
   }
 
-  async listHomeFiles(): Promise<HomeFileTree> {
-    await this.pause(this.delayMs);
-    return { ...sampleFileTree(), root: '/home/you' };
+  async listHomeFiles(dir = '', signal?: AbortSignal): Promise<HomeFileListing> {
+    await this.pause(this.delayMs, signal);
+    return { ...mockFolder(dir), root: '/home/you' };
+  }
+
+  async searchHomeFiles(query: string, signal?: AbortSignal): Promise<ProjectFileSearchResult> {
+    await this.pause(this.delayMs, signal);
+    return mockSearch(query);
   }
 
   async readHomeFile(path: string): Promise<ProjectFileContent> {

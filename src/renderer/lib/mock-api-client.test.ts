@@ -311,13 +311,38 @@ describe('MockApiClient', () => {
   });
 
   describe('v0.2 contracts', () => {
-    it('lists a sorted project file tree and reads a file', async () => {
+    it('lists sorted project folders one at a time, searches, and reads a file', async () => {
       const api = new MockApiClient({ delayMs: 0 });
       const [project] = await api.listProjects();
       const tree = await api.listProjectFiles(project?.id ?? '');
       expect(tree.truncated).toBe(false);
+      expect(tree.path).toBe('');
       expect(tree.entries[0]).toEqual({ path: 'build', type: 'dir' });
       expect(tree.entries.at(-1)?.type).toBe('file');
+      expect(tree.entries.every((e) => !e.path.includes('/'))).toBe(true);
+      const src = await api.listProjectFiles(project?.id ?? '', 'src');
+      expect(src.path).toBe('src');
+      expect(src.entries.length).toBeGreaterThan(0);
+      expect(src.entries.every((e) => e.path.startsWith('src/') && !e.path.slice(4).includes('/'))).toBe(true);
+      await expect(api.listProjectFiles(project?.id ?? '', 'nope')).rejects.toMatchObject({ status: 404 });
+      // A file passed as a folder is refused like the server does (400, not 404), for project and home.
+      for (const list of [
+        () => api.listProjectFiles(project?.id ?? '', 'README.md'),
+        () => api.listHomeFiles('README.md'),
+      ])
+        await expect(list()).rejects.toMatchObject({ status: 400, info: { code: 'invalid_request' } });
+      const hits = await api.searchProjectFiles(project?.id ?? '', 'READ-FILE');
+      expect(hits.entries.length).toBeGreaterThan(0);
+      expect(hits.entries.every((e) => e.type === 'file' && e.path.toLowerCase().includes('read-file'))).toBe(true);
+      await expect(api.searchProjectFiles(project?.id ?? '', ' ')).rejects.toMatchObject({ status: 400 });
+      const long = 'x'.repeat(LIMITS.fileSearchMaxQueryLength + 1);
+      for (const search of [() => api.searchProjectFiles(project?.id ?? '', long), () => api.searchHomeFiles(long)])
+        await expect(search()).rejects.toMatchObject({ status: 400, info: { code: 'invalid_request' } });
+      await expect(api.searchHomeFiles('')).rejects.toMatchObject({ status: 400 });
+      // The longest accepted query (padding is trimmed first, as on the server) still searches.
+      const longest = ` ${'x'.repeat(LIMITS.fileSearchMaxQueryLength)} `;
+      expect(await api.searchProjectFiles(project?.id ?? '', longest)).toEqual({ entries: [], truncated: false });
+      expect((await api.listHomeFiles('src')).root).toBe('/home/you');
       const file = await api.readProjectFile(project?.id ?? '', 'README.md');
       expect(file).toMatchObject({ path: 'README.md', binary: false, truncated: false });
       expect(file.content).toContain('OpenVern');

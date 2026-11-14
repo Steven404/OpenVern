@@ -4,12 +4,13 @@ import { useProjects } from '@renderer/app/queries';
 import { ApiError } from '@renderer/lib/api-client';
 import { useApiClient } from '@renderer/lib/api-context';
 import { queryKeys } from '@renderer/lib/query-keys';
-import type { Id } from '@shared/types';
+import type { HomeFileListing, Id } from '@shared/types';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronRight, Plus } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { addAttachmentRef } from '../composer';
 import { type HighlightedLine, highlightCode } from '../conversation/highlight';
+import { folderQuery } from './queries';
 
 /** Highlighting a huge file would add thousands of spans for little value. */
 const HIGHLIGHT_MAX_LINES = 3000;
@@ -34,13 +35,10 @@ export function FileViewer({
   const api = useApiClient();
   const projects = useProjects();
   const home = projectId === null;
-  const homeTree = useQuery({
-    queryKey: queryKeys.homeFiles,
-    queryFn: () => api.listHomeFiles(),
-    enabled: home,
-  });
+  // The title needs only `root`: reuse the panel's cheap root listing (same query), never a whole-tree fetch.
+  const homeRoot = useQuery({ ...folderQuery(api, null, ''), enabled: home });
   const projectName = home
-    ? (homeTree.data?.root ?? 'Home')
+    ? ((homeRoot.data as HomeFileListing | undefined)?.root ?? 'Home')
     : (projects.data?.find((p) => p.id === projectId)?.name ?? 'Files');
   const file = useQuery({
     queryKey: home ? queryKeys.homeFile(path) : queryKeys.projectFile(projectId ?? '', path),

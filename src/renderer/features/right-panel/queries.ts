@@ -22,10 +22,13 @@ export function useHasChanges(chatId: Id): boolean {
 }
 
 /**
- * Refetches the Files tree and open files when the panel opens and whenever a new batch gets applied (the files on
- * disk changed).
+ * Refetches the Files panel (open folders, the filter's search, open files) when the panel opens, and for a project
+ * whenever a new batch gets applied (the files on disk changed). Only listings that are on screen refetch: the
+ * invalidation is by prefix, and react-query refetches active queries only. The home folder (a chat without a
+ * project, `projectId === null`) has no applied batches, so it refreshes on panel open only. `undefined` = the chat's
+ * project isn't known yet: nothing to refresh.
  */
-export function useRefreshProjectFiles(chatId: Id, projectId: Id | null): void {
+export function useRefreshProjectFiles(chatId: Id, projectId: Id | null | undefined): void {
   const queryClient = useQueryClient();
   const { data } = useChatChanges(chatId);
   const applied = data?.applied.length;
@@ -33,7 +36,12 @@ export function useRefreshProjectFiles(chatId: Id, projectId: Id | null): void {
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: only on mount (panel open) and project change
   useEffect(() => {
-    if (!projectId) return;
+    if (projectId === undefined) return;
+    if (projectId === null) {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.homeFiles });
+      void queryClient.invalidateQueries({ queryKey: ['homeFile'] });
+      return;
+    }
     void queryClient.invalidateQueries({ queryKey: queryKeys.projectFiles(projectId) });
     void queryClient.invalidateQueries({ queryKey: ['projectFile', projectId] });
   }, [projectId]);

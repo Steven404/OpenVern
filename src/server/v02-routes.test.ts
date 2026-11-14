@@ -3,16 +3,18 @@
 
 import { mkdir, realpath, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { LIMITS } from '@shared/constants';
 import type { AgentEvent } from '@shared/events';
 import type {
   AttachmentRef,
   Chat,
   ChatChanges,
-  HomeFileTree,
+  HomeFileListing,
   PendingChanges,
   Project,
   ProjectFileContent,
-  ProjectFileTree,
+  ProjectFileListing,
+  ProjectFileSearchResult,
 } from '@shared/types';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AgentService } from '../core/types';
@@ -57,9 +59,12 @@ const pending = (revision = 1): PendingChanges => ({
 describe('client header', () => {
   it.each([
     ['GET', '/api/projects/x/files'],
+    ['GET', '/api/projects/x/files?path=src'],
+    ['GET', '/api/projects/x/files/search?q=a'],
     ['GET', '/api/projects/x/files/content?path=a'],
     ['POST', '/api/projects/x/files/attach'],
     ['GET', '/api/home/files'],
+    ['GET', '/api/home/files/search?q=a'],
     ['GET', '/api/home/files/content?path=a'],
     ['POST', '/api/home/files/attach'],
     ['GET', '/api/chats/x/changes'],
@@ -71,16 +76,72 @@ describe('client header', () => {
 });
 
 describe('project files', () => {
-  it('lists the tree without secrets, dirs first', async () => {
+  it('lists one folder at a time without secrets, dirs first', async () => {
     const p = await newProject();
-    const tree = await json<ProjectFileTree>(await h.call(`/api/projects/${p.id}/files`));
-    expect(tree.truncated).toBe(false);
-    expect(tree.entries).toEqual([
-      { path: 'src', type: 'dir' },
-      { path: 'src/a.ts', type: 'file' },
-      { path: 'logo.png', type: 'file' },
-      { path: 'README.md', type: 'file' },
-    ]);
+    const root = await json<ProjectFileListing>(await h.call(`/api/projects/${p.id}/files`));
+    expect(root).toEqual({
+      path: '',
+      truncated: false,
+      entries: [
+        { path: 'src', type: 'dir' },
+        { path: 'logo.png', type: 'file' },
+        { path: 'README.md', type: 'file' },
+      ],
+    });
+    expect(await json<ProjectFileListing>(await h.call(`/api/projects/${p.id}/files?path=`))).toEqual(root);
+    const src = await json<ProjectFileListing>(await h.call(`/api/projects/${p.id}/files?path=src`));
+    expect(src).toEqual({ path: 'src', truncated: false, entries: [{ path: 'src/a.ts', type: 'file' }] });
+  });
+
+  it('refuses client folders the panel would never show', async () => {
+    const p = await newProject();
+    await mkdir(path.join(h.projectDir, 'node_modules', 'x'), { recursive: true });
+    await mkdir(path.join(h.projectDir, '.git'));
+    await symlink(path.join(h.projectDir, 'src'), path.join(h.projectDir, 'srclink'));
+    const list = (dir: string) => h.call(`/api/projects/${p.id}/files?path=${encodeURIComponent(dir)}`);
+    for (const bad of ['../x', '/etc', `${h.projectDir}/src`, '.git', 'src/./', 'README.md']) {
+      const res = await list(bad);
+      expect(res.status, bad).toBe(400);
+      expect(((await res.json()) as { error: { code: string } }).error.code, bad).toBe('invalid_request');
+    }
+    for (const bad of ['node_modules', 'node_modules/x', 'srclink', 'nope']) {
+      const res = await list(bad);
+      expect(res.status, bad).toBe(404);
+      expect(((await res.json()) as { error: { code: string } }).error.code, bad).toBe('not_found');
+    }
+  });
+
+  it('searches file paths, case-insensitively, without secrets', async () => {
+    const p = await newProject();
+    const search = (q: string) => h.call(`/api/projects/${p.id}/files/search?q=${encodeURIComponent(q)}`);
+    expect(await json<ProjectFileSearchResult>(await search('A.TS'))).toEqual({
+      truncated: false,
+      entries: [{ path: 'src/a.ts', type: 'file' }],
+    });
+    expect(await json<ProjectFileSearchResult>(await search('env'))).toEqual({ truncated: false, entries: [] });
+    for (const q of ['', '   ']) expect((await search(q)).status, JSON.stringify(q)).toBe(400);
+    expect((await h.call(`/api/projects/${p.id}/files/search`)).status).toBe(400);
+    expect((await h.call('/api/projects/nope/files/search?q=a')).status).toBe(404);
+  });
+
+  it('says why a search stopped: the result cap is reported as `results`', async () => {
+    const p = await newProject();
+    await mkdir(path.join(h.projectDir, 'm'));
+    const n = LIMITS.fileSearchMaxResults + 1;
+    await Promise.all(Array.from({ length: n }, (_, i) => writeFile(path.join(h.projectDir, 'm', `hit${i}.txt`), '')));
+    const res = await json<ProjectFileSearchResult>(await h.call(`/api/projects/${p.id}/files/search?q=hit`));
+    expect(res.truncated).toBe('results');
+    expect(res.entries).toHaveLength(LIMITS.fileSearchMaxResults);
+  });
+
+  it('keeps /files/search apart from /files/content and /files/attach', async () => {
+    const p = await newProject();
+    await writeFile(path.join(h.projectDir, 'search'), 'a file named search\n');
+    const content = await json<ProjectFileContent>(await h.call(`/api/projects/${p.id}/files/content?path=search`));
+    expect(content.content).toBe('a file named search\n');
+    const res = await json<ProjectFileSearchResult>(await h.call(`/api/projects/${p.id}/files/search?q=search`));
+    expect(res.entries).toEqual([{ path: 'search', type: 'file' }]);
+    expect((await h.call(`/api/projects/${p.id}/files/search?path=src`)).status).toBe(400);
   });
 
   it('reads a file', async () => {
@@ -143,10 +204,18 @@ describe('home files', () => {
     await writeFile(path.join(h.homeDir, '.ssh', 'id_ecdsa'), 'PRIVATE KEY\n');
     await writeFile(path.join(h.homeDir, '.aws', 'credentials'), 'aws_secret_access_key=1\n');
     await writeFile(path.join(h.homeDir, '.netrc'), 'machine x password y\n');
-    const tree = await json<HomeFileTree>(await h.call('/api/home/files'));
+    const tree = await json<HomeFileListing>(await h.call('/api/home/files'));
     expect(tree.root).toBe(await realpath(h.homeDir));
+    expect(tree.path).toBe('');
     expect(tree.truncated).toBe(false);
     expect(tree.entries).toEqual([{ path: 'note.txt', type: 'file' }]);
+    for (const bad of ['.ssh', '.aws', '..', '../project']) {
+      expect((await h.call(`/api/home/files?path=${encodeURIComponent(bad)}`)).status, bad).toBe(400);
+    }
+    expect((await h.call('/api/home/files?path=nope')).status).toBe(404);
+    const found = await json<ProjectFileSearchResult>(await h.call('/api/home/files/search?q=e'));
+    expect(found.entries).toEqual([{ path: 'note.txt', type: 'file' }]);
+    expect((await h.call('/api/home/files/search?q=')).status).toBe(400);
     const file = await json<ProjectFileContent>(await h.call('/api/home/files/content?path=note.txt'));
     expect(file.content).toBe('hello from home\n');
     expect((await h.call('/api/home/files/content?path=.env')).status).toBe(400);

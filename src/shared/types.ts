@@ -214,17 +214,32 @@ export interface ChangeSummary {
 }
 
 export interface ProjectFileEntry {
-  path: string; // project-relative, forward slashes
+  path: string; // root-relative (project or home), forward slashes
   type: 'file' | 'dir';
 }
-export interface ProjectFileTree {
-  entries: ProjectFileEntry[]; // sorted: dirs first, then case-insensitive name, depth-first
+/** One folder of the Files panel: its direct children only. */
+export interface ProjectFileListing {
+  /** The folder listed, root-relative POSIX (`''` for the root). */
+  path: string;
+  entries: ProjectFileEntry[]; // sorted: dirs first, then case-insensitive name
+  /** More than `LIMITS.fileTreeFolderMaxEntries` children: only the first ones are listed. */
   truncated: boolean;
 }
-/** The Files panel when a chat has no project: the same tree, rooted at the user's home directory. */
-export interface HomeFileTree extends ProjectFileTree {
+/** The Files panel when a chat has no project: the same listing, rooted at the user's home directory. */
+export interface HomeFileListing extends ProjectFileListing {
   /** Absolute home path, shown as the tree title. */
   root: string;
+}
+/** The Files panel filter: files whose root-relative path contains the query (case-insensitive), in walk order. */
+export interface ProjectFileSearchResult {
+  entries: ProjectFileEntry[];
+  /**
+   * Why the search stopped early, or `false` when it saw everything:
+   * - `'results'`: `LIMITS.fileSearchMaxResults` matches were found; more may exist (narrow the query);
+   * - `'scanned'`: the walk stopped after `LIMITS.fileSearchMaxScanned` entries (or was aborted), so part of the tree
+   *   was never searched and matches there are missing, however many were found.
+   */
+  truncated: false | 'results' | 'scanned';
 }
 export interface ProjectFileContent {
   path: string;

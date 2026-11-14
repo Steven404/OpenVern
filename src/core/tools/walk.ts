@@ -70,6 +70,82 @@ function compareEntries(a: WalkEntry, b: WalkEntry): number {
   return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
 }
 
+/** The `.gitignore` scope for the children of `dirAbs`: `parent` plus its own `.gitignore`, if `dirents` lists one. */
+async function scopeOf(
+  dirAbs: string,
+  rel: string,
+  dirents: readonly Dirent[],
+  parent: IgnoreScope,
+  signal: AbortSignal,
+): Promise<IgnoreScope> {
+  if (!dirents.some((d) => d.name === '.gitignore' && d.isFile())) return parent;
+  const content = await readGitignore(dirAbs, signal);
+  return content === null ? parent : parent.with(rel, content);
+}
+
+type FilterOptions = Pick<WalkOptions, 'root' | 'deniedRoots' | 'isDeniedRel'>;
+
+/** The kind the walker yields the directory entry `d` (at root-relative `rel`) as, or null when it is left out. */
+async function admittedKind(
+  d: Dirent,
+  rel: string,
+  scope: IgnoreScope,
+  opts: FilterOptions,
+): Promise<WalkEntry['kind'] | null> {
+  const kind = d.isDirectory() ? 'dir' : d.isSymbolicLink() ? 'symlink' : d.isFile() ? 'file' : null;
+  if (kind === null) return null;
+  if (kind === 'dir' && ALWAYS_SKIPPED_DIRS.has(d.name)) return null;
+  if (isDeniedEntryName(d.name)) return null;
+  if (opts.isDeniedRel?.(rel)) return null;
+  // Every kind, not only dirs: a denied root may be a file (the target of a symlinked `~/.netrc`, say).
+  if (isWithinAny(opts.deniedRoots, path.join(opts.root, rel))) return null;
+  if (kind === 'dir' && (await isOpenVernDataDir(path.join(opts.root, rel)))) return null;
+  if (scope.ignores(rel, kind === 'dir')) return null;
+  return kind;
+}
+
+/** The walker's guards on its start directory (and so on the root of a full walk). */
+async function startAllowed(opts: FilterOptions, startRel: string): Promise<boolean> {
+  // `root` is real and the walker never follows symlinks, so `path.join(root, rel)` is a real path.
+  if (isWithinAny(opts.deniedRoots, path.join(opts.root, startRel))) return false;
+  if (startRel !== '' && opts.isDeniedRel?.(startRel)) return false;
+  return !(await isInsideOpenVernDataDir(opts.root, path.join(opts.root, startRel)));
+}
+
+/**
+ * The kind a full walk from the root (`startRel: ''`, unlimited depth) would yield `rel` as, or null when it never
+ * would: a segment is missing (exact spelling, as `readdir` reports it), is a symlink or not a directory, or is left
+ * out by the always-skipped dirs, the deny list, `isDeniedRel`, `deniedRoots`, a data dir or a `.gitignore`. Applies
+ * the walker's own per-entry filter one segment at a time, so it can't drift from what a walk shows. `rel` is a
+ * root-relative POSIX path without `.`/`..`/empty segments; `''` is the root and is checked like a walk's start.
+ * A `readdir` error on a directory along the way is thrown (the caller decides how to report it).
+ */
+export async function walkedKind(
+  opts: FilterOptions & { signal: AbortSignal },
+  rel: string,
+): Promise<WalkEntry['kind'] | null> {
+  if (!(await startAllowed(opts, ''))) return null;
+  if (rel === '') return 'dir';
+  const segments = rel.split('/');
+  let scope = IgnoreScope.empty;
+  let parentRel = '';
+  for (let i = 0; i < segments.length; i++) {
+    const name = segments[i] as string;
+    const dirAbs = path.join(opts.root, parentRel);
+    const dirents = await readdir(dirAbs, { withFileTypes: true });
+    scope = await scopeOf(dirAbs, parentRel, dirents, scope, opts.signal);
+    const d = dirents.find((x) => x.name === name);
+    if (!d) return null;
+    const childRel = parentRel === '' ? name : `${parentRel}/${name}`;
+    const kind = await admittedKind(d, childRel, scope, opts);
+    if (kind === null) return null;
+    if (i === segments.length - 1) return kind;
+    if (kind !== 'dir') return null;
+    parentRel = childRel;
+  }
+  return null;
+}
+
 /**
  * Yields entries level by level (each directory's children sorted: directories first, then by name).
  * Symlinks are yielded as `symlink` and never followed. A `.gitignore` is read only if it is a regular file of at
@@ -77,11 +153,8 @@ function compareEntries(a: WalkEntry, b: WalkEntry): number {
  * need to tell the difference check `signal.aborted` afterwards.
  */
 export async function* walk(opts: WalkOptions): AsyncGenerator<WalkEntry> {
-  const { root, startRel, maxDepth, signal, deniedRoots } = opts;
-  // `root` is real and the walker never follows symlinks, so `path.join(root, rel)` is a real path.
-  if (isWithinAny(deniedRoots, path.join(root, startRel))) return;
-  if (startRel !== '' && opts.isDeniedRel?.(startRel)) return;
-  if (await isInsideOpenVernDataDir(root, path.join(root, startRel))) return;
+  const { root, startRel, maxDepth, signal } = opts;
+  if (!(await startAllowed(opts, startRel))) return;
 
   // `.gitignore` files of the start directory's ancestors apply to everything below it.
   let scope = IgnoreScope.empty;
@@ -107,25 +180,13 @@ export async function* walk(opts: WalkOptions): AsyncGenerator<WalkEntry> {
       continue; // unreadable or vanished: skip
     }
 
-    let local = item.scope;
-    if (dirents.some((d) => d.name === '.gitignore' && d.isFile())) {
-      const content = await readGitignore(dirAbs, signal);
-      if (content !== null) local = local.with(item.rel, content);
-    }
+    const local = await scopeOf(dirAbs, item.rel, dirents, item.scope, signal);
 
     const children: WalkEntry[] = [];
     for (const d of dirents) {
-      const kind = d.isDirectory() ? 'dir' : d.isSymbolicLink() ? 'symlink' : d.isFile() ? 'file' : null;
-      if (kind === null) continue;
-      if (kind === 'dir' && ALWAYS_SKIPPED_DIRS.has(d.name)) continue;
-      if (isDeniedEntryName(d.name)) continue;
       const rel = item.rel === '' ? d.name : `${item.rel}/${d.name}`;
-      if (opts.isDeniedRel?.(rel)) continue;
-      // Every kind, not only dirs: a denied root may be a file (the target of a symlinked `~/.netrc`, say).
-      if (isWithinAny(deniedRoots, path.join(root, rel))) continue;
-      if (kind === 'dir' && (await isOpenVernDataDir(path.join(root, rel)))) continue;
-      if (local.ignores(rel, kind === 'dir')) continue;
-      children.push({ rel, name: d.name, kind, depth: item.depth });
+      const kind = await admittedKind(d, rel, local, opts);
+      if (kind !== null) children.push({ rel, name: d.name, kind, depth: item.depth });
     }
     children.sort(compareEntries);
 

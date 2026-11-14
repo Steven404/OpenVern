@@ -50,6 +50,15 @@ describe('HttpApiClient', () => {
     expect(err).toMatchObject({ status: 400, info: { code: 'path_invalid', message: 'Nope.' } });
   });
 
+  it('passes a search truncation reason through unchanged', async () => {
+    for (const truncated of [false, 'results', 'scanned'] as const) {
+      const body = { entries: [{ path: 'a.ts', type: 'file' }], truncated };
+      const api = new HttpApiClient('/api', (async () => json(body)) as typeof fetch);
+      await expect(api.searchProjectFiles('p1', 'a')).resolves.toEqual(body);
+      await expect(api.searchHomeFiles('a')).resolves.toEqual(body);
+    }
+  });
+
   it('maps fetch failures to network_error', async () => {
     const api = new HttpApiClient('/api', (async () => {
       throw new TypeError('Failed to fetch');
@@ -139,6 +148,15 @@ describe('HttpApiClient', () => {
 
     it('lists and reads project files with encoded paths', async () => {
       expect((await calls((a) => a.listProjectFiles('p 1'))).url).toBe('/api/projects/p%201/files');
+      expect((await calls((a) => a.listProjectFiles('p1', 'src/a b'))).url).toBe(
+        '/api/projects/p1/files?path=src%2Fa%20b',
+      );
+      const signal = new AbortController().signal;
+      const search = await calls((a) => a.searchProjectFiles('p1', 'a&b', signal));
+      expect(search.url).toBe('/api/projects/p1/files/search?q=a%26b');
+      expect(search.init?.method).toBe('GET');
+      expect(search.init?.signal).toBe(signal);
+      expect((await calls((a) => a.listProjectFiles('p1', 'src', signal))).init?.signal).toBe(signal);
       const r = await calls((a) => a.readProjectFile('p1', 'src/a b.ts'));
       expect(r.url).toBe('/api/projects/p1/files/content?path=src%2Fa%20b.ts');
       expect(r.init?.method).toBe('GET');
@@ -146,6 +164,8 @@ describe('HttpApiClient', () => {
 
     it('lists and reads the home directory', async () => {
       expect((await calls((a) => a.listHomeFiles())).url).toBe('/api/home/files');
+      expect((await calls((a) => a.listHomeFiles('Docs'))).url).toBe('/api/home/files?path=Docs');
+      expect((await calls((a) => a.searchHomeFiles('notes'))).url).toBe('/api/home/files/search?q=notes');
       const r = await calls((a) => a.readHomeFile('Docs/a b.txt'));
       expect(r.url).toBe('/api/home/files/content?path=Docs%2Fa%20b.txt');
       const att = await calls((a) => a.attachHomeFile('note.txt'));

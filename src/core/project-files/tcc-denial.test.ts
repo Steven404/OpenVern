@@ -49,7 +49,7 @@ const service = (platform: NodeJS.Platform, extra = {}) =>
     ...extra,
   } as Parameters<typeof createProjectFilesService>[0]);
 const deny = (op: string, target: string, code: string) => rules.push({ op, path: target, code });
-const empty = { entries: [], truncated: false };
+const empty = { path: '', entries: [], truncated: false };
 const match = (message: string) => ({ code: 'path_invalid', message });
 
 describe('AS-08 injected denials', () => {
@@ -59,7 +59,7 @@ describe('AS-08 injected denials', () => {
     await writeFile(path.join(dir, 'sub/note.txt'), 'dummy');
     deny('readdir', dir, 'EPERM');
     const err = await service('darwin')
-      .tree('p')
+      .list('p', '')
       .catch((e: unknown) => e);
     expect(err).toMatchObject(match(folderPrivacy));
     expect(toErrorInfo(err)).toEqual({ code: 'path_invalid', message: folderPrivacy, retryable: false });
@@ -67,15 +67,15 @@ describe('AS-08 injected denials', () => {
   });
   it('A8-1b root realpath EPERM', async () => {
     deny('realpath', dir, 'EPERM');
-    await expect(service('darwin').tree('p')).rejects.toMatchObject(match(folderPrivacy));
+    await expect(service('darwin').list('p', '')).rejects.toMatchObject(match(folderPrivacy));
   });
   it('A8-1c root EACCES', async () => {
     deny('readdir', dir, 'EACCES');
-    await expect(service('darwin').tree('p')).rejects.toMatchObject(match(folderPermission));
+    await expect(service('darwin').list('p', '')).rejects.toMatchObject(match(folderPermission));
   });
   it('A8-1d home root EPERM', async () => {
     deny('readdir', dir, 'EPERM');
-    await expect(service('darwin', { homeDir: dir }).homeTree()).rejects.toMatchObject(match(folderPrivacy));
+    await expect(service('darwin', { homeDir: dir }).homeList('')).rejects.toMatchObject(match(folderPrivacy));
   });
   for (const [id, platform, code] of [
     ['4a', 'linux', 'EPERM'],
@@ -85,11 +85,11 @@ describe('AS-08 injected denials', () => {
   ] as const)
     it(`A8-${id} preserves empty tree`, async () => {
       deny('readdir', dir, code);
-      expect(await service(platform).tree('p')).toEqual(empty);
+      expect(await service(platform).list('p', '')).toEqual(empty);
     });
   it('A8-4c linux realpath remains generic', async () => {
     deny('realpath', dir, 'EPERM');
-    await expect(service('linux').tree('p')).rejects.toMatchObject(
+    await expect(service('linux').list('p', '')).rejects.toMatchObject(
       match('That folder does not exist or cannot be read.'),
     );
   });
@@ -97,24 +97,48 @@ describe('AS-08 injected denials', () => {
     deny('readdir', dir, 'EPERM');
     const c = new AbortController();
     c.abort();
-    expect(await service('darwin').tree('p', c.signal)).toEqual(empty);
+    expect(await service('darwin').list('p', '', c.signal)).toEqual(empty);
   });
   it('A8-3b hidden entries stay empty', async () => {
     await mkdir(path.join(dir, 'node_modules'));
     await writeFile(path.join(dir, 'node_modules/x.js'), 'x');
     await writeFile(path.join(dir, '.env'), 'x');
-    expect(await service('darwin').tree('p')).toEqual(empty);
+    expect(await service('darwin').list('p', '')).toEqual(empty);
   });
   it('A8-8a denied root remains empty', async () => {
     deny('readdir', dir, 'EPERM');
-    expect(await service('darwin', { deniedRoots: [dir] }).tree('p')).toEqual(empty);
+    expect(await service('darwin', { deniedRoots: [dir] }).list('p', '')).toEqual(empty);
   });
   it('A8-8b denied subfolder remains silent', async () => {
     await mkdir(path.join(dir, 'sub'));
     await writeFile(path.join(dir, 'sub/note.txt'), 'x');
     await writeFile(path.join(dir, 'README.md'), 'x');
     deny('readdir', path.join(dir, 'sub'), 'EPERM');
-    expect((await service('darwin').tree('p')).entries.map((e) => e.path)).toEqual(['sub', 'README.md']);
+    expect((await service('darwin').list('p', '')).entries.map((e) => e.path)).toEqual(['sub', 'README.md']);
+  });
+  it('a denied non-root folder reports the denial when listed (darwin only)', async () => {
+    await mkdir(path.join(dir, 'sub'));
+    await writeFile(path.join(dir, 'sub/note.txt'), 'x');
+    deny('readdir', path.join(dir, 'sub'), 'EPERM');
+    await expect(service('darwin').list('p', 'sub')).rejects.toMatchObject(match(folderPrivacy));
+    expect(await service('linux').list('p', 'sub')).toEqual({ path: 'sub', entries: [], truncated: false });
+  });
+  it('a denied ancestor reports the denial when a folder below it is requested', async () => {
+    await mkdir(path.join(dir, 'sub/deeper'), { recursive: true });
+    deny('readdir', path.join(dir, 'sub'), 'EACCES');
+    await expect(service('darwin').list('p', 'sub/deeper')).rejects.toMatchObject(match(folderPermission));
+    await expect(service('linux').list('p', 'sub/deeper')).rejects.toMatchObject({ code: 'not_found' });
+  });
+  it('a denied home subfolder reports the denial', async () => {
+    await mkdir(path.join(dir, 'Desktop'));
+    deny('readdir', path.join(dir, 'Desktop'), 'EPERM');
+    await expect(service('darwin', { homeDir: dir }).homeList('Desktop')).rejects.toMatchObject(match(folderPrivacy));
+  });
+  it('a denied root fails search on darwin, and stays empty on linux', async () => {
+    await writeFile(path.join(dir, 'README.md'), 'x');
+    deny('readdir', dir, 'EPERM');
+    await expect(service('darwin').search('p', 'read')).rejects.toMatchObject(match(folderPrivacy));
+    expect(await service('linux').search('p', 'read')).toEqual({ entries: [], truncated: false });
   });
   it('A8-6a viewer EPERM maps without content or path', async () => {
     await writeFile(path.join(dir, 'README.md'), 'NEEDLE');

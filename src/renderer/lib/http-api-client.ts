@@ -8,12 +8,13 @@ import type {
   Chat,
   ChatChanges,
   ChatSummary,
-  HomeFileTree,
+  HomeFileListing,
   Id,
   ModelInfo,
   Project,
   ProjectFileContent,
-  ProjectFileTree,
+  ProjectFileListing,
+  ProjectFileSearchResult,
   ProjectListItem,
   PublicSettings,
   ReasoningEffort,
@@ -53,8 +54,8 @@ export class HttpApiClient implements ApiClient {
     return res;
   }
 
-  private async json<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const res = await this.send(method, path, body);
+  private async json<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+    const res = await this.send(method, path, body, signal ? { signal } : {});
     return (await res.json()) as T;
   }
 
@@ -140,8 +141,13 @@ export class HttpApiClient implements ApiClient {
     return `${this.baseUrl}/attachments/${enc(id)}/content`;
   }
 
-  listProjectFiles(projectId: Id) {
-    return this.json<ProjectFileTree>('GET', `/projects/${enc(projectId)}/files`);
+  listProjectFiles(projectId: Id, dir = '', signal?: AbortSignal) {
+    const q = dir === '' ? '' : `?path=${enc(dir)}`;
+    return this.json<ProjectFileListing>('GET', `/projects/${enc(projectId)}/files${q}`, undefined, signal);
+  }
+  searchProjectFiles(projectId: Id, query: string, signal?: AbortSignal) {
+    const path = `/projects/${enc(projectId)}/files/search?q=${enc(query)}`;
+    return this.json<ProjectFileSearchResult>('GET', path, undefined, signal);
   }
   readProjectFile(projectId: Id, path: string) {
     return this.json<ProjectFileContent>('GET', `/projects/${enc(projectId)}/files/content?path=${enc(path)}`);
@@ -149,8 +155,12 @@ export class HttpApiClient implements ApiClient {
   attachProjectFile(projectId: Id, path: string) {
     return this.json<AttachmentRef>('POST', `/projects/${enc(projectId)}/files/attach`, { path });
   }
-  listHomeFiles() {
-    return this.json<HomeFileTree>('GET', '/home/files');
+  listHomeFiles(dir = '', signal?: AbortSignal) {
+    const q = dir === '' ? '' : `?path=${enc(dir)}`;
+    return this.json<HomeFileListing>('GET', `/home/files${q}`, undefined, signal);
+  }
+  searchHomeFiles(query: string, signal?: AbortSignal) {
+    return this.json<ProjectFileSearchResult>('GET', `/home/files/search?q=${enc(query)}`, undefined, signal);
   }
   readHomeFile(path: string) {
     return this.json<ProjectFileContent>('GET', `/home/files/content?path=${enc(path)}`);

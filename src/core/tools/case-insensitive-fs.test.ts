@@ -1425,6 +1425,26 @@ function filesFor(rootPath: string, sandbox: SandboxOptions) {
   });
 }
 
+/**
+ * Everything the Files panel can show for the project: the root listing and, recursively, the listing of every folder
+ * it shows (as if every folder were expanded), plus the matches of a search for each hidden name.
+ */
+async function filesTree(files: ReturnType<typeof filesFor>, searchFor: readonly string[] = []) {
+  const entries: { path: string; type: 'file' | 'dir' }[] = [];
+  const queue = [''];
+  for (let dir = queue.shift(); dir !== undefined; dir = queue.shift()) {
+    for (const e of (await files.list('p', dir)).entries) {
+      entries.push(e);
+      if (e.type === 'dir') queue.push(e.path);
+    }
+  }
+  for (const name of searchFor) {
+    for (const e of (await files.search('p', name)).entries)
+      if (!entries.some((x) => x.path === e.path)) entries.push(e);
+  }
+  return { entries };
+}
+
 /** Every path the real walker yields for the project, from its realpath as every caller passes it. */
 async function walkRels(projectRoot: string, deniedRoots?: readonly string[]): Promise<string[]> {
   const rels: string[] = [];
@@ -1476,7 +1496,7 @@ async function expectHiddenEverywhere(x: Exposure): Promise<void> {
       'open walk',
     ).not.toEqual([]);
     expect(
-      (await files0.tree('p')).entries.filter((e) => hasSegment(e.path, x.hiddenNames)),
+      (await filesTree(files0, x.hiddenNames)).entries.filter((e) => hasSegment(e.path, x.hiddenNames)),
       'open Files tree',
     ).not.toEqual([]);
     expect((await files0.read('p', hiddenPath)).content, 'open Files read').toContain('owned dummy');
@@ -1537,7 +1557,7 @@ async function expectHiddenEverywhere(x: Exposure): Promise<void> {
     )
     .toEqual([]);
 
-  const listed = (await files.tree('p')).entries.map((e) => e.path);
+  const listed = (await filesTree(files, x.hiddenNames)).entries.map((e) => e.path);
   expect(listed, 'Files tree lists the control').toContain(x.visible);
   expect
     .soft(
@@ -1782,7 +1802,8 @@ describe('AS-06 R4 P1 firmlink spellings of denied roots and projects (filesyste
       .toBe('(empty)');
     expect.soft(await walkRels(projectRoot, deniedRoots), 'walk').toEqual([]);
     const files = filesFor(projectRoot, sandbox);
-    expect.soft((await files.tree('p')).entries, 'Files tree').toEqual([]);
+    expect.soft((await filesTree(files)).entries, 'Files tree').toEqual([]);
+    expect.soft((await files.search('p', 'txt')).entries, 'Files search').toEqual([]);
     await expect.soft(files.read('p', fileRel), 'Files read').rejects.toMatchObject({ code: 'invalid_request' });
     expect(await exists(path.join(await realpath(projectRoot), 'new.txt')), 'nothing written').toBe(false);
   }

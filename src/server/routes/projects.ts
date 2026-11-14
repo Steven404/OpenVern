@@ -21,7 +21,14 @@ export function projectRoutes(core: Core): Hono {
     return c.json(await core.projects.rename(c.req.param('id'), name));
   });
 
-  r.get(ROUTES.projectFiles, async (c) => c.json(await core.projectFiles.tree(c.req.param('id'), c.req.raw.signal)));
+  // `?path=` is one folder (root-relative POSIX, default the root); only its direct children are returned.
+  r.get(ROUTES.projectFiles, async (c) =>
+    c.json(await core.projectFiles.list(c.req.param('id'), c.req.query('path') ?? '', c.req.raw.signal)),
+  );
+
+  r.get(ROUTES.projectFileSearch, async (c) =>
+    c.json(await core.projectFiles.search(c.req.param('id'), c.req.query('q') ?? '', c.req.raw.signal)),
+  );
 
   r.get(ROUTES.projectFileContent, async (c) => {
     const p = c.req.query('path');
@@ -35,7 +42,13 @@ export function projectRoutes(core: Core): Hono {
     return c.json(await core.attachments.create(file));
   });
 
-  r.get(ROUTES.homeFiles, async (c) => c.json(await core.projectFiles.homeTree(c.req.raw.signal)));
+  r.get(ROUTES.homeFiles, async (c) =>
+    c.json(await core.projectFiles.homeList(c.req.query('path') ?? '', c.req.raw.signal)),
+  );
+
+  r.get(ROUTES.homeFileSearch, async (c) =>
+    c.json(await core.projectFiles.homeSearch(c.req.query('q') ?? '', c.req.raw.signal)),
+  );
 
   r.get(ROUTES.homeFileContent, async (c) => {
     const p = c.req.query('path');

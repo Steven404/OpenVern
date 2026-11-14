@@ -51,7 +51,14 @@ export const LIMITS = {
   pendingFilesPerChat: 50,
   /** Diff excerpt in an edit tool's output. */
   editResultDiffLines: 40,
-  fileTreeMaxEntries: 20_000,
+  /** Files panel: direct children listed per folder; more sets `truncated`. */
+  fileTreeFolderMaxEntries: 2_000,
+  /** Files panel filter: matching files returned per search; more sets `truncated: 'results'`. */
+  fileSearchMaxResults: 200,
+  /** Files panel filter: entries a search walks before it stops and reports `truncated: 'scanned'`. */
+  fileSearchMaxScanned: 50_000,
+  /** Files panel filter: longest accepted query. */
+  fileSearchMaxQueryLength: 1_000,
   viewerMaxBytes: 1024 * 1024,
   diffMaxLinesPerFile: 5_000,
 } as const;

@@ -1,5 +1,8 @@
 // Read-only project file browsing for the Files panel (v0.2 plan §4.7, G3.1).
 // Uses the tools' walker, ignore rules, deny list and sandbox, so the panel never shows or reads what the agent can't.
+// The panel lists one folder at a time (`list`, the folder's direct children) and filters with a capped server-side
+// search (`search`). The folder comes from the client, so it is checked against what a full walk from the root would
+// show (`resolveListedDir`) before anything is listed: a folder the walk would never enter is never listed either.
 // The home folder (chats without a project) adds a home-only deny layer (`home-deny.ts`: top-level dotfiles, app-data
 // folders, credential folders at any depth, symlinked targets of those) and rejects hardlinked files.
 
@@ -7,7 +10,13 @@ import { type FileHandle, open, readdir, readFile, realpath, stat } from 'node:f
 import os from 'node:os';
 import path from 'node:path';
 import { LIMITS } from '@shared/constants';
-import type { HomeFileTree, ProjectFileContent, ProjectFileEntry, ProjectFileTree } from '@shared/types';
+import type {
+  HomeFileListing,
+  ProjectFileContent,
+  ProjectFileEntry,
+  ProjectFileListing,
+  ProjectFileSearchResult,
+} from '@shared/types';
 import { accessDeniedError, CoreError } from '../errors';
 import {
   BLOCKED_MESSAGE,
@@ -16,7 +25,7 @@ import {
   resolveInProject,
   type SandboxOptions,
 } from '../tools/sandbox';
-import { walk } from '../tools/walk';
+import { walk, walkedKind } from '../tools/walk';
 import type { ProjectFilesService, ProjectsService } from '../types';
 import { homeSymlinkDeniedRoots, isHomeDeniedRel } from './home-deny';
 
@@ -29,10 +38,18 @@ type FileOptions = SandboxOptions & {
 
 export interface ProjectFilesDeps extends SandboxOptions {
   projects: Pick<ProjectsService, 'get'>;
-  /** Root for `homeTree` / `homeRead`. Defaults to `os.homedir()`. */
+  /** Root for `homeList` / `homeSearch` / `homeRead`. Defaults to `os.homedir()`. */
   homeDir?: string;
   /** Picks the macOS access-denial handling (AS-08). Defaults to process.platform; tests inject it. */
   platform?: NodeJS.Platform;
+  /** Overrides for the listing and search caps (tests). Defaults to the `LIMITS` values. */
+  limits?: Partial<FileLimits>;
+}
+
+interface FileLimits {
+  folderMaxEntries: number;
+  searchMaxResults: number;
+  searchMaxScanned: number;
 }
 
 const byName = (a: string, b: string): number => {
@@ -41,32 +58,11 @@ const byName = (a: string, b: string): number => {
   return x < y ? -1 : x > y ? 1 : a < b ? -1 : a > b ? 1 : 0;
 };
 
-/** Depth-first order: within a directory, dirs first, then case-insensitive name. */
-function sortDepthFirst(entries: ProjectFileEntry[]): ProjectFileEntry[] {
-  const children = new Map<string, ProjectFileEntry[]>();
-  for (const e of entries) {
-    const i = e.path.lastIndexOf('/');
-    const parent = i === -1 ? '' : e.path.slice(0, i);
-    const list = children.get(parent);
-    if (list) list.push(e);
-    else children.set(parent, [e]);
-  }
-  const out: ProjectFileEntry[] = [];
-  const emit = (dir: string): void => {
-    const list = children.get(dir);
-    if (!list) return;
-    list.sort((a, b) => {
-      if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
-      return byName(a.path, b.path);
-    });
-    for (const e of list) {
-      out.push(e);
-      if (e.type === 'dir') emit(e.path);
-    }
-  };
-  emit('');
-  return out;
-}
+/** Folder order: dirs first, then case-insensitive name. */
+const byEntry = (a: ProjectFileEntry, b: ProjectFileEntry): number => {
+  if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+  return byName(a.path, b.path);
+};
 
 function countLines(text: string): number {
   if (text === '') return 0;
@@ -90,6 +86,12 @@ export function createProjectFilesService(deps: ProjectFilesDeps): ProjectFilesS
   const sandbox: SandboxOptions = { deniedRoots: deps.deniedRoots, deniedFiles: deps.deniedFiles };
   const homeDir = () => deps.homeDir ?? os.homedir();
   const platform = deps.platform ?? process.platform;
+  const limits: FileLimits = {
+    folderMaxEntries: LIMITS.fileTreeFolderMaxEntries,
+    searchMaxResults: LIMITS.fileSearchMaxResults,
+    searchMaxScanned: LIMITS.fileSearchMaxScanned,
+    ...deps.limits,
+  };
 
   /** Sandbox for the home folder, rebuilt per call so newly created symlinks are seen. */
   async function homeSandbox(): Promise<FileOptions> {
@@ -117,20 +119,94 @@ export function createProjectFilesService(deps: ProjectFilesDeps): ProjectFilesS
     return { abs: res.abs, rel: res.rel, size: info.size };
   }
 
-  async function listTree(
-    rootPath: string,
-    opts: FileOptions,
-    signal?: AbortSignal,
-  ): Promise<ProjectFileTree & { root: string }> {
-    let root: string;
+  async function realRootOf(rootPath: string): Promise<string> {
     try {
-      root = await realpath(rootPath);
+      return await realpath(rootPath);
     } catch (err) {
       throw accessDeniedError(err, 'folder', platform) ?? new CoreError('path_invalid');
     }
+  }
+
+  /**
+   * Validates a client-supplied folder (root-relative POSIX) before it is listed, and returns it. The panel must never
+   * show what a full walk from the root would not, and `walk`'s `startRel` is itself exempt from the ignore rules and
+   * from the per-segment checks, so this refuses, in order:
+   * - anything the agent's sandbox refuses (`resolveInProject`, as `list_files` uses it): NUL bytes, `..` escapes and
+   *   absolute paths outside the root, symlinks leaving it, deny-listed names, `deniedRoots`, a data dir, and the home
+   *   deny layer: `invalid_request` with the sandbox's message;
+   * - any spelling other than the canonical one the listing returns (`.`, `..`, empty segments, leading `/`):
+   *   `invalid_request`;
+   * - a folder that doesn't exist: `not_found`;
+   * - a folder a full walk would never yield (`walkedKind`): a symlink anywhere along the path, an always-skipped dir
+   *   (`node_modules`, ...), a `.gitignore`d dir, or a spelling that differs from the stored name: `not_found`, as the
+   *   panel never shows it. `list_files` lets the agent list an ignored start directory; the panel deliberately doesn't;
+   * - a file: `invalid_request`.
+   * `''` (the root) is not checked here: the walker's own start guards apply, and a denied root lists as empty, as before.
+   */
+  async function resolveListedDir(root: string, dir: string, opts: FileOptions, signal: AbortSignal): Promise<string> {
+    if (dir === '') return '';
+    const res = await resolveInProject(root, dir, opts);
+    if (!res.ok) throw new CoreError('invalid_request', res.message);
+    if (dir.startsWith('/') || dir.split('/').some((s) => s === '' || s === '.' || s === '..')) {
+      throw new CoreError('invalid_request', `Invalid folder path: ${dir}`);
+    }
+    const notFound = () => new CoreError('not_found', `Folder not found: ${dir}`);
+    if (!res.exists) throw notFound();
+    let kind: Awaited<ReturnType<typeof walkedKind>>;
+    try {
+      kind = await walkedKind({ root, deniedRoots: opts.deniedRoots, isDeniedRel: opts.isDeniedRel, signal }, dir);
+    } catch (err) {
+      throw accessDeniedError(err, 'folder', platform) ?? notFound();
+    }
+    if (kind === 'file') throw new CoreError('invalid_request', `${dir} is not a folder.`);
+    if (kind !== 'dir') throw notFound();
+    return dir;
+  }
+
+  async function listAt(
+    rootPath: string,
+    dir: string,
+    opts: FileOptions,
+    signal?: AbortSignal,
+  ): Promise<ProjectFileListing & { root: string }> {
+    const root = await realRootOf(rootPath);
+    const abort = signal ?? new AbortController().signal;
+    const rel = await resolveListedDir(root, dir, opts, abort);
+    const entries: ProjectFileEntry[] = [];
+    // One level: the walker reads the folder whole anyway, so collect it all, sort, then cut (a stable first page).
+    for await (const e of walk({
+      root,
+      startRel: rel,
+      maxDepth: 1,
+      signal: abort,
+      deniedRoots: opts.deniedRoots,
+      isDeniedRel: opts.isDeniedRel,
+    })) {
+      if (e.kind === 'symlink') continue; // never followed, so nothing to show
+      entries.push({ path: e.rel, type: e.kind });
+    }
+    if (entries.length === 0 && platform === 'darwin' && !abort.aborted) await assertListable(root, rel, opts);
+    entries.sort(byEntry);
+    const truncated = entries.length > limits.folderMaxEntries;
+    return { root, path: rel, entries: truncated ? entries.slice(0, limits.folderMaxEntries) : entries, truncated };
+  }
+
+  async function searchAt(
+    rootPath: string,
+    query: string,
+    opts: FileOptions,
+    signal?: AbortSignal,
+  ): Promise<ProjectFileSearchResult> {
+    const q = query.trim().toLowerCase();
+    if (q === '') throw new CoreError('invalid_request', 'Missing search text.');
+    if (q.length > LIMITS.fileSearchMaxQueryLength)
+      throw new CoreError('invalid_request', 'The search text is too long.');
+    const root = await realRootOf(rootPath);
     const abort = signal ?? new AbortController().signal;
     const entries: ProjectFileEntry[] = [];
-    let truncated = false;
+    let scanned = 0;
+    let truncated: ProjectFileSearchResult['truncated'] = false;
+    // Breadth-first walk order, so shallow matches come first; deterministic for a given tree.
     for await (const e of walk({
       root,
       startRel: '',
@@ -139,26 +215,35 @@ export function createProjectFilesService(deps: ProjectFilesDeps): ProjectFilesS
       deniedRoots: opts.deniedRoots,
       isDeniedRel: opts.isDeniedRel,
     })) {
-      if (e.kind === 'symlink') continue; // never followed, so nothing to show
-      if (entries.length >= LIMITS.fileTreeMaxEntries) {
-        truncated = true;
+      if (scanned >= limits.searchMaxScanned) {
+        truncated = 'scanned';
         break;
       }
-      entries.push({ path: e.rel, type: e.kind });
+      scanned++;
+      if (e.kind !== 'file' || !e.rel.toLowerCase().includes(q)) continue;
+      if (entries.length >= limits.searchMaxResults) {
+        truncated = 'results';
+        break;
+      }
+      entries.push({ path: e.rel, type: 'file' });
     }
-    if (entries.length === 0 && platform === 'darwin' && !abort.aborted) await assertRootListable(root, opts);
-    return { root, entries: sortDepthFirst(entries), truncated };
+    if (abort.aborted)
+      truncated = 'scanned'; // stopped part-way; nobody is waiting for the answer anyway
+    else if (scanned === 0 && platform === 'darwin') await assertListable(root, '', opts);
+    return { entries, truncated };
   }
 
   /**
-   * darwin only (AS-08). The walker skips a root it can't read (walk.ts:104-108), so a macOS privacy denial would list
-   * as an empty project. Repeats the walker's own root call, only where the walker made it (its root guards,
-   * walk.ts:82-84), and turns EPERM/EACCES into an actionable error. Any other error keeps today's empty tree.
+   * darwin only (AS-08). The walker skips a folder it can't read (walk.ts, the `readdir` catch), so a macOS privacy
+   * denial would list as an empty folder. Repeats the walker's own `readdir` of the listed folder, only where the
+   * walker made it (its start guards), and turns EPERM/EACCES into an actionable error. Any other error keeps today's
+   * empty listing.
    */
-  async function assertRootListable(root: string, opts: FileOptions): Promise<void> {
-    if (isWithinAny(opts.deniedRoots, root) || (await isInsideOpenVernDataDir(root, root))) return;
+  async function assertListable(root: string, rel: string, opts: FileOptions): Promise<void> {
+    const abs = path.join(root, rel);
+    if (isWithinAny(opts.deniedRoots, abs) || (await isInsideOpenVernDataDir(root, abs))) return;
     try {
-      await readdir(root, { withFileTypes: true }); // result discarded: nothing is listed from here
+      await readdir(abs, { withFileTypes: true }); // result discarded: nothing is listed from here
     } catch (err) {
       const denied = accessDeniedError(err, 'folder', platform);
       if (denied) throw denied;
@@ -207,10 +292,15 @@ export function createProjectFilesService(deps: ProjectFilesDeps): ProjectFilesS
   }
 
   return {
-    async tree(projectId, signal) {
+    async list(projectId, dir, signal) {
       const project = await deps.projects.get(projectId);
-      const listed = await listTree(project.rootPath, sandbox, signal);
-      return { entries: listed.entries, truncated: listed.truncated };
+      const { root: _root, ...listed } = await listAt(project.rootPath, dir, sandbox, signal);
+      return listed;
+    },
+
+    async search(projectId, query, signal) {
+      const project = await deps.projects.get(projectId);
+      return searchAt(project.rootPath, query, sandbox, signal);
     },
 
     read(projectId, relPath) {
@@ -221,8 +311,12 @@ export function createProjectFilesService(deps: ProjectFilesDeps): ProjectFilesS
       return deps.projects.get(projectId).then((project) => readBytesAt(project.rootPath, relPath, sandbox));
     },
 
-    async homeTree(signal): Promise<HomeFileTree> {
-      return listTree(homeDir(), await homeSandbox(), signal);
+    async homeList(dir, signal): Promise<HomeFileListing> {
+      return listAt(homeDir(), dir, await homeSandbox(), signal);
+    },
+
+    async homeSearch(query, signal) {
+      return searchAt(homeDir(), query, await homeSandbox(), signal);
     },
 
     async homeRead(relPath) {
