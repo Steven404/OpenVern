@@ -81,7 +81,8 @@ Typical keyless session: `OPENVERN_FAKE_PROVIDER=1 npm run dev:web`, open Settin
 
 ## Build and install
 
-The Linux commands in this section are unchanged. They have not yet been re-run on the macOS-port branch.
+The Linux commands in this section are unchanged. They were re-run on the macOS-port branch (see "What was run on
+Linux" below).
 
 ```bash
 npm run build           # main, preload and renderer into out/ (the renderer bundle is minified)
@@ -206,7 +207,7 @@ Integrity validation doesn't apply on Linux, so no tamper refusal is claimed the
 
 | State | What it is | Status |
 |---|---|---|
-| **Dev / test** | Running from source (`dev`, `dev:web`, `preview`), tests and e2e | Works on macOS. See the table below |
+| **Dev / test** | Running from source (`dev`, `dev:web`, `preview`), tests and e2e | Works on macOS and Linux. See the tables below |
 | **Local install** | The `dist:mac` build installed by `install-local-mac.sh` | Built, installed into `~/Applications` and checked with the release identity on macOS (launch, menus, shortcuts, Keychain) |
 | **Public release** | Developer ID signed, notarized and stapled | Not available. Needs an Apple Developer Program membership and isn't planned yet |
 
@@ -230,7 +231,22 @@ As of 2026-11-10, on macOS 26.6 (arm64):
 | `scripts/install-local-mac.sh` and `--uninstall` | Passed, in a temporary folder and into `~/Applications` |
 | `npm run dev`, `npm run dev:web` and `npm run preview` | Start on macOS. `preview` uses the Keychain item |
 
-The Linux commands in this README are unchanged. Their checks on this branch are still pending.
+### What was run on Linux
+
+As of 2026-11-14, on CachyOS x86_64 (KDE Wayland), at commit `872d66c`:
+
+| Command | Result |
+|---|---|
+| `npm test` | Passed: 1,220 tests passed, 83 skipped. 82 of the skips are the case-insensitive filesystem tests, which skip on case-sensitive volumes |
+| `npm run typecheck`, `npm run lint` | Passed |
+| `npm audit --omit=dev --audit-level=high`, `npm run secrets:scan` | Passed |
+| `npm run e2e` | Passed: web 78 + 11 + 60 + 25, Electron 79 + 11 + 60 + 25 checks (one check is macOS-only). Ctrl+C leaves no processes behind |
+| `npm run preview` | No menu bar, Ctrl labels, Ctrl+N/B/] work, `--no-sandbox` warning unchanged |
+| `npm run dist` | Passed: `release/OpenVern-0.3.0-x86_64.AppImage`, artifact name unchanged |
+| Fuse read-back on the AppImage | Matches the table above. `ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS` and `--inspect` have no effect |
+| `npm run e2e:packaged` with `E2E_APP=<AppImage>` | Passed: 175 checks (one check is macOS-only) |
+| `scripts/install-local.sh` and `--uninstall` | Passed, idempotent, in a temporary home folder |
+| Upgrade from 0.1 (`harness` data copy) | Passed with the packaged AppImage in a temporary home folder |
 
 ## Data
 

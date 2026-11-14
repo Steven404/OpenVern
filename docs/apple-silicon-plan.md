@@ -1,11 +1,11 @@
 # OpenVern — Apple Silicon (macOS arm64) plan
 
-> **Status (2026-11-10):** AS-00 to AS-13 are implemented and reviewed on macOS arm64 (AS-13 after accuracy-review fixes). AS-06 R4 and AS-08 have review
-> approval and your H4 approval (2026-11-10). Each task is one commit on `feature/apple-silicon` (AS-01 to AS-13). Nothing
-> is merged or pushed. CB-2 PASS (you, 2026-11-10). IG-2's macOS run (which covers IG-1's macOS half) is done: the A2
-> artifacts are built, verified, installed and pass on macOS (§8, §9). Open: Linux runs LX-1 and LX-2 (not run) and H4 for AS-05,
-> AS-07, AS-12, IG-1 and IG-2. The IG-1/IG-2 Sol max review was CONDITIONAL (LX-1/LX-2 and H4); its doc fixes D1–D3 are applied. AS-14 to AS-16 and IG-3 are optional and not started. Remaining
-> work: `docs/apple-silicon-remaining-tasks.md` · **Owner:** Stefanos · **Last updated:** 2026-11-10
+> **Status (2026-11-14): complete (A2 reached on macOS; Linux regression passed).** AS-00 to AS-13, IG-1 and IG-2
+> are done. Linux LX-1 and LX-2 passed on CachyOS x86_64 at `872d66c` (2026-11-14; §8). H4 is recorded for AS-05, AS-06 R4,
+> AS-07, AS-08, AS-12, IG-1 and IG-2 (2026-11-10 and 2026-11-12), so the IG-1/IG-2 Sol max CONDITIONAL review and the AS-12
+> conditions are met. The work is merged to `main` (`feature/apple-silicon` is fully merged). AS-14 to AS-16 and IG-3
+> are optional and not started. **Owner:** Stefanos · **Last updated:** 2026-11-14
+> *Previous status (2026-11-10, historical):* implemented and reviewed on macOS; Linux runs and H4 open; nothing merged.
 > *Original status (2026-11-08, historical):* AS-00 baseline **partial** (V1–V3, V11 and the secret scan measured; V5
 > and V14 partial, AS-04 gate cleared 2026-11-08; V4 interactive and V10 manual checks pending), no implementation task
 > started; conditional start order in §6.1.
@@ -939,19 +939,24 @@ anything merges into `main`. Nothing is pushed.
 
 **Local macOS milestone (IG-2):**
 *IG-2 macOS results (2026-11-10, HEAD `8e01a87`; evidence in the local `reports/apple-silicon-ig2.md`). A box is
-ticked only when every platform it names has passed. Linux (LX-1, LX-2) was not run, so no Linux claim is made.*
+ticked only when every platform it names has passed. Linux LX-1 and LX-2 ran on 2026-11-14 (CachyOS x86_64, KDE Wayland,
+HEAD `872d66c`).*
 
 - [x] L1 `npm ci` plus the README's Electron binary-fetch step installs an arm64 Electron. `npm run dev`, `dev:web` and `preview` work. *macOS: `npm ci` rc 0,
       lockfile unchanged. Electron 45.2.1 has no install script, so the binary came from the README's
       `node node_modules/electron/install.js` step (arm64 Mach-O). That is pre-existing and not macOS-specific. `dev`
       (CB-2, you), `dev:web` (vite 200, API up) and `preview` (safeStorage selected, no prompt) all start.*
-- [ ] L2 Typecheck, lint, tests, audit and secret scan pass on macOS and Linux. *macOS PASS: lint, typecheck,
+- [x] L2 Typecheck, lint, tests, audit and secret scan pass on macOS and Linux. *macOS PASS: lint, typecheck,
       1,302 passed / 1 skipped, gitleaks 8.30.1 git+dir clean, prod audit 0 (full audit: 6 moderate, report-only).
-      Linux pending (LX-1).*
-- [ ] L3 `npm run e2e` passes on macOS and Linux, and no processes are left behind. *macOS PASS: web 79/11/60/25,
-      literal `e2e:electron` 80/11/60/25, all 0 failed, nothing left behind. Linux pending (LX-1).*
-- [ ] L4 Labels show ⌘ on macOS and Ctrl on Linux. Cmd and Ctrl shortcuts both work. *macOS PASS (CB-2, you, `npm run
-      dev`: ⌘ N, "Toggle right panel (⌘ ])", `~/code/my-app`, Cmd+N/B/]). Linux Ctrl pending (LX-1).*
+      Linux PASS (LX-1): lint, typecheck, 1,220 passed / 83 skipped (82 are the case-insensitive-fs tests, which skip on
+      case-sensitive volumes), gitleaks 8.30.1 clean, prod audit gate (`--audit-level=high`) passes (2 new moderate `hono`
+      advisories, report-only).*
+- [x] L3 `npm run e2e` passes on macOS and Linux, and no processes are left behind. *macOS PASS: web 79/11/60/25,
+      literal `e2e:electron` 80/11/60/25, all 0 failed, nothing left behind. Linux PASS (LX-1): web 78/11/60/25, Electron
+      79/11/60/25 (the darwin-only Cmd+N check is skipped), 0 failed; Ctrl+C on web and Electron leaves no processes.*
+- [x] L4 Labels show ⌘ on macOS and Ctrl on Linux. Cmd and Ctrl shortcuts both work. *macOS PASS (CB-2, you, `npm run
+      dev`: ⌘ N, "Toggle right panel (⌘ ])", `~/code/my-app`, Cmd+N/B/]). Linux PASS (LX-1, `npm run preview`): "Ctrl N",
+      "Toggle right panel (Ctrl ])", Ctrl+N/B/] work, no menu bar, `--no-sandbox` warning unchanged.*
 - [x] L5 Native Edit shortcuts, Cmd+Q/W/M/H and Dock reopen all work in the packaged app. *Installed real-identity
       app, you: menus App/File/Edit/Window only; Cmd+A/C/X/V/Z, Shift+Cmd+Z; Cmd+M/H/W each restored from the Dock;
       Cmd+Q quits.*
@@ -966,16 +971,19 @@ ticked only when every platform it names has passed. Linux (LX-1, LX-2) was not 
 - [x] L8 `dist:mac` gives an ad-hoc signed arm64 `.app` and `.dmg` that verify and launch. The packaged e2e passes.
       *`lipo` arm64, `--deep --strict` valid, `Signature=adhoc`, DMG checksum valid; Finder and Spotlight launches with
       no Gatekeeper step; `e2e:packaged` on validation package `dev.stefanos.openvern.ig2val`: 176/0.*
-- [ ] L9 Fuses read back as D4. The negative checks pass. *macOS PASS: release, validation and installed `.app` read
+- [x] L9 Fuses read back as D4. The negative checks pass. *macOS PASS: release, validation and installed `.app` read
       back D4; on a validation copy, RunAsNode, `NODE_OPTIONS` and `--inspect` have no effect and a tampered `app.asar`
-      refuses to launch. AppImage read-back pending (LX-2).*
+      refuses to launch. Linux PASS (LX-2): the AppImage and `linux-unpacked` binaries read back D4;
+      RunAsNode, `NODE_OPTIONS` and `--inspect` have no effect (no tamper refusal claimed on Linux).*
 - [x] L10 `install-local-mac.sh` installs and uninstalls cleanly. *Real `~/Applications` install ×3 and uninstall ×2
       (idempotent); data and Keychain untouched.*
-- [ ] L11 Linux: same-named AppImage, `install-local.sh` OK, no menu bar, unchanged behaviour. *Pending (LX-2).*
+- [x] L11 Linux: same-named AppImage, `install-local.sh` OK, no menu bar, unchanged behaviour. *PASS (LX-2):
+      `release/OpenVern-0.3.0-x86_64.AppImage`; `install-local.sh` install, reinstall and `--uninstall` in a temp HOME;
+      `e2e:packaged` 175/0; no menu bar; the 0.1 `harness` migration copies once in a temp HOME.*
 - [x] L12 README is accurate for macOS. No doc suggests quarantine removal, Gatekeeper disabling or `--no-sandbox`.
       *No unsafe advice found. The rebuild bullet and the run-results tables were corrected after the IG-2
-      integration review (D1–D3, 2026-11-10). macOS documentation is accurate as far as reviewed; the Linux side waits
-      for LX-1/LX-2.*
+      integration review (D1–D3, 2026-11-10). macOS documentation is accurate as far as reviewed; the README's Linux run table was added after LX-1/LX-2
+      (2026-11-14).*
 
 **Release milestone (IG-3, optional):** signed, notarized and stapled; opens on a clean Mac after download; the CI
 release run fails closed without secrets.
@@ -983,6 +991,9 @@ release run fails closed without secrets.
 ---
 
 ## 9. Completion tracker
+
+*2026-11-14:* LX-1 and LX-2 passed (§8) and the work is merged to `main`, so the "Linux pending", "not merged" and
+"H4 pending" notes in the rows below are superseded.
 
 | Task | Implementer | Reviewer | Done |
 |---|---|---|---|

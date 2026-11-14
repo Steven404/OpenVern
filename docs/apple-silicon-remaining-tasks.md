@@ -1,12 +1,10 @@
 # OpenVern — Apple Silicon remaining tasks
 
-> **Status (2026-11-12):** CB-1 approved; CB-2 PASS (you, 2026-11-10). H4 approved for AS-05, AS-06 R4, AS-07, AS-08,
-> AS-12, IG-1 and IG-2 (AS-06 R4 and AS-08 on 2026-11-10, the rest on 2026-11-12); merging to `main` waits for Linux.
-> Real-identity folder prompt observed (2026-11-12): "OpenVern" would like to access files in your Desktop folder.
-> AS-10 to AS-13 are implemented and reviewed on macOS (AS-13 after accuracy-review fixes) (AS-12 is conditional on LX-2 and H4). AS-01 to AS-13 are one commit
-> each on `feature/apple-silicon`, not merged or pushed. IG-2's macOS run (covering IG-1's macOS half, D-ORDER yes) is
-> done, and A2 passes on macOS (plan §8, §9). Pending: Linux runs (LX-1, LX-2). The IG-1/IG-2 Sol max review was CONDITIONAL
-> (LX-1/LX-2 and H4); its doc fixes D1–D3 are applied.
+> **Status (2026-11-14): complete.** Linux LX-1 and LX-2 passed on CachyOS x86_64 at `872d66c` (plan §8). H4 is
+> approved for AS-05, AS-06 R4, AS-07, AS-08, AS-12, IG-1 and IG-2 (2026-11-10 and 2026-11-12), so the IG-1/IG-2 Sol max
+> CONDITIONAL review and AS-12's conditions are met. AS-01 to AS-13 are merged to `main` (`feature/apple-silicon` is
+> fully merged). Real-identity folder prompt observed (2026-11-12): "OpenVern" would like to access files in your Desktop folder.
+> Remaining items are optional: H5 cleanup and AS-14 to AS-16 / IG-3. The cards below are kept as the record.
 > **Companion to:** `docs/apple-silicon-plan.md` (the plan). The plan's §1–§6 rules, decisions and original task
 > scopes stay normative. This document lists only the **remaining deltas**, as implementation-ready cards.
 > **Orchestration:** Orchestrator Ruleset v1 (2026-11-06). Tag of this planning task: `plan` / **high** (filesystem
