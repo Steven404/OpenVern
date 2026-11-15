@@ -1,3 +1,4 @@
+import { terminalRegistry } from '@renderer/features/terminal/registry';
 import { useTerminalUiStore } from '@renderer/features/terminal/terminal-store';
 import {
   FakeTerminalBridge,
@@ -19,6 +20,7 @@ beforeEach(() => {
   resetUi();
   window.sessionStorage.clear();
   useTerminalUiStore.setState({ openDocks: {}, focusRequests: {} });
+  terminalRegistry.disposeAll();
   resetTerminalFakes();
   bridge = new FakeTerminalBridge();
   installTerminalBridge(bridge);

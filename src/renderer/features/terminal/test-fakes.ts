@@ -13,8 +13,6 @@ import type {
   TerminalInfo,
   TerminalOpenRequest,
   TerminalOpenResult,
-  TerminalReadAnswer,
-  TerminalReadRequest,
   TerminalStatus,
 } from '@shared/terminal';
 import type { Id } from '@shared/types';
@@ -51,6 +49,9 @@ export class Terminal {
   /** Everything written to the screen, in order. */
   readonly writes: string[] = [];
   disposed = false;
+  buffer = {
+    active: { length: 1, getLine: () => ({ isWrapped: false, translateToString: () => this.writes.join('') }) },
+  };
 
   private selection: string | null = null;
   private readonly dataListeners = new Set<Listener<string>>();
@@ -74,8 +75,9 @@ export class Terminal {
     host.append(this.element);
   }
 
-  write(data: string): void {
-    this.writes.push(data);
+  write(data: string, callback?: () => void): void {
+    if (data) this.writes.push(data);
+    callback?.();
   }
 
   focus(): void {
@@ -160,8 +162,8 @@ export class FitAddon {
 
 interface FakeSession {
   info: TerminalInfo;
-  /** Everything written so far, as the snapshot would hold it. */
-  snapshot: string;
+  /** Everything written so far, as the replay would hold it. */
+  replay: string;
   /** Sequence number of the last data event. */
   seq: number;
 }
@@ -171,21 +173,7 @@ export class FakeTerminalBridge implements TerminalBridge {
   readonly opens: TerminalOpenRequest[] = [];
   readonly writes: { chatId: Id; data: string }[] = [];
   readonly resizes: { chatId: Id; cols: number; rows: number }[] = [];
-  readonly reads: { chatId: Id; request: TerminalReadRequest }[] = [];
   readonly closes: Id[] = [];
-
-  /** What `read` answers. Replace it to script an answer or a failure. */
-  readAnswer: (chatId: Id, request: TerminalReadRequest) => Promise<TerminalReadAnswer> = async (chatId) => ({
-    ok: true,
-    result: {
-      info: { chatId, shell: 'zsh', cwd: '/home/you', cols: 80, rows: 24, status: { state: 'running' } },
-      totalLines: 1,
-      startLine: 1,
-      endLine: 1,
-      text: 'the output',
-      truncated: false,
-    },
-  });
 
   private sessions = new Map<Id, FakeSession>();
   private gate: Promise<void> | null = null;
@@ -205,8 +193,8 @@ export class FakeTerminalBridge implements TerminalBridge {
   }
 
   /**
-   * Like main, the snapshot is taken when `open` is handled; a held gate only delays the reply. Data that comes in while
-   * the reply is delayed is therefore newer than the snapshot the renderer receives.
+   * Like main, the replay is taken when `open` is handled; a held gate only delays the reply. Data that comes in while
+   * the reply is delayed is therefore newer than the replay the renderer receives.
    */
   open(req: TerminalOpenRequest): Promise<TerminalOpenResult> {
     this.opens.push(req);
@@ -219,7 +207,13 @@ export class FakeTerminalBridge implements TerminalBridge {
     const existing = this.sessions.get(req.chatId);
     // Main attaches to a running session always, and to an exited one unless `restart` asks for a fresh shell.
     if (existing && (existing.info.status.state === 'running' || req.restart !== true)) {
-      return { info: existing.info, snapshot: existing.snapshot, seq: existing.seq, created: false };
+      return {
+        info: existing.info,
+        replay: existing.replay,
+        seq: existing.seq,
+        created: false,
+        replayTruncated: false,
+      };
     }
     // No session, or an exited one with `restart`: main starts a new shell.
     const session: FakeSession = {
@@ -231,11 +225,11 @@ export class FakeTerminalBridge implements TerminalBridge {
         rows: req.rows,
         status: { state: 'running' },
       },
-      snapshot: '',
+      replay: '',
       seq: 0,
     };
     this.sessions.set(req.chatId, session);
-    return { info: session.info, snapshot: '', seq: 0, created: true };
+    return { info: session.info, replay: '', seq: 0, created: true, replayTruncated: false };
   }
 
   write(chatId: Id, data: string): void {
@@ -246,9 +240,8 @@ export class FakeTerminalBridge implements TerminalBridge {
     this.resizes.push({ chatId, cols, rows });
   }
 
-  async read(chatId: Id, request: TerminalReadRequest): Promise<TerminalReadAnswer> {
-    this.reads.push({ chatId, request });
-    return this.readAnswer(chatId, request);
+  async list(): Promise<TerminalInfo[]> {
+    return [...this.sessions.values()].map((s) => s.info);
   }
 
   async close(chatId: Id): Promise<void> {
@@ -265,7 +258,7 @@ export class FakeTerminalBridge implements TerminalBridge {
   }
 
   /** An existing session, as if main had started it earlier (a reload, or a dock that was hidden). */
-  seed(chatId: Id, opts: { snapshot?: string; seq?: number } = {}): void {
+  seed(chatId: Id, opts: { replay?: string; seq?: number } = {}): void {
     this.sessions.set(chatId, {
       info: {
         chatId,
@@ -275,13 +268,13 @@ export class FakeTerminalBridge implements TerminalBridge {
         rows: 24,
         status: { state: 'running' },
       },
-      snapshot: opts.snapshot ?? '',
+      replay: opts.replay ?? '',
       seq: opts.seq ?? 0,
     });
   }
 
   /**
-   * A data event from the shell. `seq` defaults to the next number. The session's snapshot only grows for a newer
+   * A data event from the shell. `seq` defaults to the next number. The session's replay only grows for a newer
    * sequence number, which is what main does too.
    */
   emitData(chatId: Id, data: string, seq?: number): void {
@@ -289,7 +282,7 @@ export class FakeTerminalBridge implements TerminalBridge {
     const nextSeq = seq ?? (session?.seq ?? 0) + 1;
     if (session && nextSeq > session.seq) {
       session.seq = nextSeq;
-      session.snapshot += data;
+      session.replay += data;
     }
     const event: TerminalDataEvent = { chatId, seq: nextSeq, data };
     for (const listener of this.dataListeners) listener(event);

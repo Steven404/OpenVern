@@ -1,22 +1,13 @@
 // One chat's terminal in the dock (terminal plan T3.2).
 //
-// Main owns the shell: `open` creates the chat's session or attaches to the one still running, and returns a snapshot
-// plus the sequence number it covers. The hook writes the snapshot and drops data events at or below that number, so a
-// hidden-and-shown dock (or a reloaded window) shows the output once. Unmounting disposes the xterm instance only; the
-// session keeps running until `close` (End, or the chat is deleted).
+// The registry owns the emulator and subscriptions. This hook only mounts its element and observes UI state.
 
-import {
-  TERMINAL,
-  type TerminalBridge,
-  type TerminalDataEvent,
-  type TerminalInfo,
-  type TerminalStatus,
-} from '@shared/terminal';
+import type { TerminalBridge, TerminalInfo } from '@shared/terminal';
 import type { Id } from '@shared/types';
 import type { Terminal } from '@xterm/xterm';
 import { type RefObject, useCallback, useEffect, useRef, useState } from 'react';
 import { getTerminalBridge } from './bridge';
-import { createFitAddon, createTerminal, TERMINAL_DOCK_PADDING, waitForTerminalFont } from './xterm';
+import { terminalRegistry } from './registry';
 
 /** Resizes are coalesced this long, so a drag of the dock's edge sends one IPC message, not twenty. */
 export const RESIZE_DEBOUNCE_MS = 120;
@@ -50,37 +41,7 @@ export interface TerminalHandle {
   retry(): void;
 }
 
-/** UTF-8 size of one code point (a lone surrogate is encoded as the replacement character, 3 bytes). */
-function utf8Length(codePoint: number): number {
-  if (codePoint <= 0x7f) return 1;
-  if (codePoint <= 0x7ff) return 2;
-  if (codePoint <= 0xffff) return 3;
-  return 4;
-}
-
-/**
- * Splits one xterm `onData` payload (a paste arrives as a single large string) into pieces main accepts. Iteration is
- * by code point, so a surrogate pair or a multi-byte character is never cut in half. Order is preserved.
- */
-export function splitTerminalWrite(data: string, maxBytes = TERMINAL.writeMaxBytes): string[] {
-  if (data === '') return [];
-  const limit = Math.max(1, Math.floor(maxBytes));
-  const pieces: string[] = [];
-  let piece = '';
-  let bytes = 0;
-  for (const char of data) {
-    const size = utf8Length(char.codePointAt(0) ?? 0);
-    if (bytes + size > limit && piece !== '') {
-      pieces.push(piece);
-      piece = '';
-      bytes = 0;
-    }
-    piece += char;
-    bytes += size;
-  }
-  if (piece !== '') pieces.push(piece);
-  return pieces;
-}
+export { splitTerminalWrite } from './write';
 
 /** Electron prefixes a rejected `invoke` with the channel; the user should see only main's sentence. */
 const IPC_ERROR_PREFIX = /^(?:Error invoking remote method '[^']*':\s*)+/;
@@ -107,7 +68,7 @@ export function useTerminal(chatId: Id, options: UseTerminalOptions): TerminalHa
   const [hasSelection, setHasSelection] = useState(false);
   const [attempt, setAttempt] = useState(0);
 
-  // `attempt` is the Restart / Retry counter: bumping it disposes this terminal and attaches again.
+  // `attempt` triggers another attach; only Restart replaces an exited emulator.
   // biome-ignore lint/correctness/useExhaustiveDependencies: `attempt` is a trigger, not a value read inside
   useEffect(() => {
     const host = containerRef.current;
@@ -117,135 +78,51 @@ export function useTerminal(chatId: Id, options: UseTerminalOptions): TerminalHa
     const restart = restartRequested.current;
     restartRequested.current = false;
 
-    const term = createTerminal();
-    const fit = createFitAddon();
-    term.loadAddon(fit);
-    termRef.current = term;
+    let disposed = false;
+    let detach: (() => void) | undefined;
+    let off: (() => void) | undefined;
     setPhase('opening');
     setInfo(null);
-    setError(null);
     setHasSelection(false);
-
-    let disposed = false;
-    /** `null` until `open` resolves: events are buffered, then filtered by the snapshot's sequence number. */
-    let snapshotSeq: number | null = null;
-    let ready = false;
-    /** An exit that arrived before `open` resolved. It wins over the status in the reply (the shell is gone). */
-    let exitStatus: TerminalStatus | null = null;
-    const buffered: TerminalDataEvent[] = [];
-    const unsubscribe: (() => void)[] = [];
-
-    const writeIfNew = (event: TerminalDataEvent) => {
-      if (event.seq <= (snapshotSeq ?? -1)) return;
-      term.write(event.data);
-    };
-    unsubscribe.push(
-      bridge.onData((event) => {
-        if (event.chatId !== chatId) return;
-        if (snapshotSeq === null) buffered.push(event);
-        else writeIfNew(event);
-      }),
-      bridge.onExit((event) => {
-        if (event.chatId !== chatId) return;
-        // Nothing more goes to a dead session: input, resizes and further writes wait for Restart.
-        exitStatus = event.status;
-        ready = false;
-        setPhase(event.status.state === 'exited' ? 'exited' : 'running');
-        setInfo((previous) => (previous ? { ...previous, status: event.status } : previous));
-      }),
-    );
-
-    const inputOff = term.onData((data) => {
-      if (!ready) return;
-      for (const piece of splitTerminalWrite(data)) bridge.write(chatId, piece);
-    });
-    const selectionOff = term.onSelectionChange(() => setHasSelection(term.hasSelection()));
-    const resizeOff = term.onResize(({ cols, rows }) => {
-      if (ready) bridge.resize(chatId, cols, rows);
-    });
-
-    const fitNow = () => {
-      try {
-        fit.fit();
-      } catch {
-        // The dock is display:none or mid unmount: keep the previous size.
-      }
-    };
-
-    let resizeTimer: ReturnType<typeof setTimeout> | undefined;
-    const measure = () => {
-      clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(() => {
-        if (!disposed) fitNow();
-      }, RESIZE_DEBOUNCE_MS);
-    };
-    const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(measure);
-    observer?.observe(host);
-
-    /**
-     * Starts xterm and attaches immediately. The first fit may use a fallback font; once JetBrains Mono is usable the
-     * terminal is fitted again (and main resized), so rows and columns settle on the font the dock is designed for
-     * without making the dock wait for a font that is missing or slow.
-     */
-    const start = () => {
-      if (disposed) return;
-      term.open(host);
-      // 8 px of breathing room (plan §5). The padding belongs to xterm's own element: the fit addon measures the host
-      // and subtracts the element's padding, so the columns stay right.
-      if (term.element) term.element.style.padding = `${TERMINAL_DOCK_PADDING}px`;
-      // A first fit gives `open` real dimensions instead of xterm's 80×24 default.
-      fitNow();
-      if (pendingFocus.current) {
-        pendingFocus.current = false;
-        term.focus();
-      }
-      bridge
-        .open({ chatId, cwd, cols: term.cols, rows: term.rows, ...(restart ? { restart: true } : {}) })
-        .then((result) => {
-          if (disposed) return;
-          snapshotSeq = result.seq;
-          if (result.snapshot !== '') term.write(result.snapshot);
-          for (const event of buffered.splice(0).sort((a, b) => a.seq - b.seq)) writeIfNew(event);
-          // An exit seen while opening wins: the reply may say `running` even though the shell is already gone.
-          const status = exitStatus ?? result.info.status;
-          ready = status.state === 'running';
-          setInfo({ ...result.info, status });
-          setPhase(ready ? 'running' : 'exited');
-          // The fitted size may differ from the one `open` was asked for.
-          fitNow();
-          if (ready) bridge.resize(chatId, term.cols, term.rows);
-        })
-        .catch((err: unknown) => {
-          if (disposed) return;
-          ready = false;
+    setError(null);
+    void terminalRegistry
+      .attach(chatId, bridge, { cwd, restart })
+      .then((entry) => {
+        if (disposed) return;
+        termRef.current = entry.term;
+        detach = entry.mount(host);
+        const update = () => {
+          setInfo(entry.info);
+          setPhase(entry.info.status.state);
+          setHasSelection(entry.term.hasSelection());
+        };
+        off = entry.subscribe(update);
+        update();
+        if (pendingFocus.current) {
+          pendingFocus.current = false;
+          entry.term.focus();
+        }
+      })
+      .catch((err: unknown) => {
+        if (!disposed) {
           setPhase('error');
           setError(terminalErrorMessage(err));
-        });
-    };
-    start();
-    void waitForTerminalFont().then(() => {
-      if (disposed) return;
-      fitNow();
-      if (ready) bridge.resize(chatId, term.cols, term.rows);
-    });
-
+        }
+      });
     return () => {
       disposed = true;
-      clearTimeout(resizeTimer);
-      observer?.disconnect();
-      inputOff.dispose();
-      selectionOff.dispose();
-      resizeOff.dispose();
-      for (const off of unsubscribe) off();
-      term.dispose();
-      if (termRef.current === term) termRef.current = null;
-      // Deliberately no `bridge.close`: hiding the dock or switching chats keeps the shell running.
+      off?.();
+      detach?.();
+      termRef.current = null;
     };
   }, [chatId, cwd, attempt, bridgeOverride]);
 
   const focus = useCallback(() => {
     const term = termRef.current;
-    if (!term) return;
+    if (!term) {
+      pendingFocus.current = true;
+      return;
+    }
     // xterm has no textarea before `open`; focus lands as soon as the start step finishes.
     if (term.element) term.focus();
     else pendingFocus.current = true;

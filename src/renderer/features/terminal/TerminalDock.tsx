@@ -1,7 +1,7 @@
 // The terminal dock (terminal plan §5, T3.2 and T3.4): a strip at the bottom of the chat column, exactly as wide as the
 // chat, with a 32 px header, xterm below it, and a drag handle on the top edge. Height lives in `terminal-store.ts`.
 //
-// The dock never owns the shell. It mounts an xterm instance for the chat and disposes it on unmount; the session in
+// The dock never owns the shell. It mounts an xterm instance for the chat and detaches it on unmount; the session in
 // main keeps running until End (`close`) or the chat is deleted.
 
 import { useChats, useProjects } from '@renderer/app/queries';
@@ -21,6 +21,7 @@ import {
 import { focusComposer } from '../composer/focus';
 import { insertComposerText } from '../composer/text-sink';
 import { getTerminalBridge } from './bridge';
+import { terminalRegistry } from './registry';
 import { terminalSelectionBlock } from './selection';
 import { clampDockHeight, maxDockHeight, useTerminalUiStore } from './terminal-store';
 import { useTerminal } from './use-terminal';
@@ -300,6 +301,7 @@ function TerminalPanel({ chatId, cwd, bridge }: { chatId: Id; cwd: string | null
   };
   const end = () => {
     closeDock(chatId);
+    terminalRegistry.dispose(chatId);
     void bridge.close(chatId).catch(() => {});
     focusComposer();
   };

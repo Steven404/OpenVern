@@ -8,6 +8,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { StrictMode } from 'react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { terminalRegistry } from './registry';
 
 // xterm cannot draw in jsdom: the terminal and its fit addon are recording fakes (see `test-fakes.ts`).
 vi.mock('@xterm/xterm', () => import('./test-fakes'));
@@ -26,6 +27,7 @@ beforeEach(() => {
   resetUi();
   window.sessionStorage.clear();
   useTerminalUiStore.setState({ openDocks: {}, focusRequests: {} });
+  terminalRegistry.disposeAll();
   resetTerminalFakes();
   bridge = new FakeTerminalBridge();
   installTerminalBridge(bridge);
@@ -130,7 +132,7 @@ describe('terminal dock: Hide, End and the session', () => {
     expect(document.activeElement).toBe(composer());
 
     fireEvent.keyDown(window, { key: '`', ctrlKey: true });
-    await waitFor(() => expect(bridge.opens).toHaveLength(2));
+    await waitFor(() => expect(bridge.opens).toHaveLength(1));
     await waitFor(() => expect(Terminal.last().writes).toEqual(['hello from the shell\r\n']));
     expect(bridge.closes).toEqual([]);
   });
@@ -138,7 +140,9 @@ describe('terminal dock: Hide, End and the session', () => {
   it('End closes the session and removes the dock', async () => {
     const { chat } = await renderChat();
     await openDock();
+    const ended = Terminal.last();
     fireEvent.click(button('End terminal'));
+    expect(ended.disposed).toBe(true);
     expect(bridge.closes).toEqual([chat.id]);
     expect(dock()).toBeNull();
     await waitFor(() => expect(bridge.hasSession(chat.id)).toBe(false));
@@ -170,10 +174,10 @@ describe('terminal dock: Hide, End and the session', () => {
 
     fireEvent.click(button('Hide terminal'));
     fireEvent.keyDown(window, { key: '`', ctrlKey: true });
-    await waitFor(() => expect(bridge.opens).toHaveLength(2));
+    await waitFor(() => expect(bridge.opens).toHaveLength(1));
     // A plain open attaches to the exited session; only Restart may replace it.
-    expect(bridge.opens[1]).toMatchObject({ chatId: chat.id });
-    expect(bridge.opens[1]).not.toHaveProperty('restart', true);
+    expect(bridge.opens[0]).toMatchObject({ chatId: chat.id });
+    expect(bridge.opens[0]).not.toHaveProperty('restart', true);
 
     await waitFor(() => expect(Terminal.last().writes).toEqual(['the last words\r\n']));
     expect(await screen.findByText('Shell exited with code 2.')).toBeTruthy();
@@ -261,10 +265,12 @@ describe('terminal dock: chat lifecycle', () => {
     const { client, chat, queryClient } = await renderChat();
     await openDock();
 
+    const deleted = Terminal.last();
     await client.deleteChat(chat.id);
     await queryClient.invalidateQueries({ queryKey: queryKeys.chats });
 
     await waitFor(() => expect(bridge.closes).toEqual([chat.id]));
+    await waitFor(() => expect(deleted.disposed).toBe(true));
     expect(dock()).toBeNull();
   });
 

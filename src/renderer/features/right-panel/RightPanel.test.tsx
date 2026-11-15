@@ -1,4 +1,5 @@
 import { openMenu, renderApp, resetUi, seededClient } from '@renderer/app/test-utils';
+import { terminalRegistry } from '@renderer/features/terminal/registry';
 import { sampleProposal } from '@renderer/lib/mock-changes';
 import { readPersistedUi, STORAGE_KEYS } from '@renderer/stores/ui';
 import { LAYOUT } from '@shared/constants';
@@ -296,6 +297,7 @@ describe('Terminal row in the desktop app', () => {
   let bridge: FakeTerminalBridge;
   beforeEach(() => {
     bridge = new FakeTerminalBridge();
+    terminalRegistry.disposeAll();
     resetTerminalFakes();
     installTerminalBridge(bridge);
   });

@@ -1,5 +1,6 @@
 import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { terminalRegistry } from './registry';
 
 // xterm cannot draw in jsdom: the terminal and its fit addon are recording fakes (see `test-fakes.ts`).
 vi.mock('@xterm/xterm', () => import('./test-fakes'));
@@ -51,6 +52,7 @@ function mount(bridge = new FakeTerminalBridge(), chatId = CHAT) {
 }
 
 beforeEach(() => {
+  terminalRegistry.disposeAll();
   resetTerminalFakes();
   FakeResizeObserver.instances = [];
   vi.stubGlobal('ResizeObserver', FakeResizeObserver);
@@ -75,7 +77,7 @@ describe('useTerminal: attaching and writing output', () => {
 
   it('attaching writes the snapshot once, then ignores events at or below its sequence number', async () => {
     const bridge = new FakeTerminalBridge();
-    bridge.seed(CHAT, { snapshot: 'SNAPSHOT', seq: 5 });
+    bridge.seed(CHAT, { replay: 'SNAPSHOT', seq: 5 });
     const { running } = mount(bridge);
     await running();
     expect(Terminal.last().writes).toEqual(['SNAPSHOT']);
@@ -90,7 +92,7 @@ describe('useTerminal: attaching and writing output', () => {
 
   it('events that arrive before open resolves are kept only above the snapshot, and written in order', async () => {
     const bridge = new FakeTerminalBridge();
-    bridge.seed(CHAT, { snapshot: 'SNAPSHOT', seq: 5 });
+    bridge.seed(CHAT, { replay: 'SNAPSHOT', seq: 5 });
     const release = bridge.holdOpens();
     const { running } = mount(bridge);
 
@@ -129,7 +131,7 @@ describe('useTerminal: attaching and writing output', () => {
 
   it('attaches to an exited session: its snapshot and status show, and input never reaches it', async () => {
     const bridge = new FakeTerminalBridge();
-    bridge.seed(CHAT, { snapshot: 'RESTORED OUTPUT', seq: 3 });
+    bridge.seed(CHAT, { replay: 'RESTORED OUTPUT', seq: 3 });
     bridge.emitExit(CHAT, { state: 'exited', exitCode: 1, signal: null });
 
     const { into } = mount(bridge);
@@ -148,8 +150,6 @@ describe('useTerminal: attaching and writing output', () => {
     const { into } = mount(bridge);
 
     act(() => bridge.emitExit(CHAT, { state: 'exited', exitCode: 2, signal: null }));
-    expect(into.current?.phase).toBe('exited');
-
     release();
     await waitFor(() => expect(bridge.opens).toHaveLength(1));
     await waitFor(() => expect(into.current?.info?.status).toEqual({ state: 'exited', exitCode: 2, signal: null }));
@@ -323,12 +323,12 @@ describe('useTerminal: input, resize and unmount', () => {
     expect(bridge.opens[0]).not.toHaveProperty('restart', true);
   });
 
-  it('unmounting disposes xterm and does not close the session', async () => {
+  it('unmounting preserves xterm and does not close the session', async () => {
     const { bridge, running, unmount } = mount();
     await running();
     const term = Terminal.last();
     unmount();
-    expect(term.disposed).toBe(true);
+    expect(term.disposed).toBe(false);
     expect(bridge.closes).toEqual([]);
     expect(bridge.hasSession(CHAT)).toBe(true);
   });

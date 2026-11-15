@@ -188,7 +188,7 @@ export interface RunDeps {
 }
 
 /**
- * T3.6: the `read_terminal` relay. The backend asks through the run stream; the renderer reads main's buffer and posts
+ * T3.6: the `read_terminal` relay. The backend asks through the run stream; the renderer reads its emulator buffer and posts
  * the answer under the same request id. Without a bridge the answer is `unavailable`, and a failed post is ignored:
  * the backend times out and tells the model the terminal didn't answer.
  */
@@ -200,7 +200,8 @@ export async function relayTerminalRead(
   let answer: TerminalReadAnswer = { ok: false, reason: 'unavailable' };
   if (deps.terminal) {
     try {
-      answer = await deps.terminal.read(chatId, request.request);
+      const { terminalRegistry } = await import('@renderer/features/terminal/registry');
+      answer = await terminalRegistry.read(chatId, deps.terminal, request.request);
     } catch {
       answer = { ok: false, reason: 'unavailable' };
     }

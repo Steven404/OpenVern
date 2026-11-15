@@ -1,3 +1,6 @@
+vi.mock('@renderer/features/terminal/registry', () => ({ terminalRegistry: { read: vi.fn() } }));
+
+import { terminalRegistry } from '@renderer/features/terminal/registry';
 import { errorInfo } from '@shared/errors';
 import type { AgentEvent } from '@shared/events';
 import type { TerminalReadAnswer } from '@shared/terminal';
@@ -516,29 +519,31 @@ describe('terminal relay (T3.6)', () => {
   it('a terminal_read_request reads that chat’s terminal and answers under the same request id', async () => {
     const { api, queryClient, chat } = await setupChat();
     const bridge = new FakeTerminalBridge();
-    bridge.readAnswer = async () => answer;
+    vi.mocked(terminalRegistry.read).mockResolvedValue(answer);
     vi.spyOn(api, 'sendMessage').mockImplementation(() => streamOf([readRequest]));
     const answerSpy = vi.spyOn(api, 'answerTerminalRead').mockResolvedValue(undefined);
 
     await useRunsStore.getState().send({ api, queryClient, terminal: bridge }, chat.id, { ...input, attachments: [] });
 
     await vi.waitFor(() => expect(answerSpy).toHaveBeenCalledWith(chat.id, 'req-1', answer));
-    expect(bridge.reads).toEqual([{ chatId: chat.id, request: { startLine: 3, count: 10 } }]);
+    expect(terminalRegistry.read).toHaveBeenCalledWith(chat.id, bridge, { startLine: 3, count: 10 });
   });
 
   it('posts the answer only once the read has resolved', async () => {
     const { api, queryClient, chat } = await setupChat();
     const bridge = new FakeTerminalBridge();
     let finishRead: (value: TerminalReadAnswer) => void = () => {};
-    bridge.readAnswer = () =>
-      new Promise<TerminalReadAnswer>((resolve) => {
-        finishRead = resolve;
-      });
+    vi.mocked(terminalRegistry.read).mockImplementation(
+      () =>
+        new Promise<TerminalReadAnswer>((resolve) => {
+          finishRead = resolve;
+        }),
+    );
     vi.spyOn(api, 'sendMessage').mockImplementation(() => streamOf([readRequest]));
     const answerSpy = vi.spyOn(api, 'answerTerminalRead').mockResolvedValue(undefined);
 
     await useRunsStore.getState().send({ api, queryClient, terminal: bridge }, chat.id, { ...input, attachments: [] });
-    expect(bridge.reads).toHaveLength(1);
+    await vi.waitFor(() => expect(terminalRegistry.read).toHaveBeenCalled());
     expect(answerSpy).not.toHaveBeenCalled();
 
     finishRead(answer);
@@ -560,9 +565,7 @@ describe('terminal relay (T3.6)', () => {
   it('a read that throws is answered unavailable', async () => {
     const { api, queryClient, chat } = await setupChat();
     const bridge = new FakeTerminalBridge();
-    bridge.readAnswer = async () => {
-      throw new Error('the shell is gone');
-    };
+    vi.mocked(terminalRegistry.read).mockRejectedValue(new Error('the shell is gone'));
     vi.spyOn(api, 'sendMessage').mockImplementation(() => streamOf([readRequest]));
     const answerSpy = vi.spyOn(api, 'answerTerminalRead').mockResolvedValue(undefined);
 
@@ -574,6 +577,7 @@ describe('terminal relay (T3.6)', () => {
   });
 
   it('a failed answer does not break the run: the rest of the reply still streams and settles cleanly', async () => {
+    vi.mocked(terminalRegistry.read).mockResolvedValue(answer);
     const { api, queryClient, chat } = await setupChat();
     const bridge = new FakeTerminalBridge();
     const persisted: UserMessage = { id: 'u1', role: 'user', createdAt: '', text: input.text, attachments: [] };
@@ -595,7 +599,7 @@ describe('terminal relay (T3.6)', () => {
     await useRunsStore.getState().send({ api, queryClient, terminal: bridge }, chat.id, { ...input, attachments: [] });
     unsubscribe();
 
-    expect(answerSpy).toHaveBeenCalled();
+    await vi.waitFor(() => expect(answerSpy).toHaveBeenCalled());
     expect(seen).toContain('still here');
     expect(useRunsStore.getState().runs[chat.id]).toBeUndefined();
   });
