@@ -9,6 +9,7 @@ import { buildAppMenuTemplate } from './menu';
 import { isDev } from './origin';
 import { handleAppProtocol, registerAppScheme } from './protocol';
 import { noSandboxWarning, resolveUserDataDir } from './startup';
+import { createQuitGuard } from './terminal/quit';
 import { createTerminalManager } from './terminal/service';
 import { createMainWindow, focusMainWindow, getMainWindow } from './window';
 
@@ -36,18 +37,18 @@ if (!app.requestSingleInstanceLock()) {
   // Terminal sessions live as long as the main window: a reload keeps them, closing the window or quitting ends every
   // shell (docs/terminal-plan.md T1.6).
   const terminals = createTerminalManager(getMainWindow);
-  const openMainWindow = () => createMainWindow({ onClosed: () => void terminals.disposeAll() });
-
-  // Hold the quit until every shell has exited (SIGHUP, then SIGKILL after 1 s), so none outlives the app.
-  let terminalsEnded = false;
-  app.on('before-quit', (event) => {
-    if (terminalsEnded) return;
-    event.preventDefault();
-    void terminals.disposeAll().finally(() => {
-      terminalsEnded = true;
-      app.quit();
+  // Hold the quit until every terminal's processes have ended (SIGHUP, then SIGKILL after 1 s), so none outlives the
+  // app; no terminal may open once the quit has begun, unless the quit is cancelled (./terminal/quit.ts).
+  const quitGuard = createQuitGuard({ terminals, quit: () => app.quit() });
+  const openMainWindow = () => {
+    quitGuard.windowOpening();
+    return createMainWindow({
+      onClosed: () => void terminals.disposeAll(),
+      // The page's unload handler kept the window open, which also cancels a quit in progress.
+      onUnloadPrevented: () => quitGuard.quitCancelled(),
     });
-  });
+  };
+  app.on('before-quit', (event) => quitGuard.beforeQuit(event));
   // Last resort when main exits without a quit (app.exit, a fatal error): SIGKILL whatever is left.
   process.on('exit', () => terminals.killAllNow());
 

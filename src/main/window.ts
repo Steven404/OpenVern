@@ -51,6 +51,8 @@ function harden(win: BrowserWindow): void {
 export interface MainWindowOptions {
   /** Runs once the window has closed (not on a reload). */
   onClosed?: () => void;
+  /** Runs when the page's unload handler kept the window open, which also cancels a quit in progress. */
+  onUnloadPrevented?: () => void;
 }
 
 export function createMainWindow(options: MainWindowOptions = {}): BrowserWindow {
@@ -79,6 +81,8 @@ export function createMainWindow(options: MainWindowOptions = {}): BrowserWindow
     if (mainWindow === win) mainWindow = null;
     options.onClosed?.();
   });
+  // Not prevented here, so the page's handler wins and the window stays open; the owner only learns of it.
+  win.webContents.on('will-prevent-unload', () => options.onUnloadPrevented?.());
   win.once('ready-to-show', () => win.show());
   harden(win);
 
