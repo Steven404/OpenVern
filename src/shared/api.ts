@@ -113,6 +113,14 @@ const lineNumber = z
   .int()
   .nonnegative()
   .max(TERMINAL.scrollbackLines + TERMINAL.maxRows);
+/**
+ * The line-number rules of `TerminalReadResult`: either the empty result (0, 0, ''), or a range inside the buffer of
+ * at most `readMaxLines` lines.
+ */
+function isConsistentRead(r: { totalLines: number; startLine: number; endLine: number; text: string }): boolean {
+  if (r.startLine === 0 || r.endLine === 0) return r.startLine === 0 && r.endLine === 0 && r.text === '';
+  return r.startLine <= r.endLine && r.endLine <= r.totalLines && r.endLine - r.startLine < TERMINAL.readMaxLines;
+}
 const terminalStatus = z.discriminatedUnion('state', [
   z.object({ state: z.literal('running') }),
   z.object({
@@ -133,14 +141,16 @@ const terminalInfo = z.object({
 export const terminalReadAnswerBody = z.discriminatedUnion('ok', [
   z.object({
     ok: z.literal(true),
-    result: z.object({
-      info: terminalInfo,
-      totalLines: lineNumber,
-      startLine: lineNumber,
-      endLine: lineNumber,
-      text: z.string().max(2 * TERMINAL.readMaxBytes),
-      truncated: z.boolean(),
-    }),
+    result: z
+      .object({
+        info: terminalInfo,
+        totalLines: lineNumber,
+        startLine: lineNumber,
+        endLine: lineNumber,
+        text: z.string().max(TERMINAL.readWireMaxChars),
+        truncated: z.boolean(),
+      })
+      .refine(isConsistentRead, { message: 'The line numbers and the text do not fit together.' }),
   }),
   z.object({ ok: z.literal(false), reason: z.enum(['no_terminal', 'unavailable']) }),
 ]) satisfies z.ZodType<TerminalReadAnswer>;
