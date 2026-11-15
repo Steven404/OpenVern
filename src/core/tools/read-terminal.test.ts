@@ -475,6 +475,55 @@ describe('read_terminal removes C1 and directional controls (review finding 4)',
   });
 
   it.each([
+    ['a directional control', '\u202e'],
+    ['a left-to-right mark', '\u200e'],
+    ['a line separator', '\u2028'],
+  ])('redacts a key that follows a word and %s, which removal alone would join to the word', async (_, ch) => {
+    // Removed first, the text reads `xsk-or-v1-…`, and no pattern accepts a key that starts mid-word.
+    for (const known of [[], [FAKE_OPENROUTER_KEY]]) {
+      const res = await run(
+        {},
+        ctx(answerFor(['before', `x${ch}${FAKE_OPENROUTER_KEY} tail`, 'after']), { knownSecrets: known }),
+      );
+      expect(res.ok).toBe(true);
+      expect(res.output).not.toContain('abcdef12');
+      expect(res.output.split('\n')[1]).toBe('Lines 1-3 of 3.');
+      expect(body(res.output).split('\n')).toHaveLength(3);
+      expect(body(res.output)).toContain('before');
+      expect(body(res.output)).toContain('after');
+      expect(res.output).toContain(redactionNote(1));
+    }
+  });
+
+  it.each([
+    ['a zero-width space', '\u200b'],
+    ['a zero-width joiner', '\u200d'],
+    ['a word joiner', '\u2060'],
+  ])('leaves no part of a key that %s splits, stored or not', async (_, ch) => {
+    const split = `${FAKE_OPENROUTER_KEY.slice(0, 25)}${ch}${FAKE_OPENROUTER_KEY.slice(25)}`;
+    for (const known of [[], [FAKE_OPENROUTER_KEY]]) {
+      const res = await run({}, ctx(answerFor([`x ${split} y`]), { knownSecrets: known }));
+      expect(res.ok).toBe(true);
+      expect(res.output).not.toContain('abcdef12');
+      expect(res.output).toContain(redactionNote(1));
+    }
+  });
+
+  it('keeps zero-width joiners in ordinary text', async () => {
+    const res = await run({}, ctx(answerFor(['family 👨\u200d👩\u200d👧 ok'])));
+    expect(body(res.output)).toBe('family 👨\u200d👩\u200d👧 ok');
+  });
+
+  it('leaves no part of a pattern key that a directional control splits, stored or not', async () => {
+    const split = `${FAKE_OPENROUTER_KEY.slice(0, 25)}\u202e${FAKE_OPENROUTER_KEY.slice(25)}`;
+    for (const known of [[], [FAKE_OPENROUTER_KEY]]) {
+      const res = await run({}, ctx(answerFor([`x ${split} y`]), { knownSecrets: known }));
+      expect(res.ok).toBe(true);
+      expect(res.output).not.toContain('abcdef12');
+    }
+  });
+
+  it.each([
     ['whole', (key: string) => key],
     ['split by a directional control', (key: string) => `${key.slice(0, 25)}\u202e${key.slice(25)}`],
     ['split by a line separator', (key: string) => `${key.slice(0, 25)}\u2028${key.slice(25)}`],

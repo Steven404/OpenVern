@@ -66,12 +66,48 @@ const GAP = '(?:[^\\S\\n\\r]|[\\u200b-\\u200d\\u2060\\ufeff])*';
 const MARKER_RE = new RegExp(`<${GAP}(\\/?)${GAP}terminal${GAP}[_ \\t-]?${GAP}output${GAP}>`, 'gi');
 
 /**
- * Plain text for the block, line for line. Only single characters are removed, never a run, so cleaning can join the
- * two halves of a key that a control was hiding but can never take a character of a key away. That is what makes
- * "clean, then redact" safe. No newline is ever added or removed.
+ * Plain text for the block, line for line. Only single characters are removed, never a run, so this can never take a
+ * character of a key away. No newline is ever added or removed. See `redactText` for how it combines with redaction.
  */
 function plainText(text: string): string {
   return text.replace(TEXT_CONTROL_RE, '');
+}
+
+/** Shown in place of a line whose invisible characters make its redaction ambiguous. */
+const LINE_SENTINEL = sentinel('line');
+
+/** Zero-width characters. Kept in the text (emoji sequences need them), but ignored when looking for secrets. */
+const ZERO_WIDTH_RE = /[\u200b-\u200d\u2060\ufeff]/g;
+const withoutInvisibles = (text: string): string => plainText(text).replace(ZERO_WIDTH_RE, '');
+
+/**
+ * Redacts the text and removes its directional controls, in a way that does not depend on where invisible characters
+ * sit. Removing them first can join a key to the word before it (`x` + a directional control + key becomes `xsk-…`,
+ * which no pattern accepts), and redacting first can replace only the first half of a key that such a character
+ * splits. So the text is redacted both ways, with and without its invisible characters (the removed ones and the
+ * zero-width ones), and the two results are compared line by line. Where they agree, the line is shown, redacted. A
+ * line on which they disagree holds a secret next to an invisible character, and is replaced whole. Line breaks are
+ * never added or removed.
+ */
+function redactText(text: string, known: readonly string[] | undefined): { text: string; count: number } {
+  const redactedFirst = redactSecrets(text, { known });
+  const removedFirst = redactSecrets(withoutInvisibles(text), { known });
+  const shown = plainText(redactedFirst.text).split('\n');
+  const a = removedFirst.text.split('\n');
+  const b = withoutInvisibles(redactedFirst.text).split('\n');
+  const count = Math.max(removedFirst.count, redactedFirst.count);
+  // Redaction keeps line breaks, so all three have the same lines unless a stored secret holds one; then nothing of
+  // the text can be trusted line by line.
+  if (a.length !== b.length || a.length !== shown.length) {
+    return { text: shown.map(() => LINE_SENTINEL).join('\n'), count: Math.max(count, 1) };
+  }
+  let replaced = 0;
+  const lines = shown.map((line, i) => {
+    if (a[i] === b[i]) return line;
+    replaced++;
+    return LINE_SENTINEL;
+  });
+  return { text: lines.join('\n'), count: Math.max(count, replaced) };
 }
 
 /** The text can't close (or reopen) the block it is shown in. Never changes the number of lines. */
@@ -223,7 +259,7 @@ function formatResult(
   // redaction keeps the line breaks of what it replaces. Redact before any cut: a cut first could split a key so
   // that no pattern matches either half.
   const expected = endLine - startLine + 1;
-  const redacted = redactSecrets(plainText(result.text), { known: ctx.knownSecrets });
+  const redacted = redactText(result.text, ctx.knownSecrets);
   const lines = defuseMarkers(redacted.text).split('\n');
   // Only a stored secret holding a line break could change the count; then the numbers can't be trusted.
   if (lines.length !== expected) return fail(TERMINAL_INVALID_OUTPUT, 'Terminal answer not valid');
