@@ -115,11 +115,17 @@ const lineNumber = z
   .max(TERMINAL.scrollbackLines + TERMINAL.maxRows);
 /**
  * The line-number rules of `TerminalReadResult`: either the empty result (0, 0, ''), or a range inside the buffer of
- * at most `readMaxLines` lines.
+ * at most `readMaxLines` lines whose text has exactly that many lines.
  */
 function isConsistentRead(r: { totalLines: number; startLine: number; endLine: number; text: string }): boolean {
   if (r.startLine === 0 || r.endLine === 0) return r.startLine === 0 && r.endLine === 0 && r.text === '';
-  return r.startLine <= r.endLine && r.endLine <= r.totalLines && r.endLine - r.startLine < TERMINAL.readMaxLines;
+  if (r.startLine > r.endLine || r.endLine > r.totalLines || r.endLine - r.startLine >= TERMINAL.readMaxLines) {
+    return false;
+  }
+  // One line of text per line in the range, joined by `\n` with no trailing one, so line numbers can be trusted.
+  let lines = 1;
+  for (let i = r.text.indexOf('\n'); i !== -1; i = r.text.indexOf('\n', i + 1)) lines++;
+  return lines === r.endLine - r.startLine + 1;
 }
 const terminalStatus = z.discriminatedUnion('state', [
   z.object({ state: z.literal('running') }),

@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { createChatBody, retryBody, sendMessageBody, updateChatBody, updateSettingsBody } from './api';
+import {
+  createChatBody,
+  retryBody,
+  sendMessageBody,
+  terminalReadAnswerBody,
+  updateChatBody,
+  updateSettingsBody,
+} from './api';
 import { LIMITS, REASONING_EFFORTS } from './constants';
 import { ERROR_DEFAULTS, ERROR_STATUS, errorInfo, isApiErrorBody } from './errors';
+import { TERMINAL } from './terminal';
 
 describe('api schemas', () => {
   it('sendMessageBody needs text or an attachment', () => {
@@ -87,6 +95,166 @@ describe('effort (F3)', () => {
     expect(retryBody.parse({ model: 'm' })).not.toHaveProperty('effort');
     expect(updateSettingsBody.parse({})).not.toHaveProperty('lastEffort');
     expect(retryBody.parse({ model: 'm', effort: null }).effort).toBeNull();
+  });
+});
+
+describe('terminal (T0)', () => {
+  const send = { text: 'hi', attachmentIds: [], model: 'm' };
+  const retry = { model: 'm' };
+
+  it('sendMessageBody and retryBody accept terminal true, false and omitted', () => {
+    for (const terminal of [true, false]) {
+      expect(sendMessageBody.safeParse({ ...send, terminal }).success).toBe(true);
+      expect(retryBody.safeParse({ ...retry, terminal }).success).toBe(true);
+    }
+    expect(sendMessageBody.safeParse(send).success).toBe(true);
+    expect(retryBody.safeParse(retry).success).toBe(true);
+    expect(sendMessageBody.parse(send)).not.toHaveProperty('terminal');
+    expect(retryBody.parse(retry)).not.toHaveProperty('terminal');
+  });
+
+  it('sendMessageBody and retryBody reject a non-boolean terminal', () => {
+    for (const terminal of ['yes', null, 1]) {
+      expect(sendMessageBody.safeParse({ ...send, terminal }).success).toBe(false);
+      expect(retryBody.safeParse({ ...retry, terminal }).success).toBe(false);
+    }
+  });
+
+  // The largest line number a read can name: the scrollback plus one screenful.
+  const maxLine = TERMINAL.scrollbackLines + TERMINAL.maxRows;
+  const validAnswer = {
+    ok: true as const,
+    result: {
+      info: {
+        chatId: 'c1',
+        shell: 'zsh',
+        cwd: '/Users/me/project',
+        cols: TERMINAL.defaultCols,
+        rows: TERMINAL.defaultRows,
+        status: { state: 'running' as const },
+      },
+      totalLines: 42,
+      startLine: 1,
+      endLine: 2,
+      text: 'line 1\nline 2',
+      truncated: false,
+    },
+  };
+  const withResult = (patch: Record<string, unknown>) => ({
+    ...validAnswer,
+    result: { ...validAnswer.result, ...patch },
+  });
+  const withInfo = (patch: Record<string, unknown>) => withResult({ info: { ...validAnswer.result.info, ...patch } });
+
+  it('terminalReadAnswerBody accepts a success answer', () => {
+    expect(terminalReadAnswerBody.safeParse(validAnswer).success).toBe(true);
+    expect(terminalReadAnswerBody.parse(validAnswer)).toEqual(validAnswer);
+    expect(
+      terminalReadAnswerBody.safeParse(withInfo({ status: { state: 'exited', exitCode: 1, signal: null } })).success,
+    ).toBe(true);
+    expect(
+      terminalReadAnswerBody.safeParse(withInfo({ status: { state: 'exited', exitCode: null, signal: 15 } })).success,
+    ).toBe(true);
+  });
+
+  it('terminalReadAnswerBody accepts both failure reasons', () => {
+    for (const reason of ['no_terminal', 'unavailable'] as const) {
+      expect(terminalReadAnswerBody.safeParse({ ok: false, reason }).success).toBe(true);
+    }
+  });
+
+  it('terminalReadAnswerBody rejects an unknown failure reason', () => {
+    expect(terminalReadAnswerBody.safeParse({ ok: false, reason: 'timeout' }).success).toBe(false);
+    expect(terminalReadAnswerBody.safeParse({ ok: false }).success).toBe(false);
+  });
+
+  it('terminalReadAnswerBody rejects an answer with missing fields', () => {
+    const { ok: _ok, ...withoutOk } = validAnswer;
+    expect(terminalReadAnswerBody.safeParse(withoutOk).success).toBe(false);
+    const { result: _result, ...withoutResult } = validAnswer;
+    expect(terminalReadAnswerBody.safeParse(withoutResult).success).toBe(false);
+    const without = (key: keyof typeof validAnswer.result) => {
+      const { [key]: _omit, ...rest } = validAnswer.result;
+      return { ...validAnswer, result: rest };
+    };
+    expect(terminalReadAnswerBody.safeParse(without('text')).success).toBe(false);
+    expect(terminalReadAnswerBody.safeParse(without('info')).success).toBe(false);
+    expect(terminalReadAnswerBody.safeParse(without('truncated')).success).toBe(false);
+  });
+
+  it('terminalReadAnswerBody accepts text up to readWireMaxChars', () => {
+    expect(
+      terminalReadAnswerBody.safeParse(withResult({ endLine: 1, text: 'x'.repeat(TERMINAL.readWireMaxChars) })).success,
+    ).toBe(true);
+  });
+
+  it('terminalReadAnswerBody rejects text over readWireMaxChars', () => {
+    expect(
+      terminalReadAnswerBody.safeParse(withResult({ endLine: 1, text: 'x'.repeat(TERMINAL.readWireMaxChars + 1) }))
+        .success,
+    ).toBe(false);
+  });
+
+  it('terminalReadAnswerBody accepts the empty result and a full readMaxLines range', () => {
+    expect(
+      terminalReadAnswerBody.safeParse(withResult({ totalLines: 0, startLine: 0, endLine: 0, text: '' })).success,
+    ).toBe(true);
+    expect(
+      terminalReadAnswerBody.safeParse(
+        withResult({
+          totalLines: TERMINAL.readMaxLines,
+          startLine: 1,
+          endLine: TERMINAL.readMaxLines,
+          text: Array.from({ length: TERMINAL.readMaxLines }, () => 'x').join('\n'),
+        }),
+      ).success,
+    ).toBe(true);
+  });
+
+  it('terminalReadAnswerBody rejects inconsistent line numbers', () => {
+    const bad = [
+      { startLine: 10, endLine: 5 }, // reversed range
+      { totalLines: 42, endLine: 43 }, // range past totalLines
+      { totalLines: 2_000, startLine: 1, endLine: TERMINAL.readMaxLines + 1 }, // more than readMaxLines lines
+      { startLine: 0, endLine: 5, text: '' }, // startLine 0 with a non-zero endLine
+      { startLine: 0, endLine: 0, text: 'x' }, // non-empty text with the 0/0 range
+      { startLine: 1, endLine: 1, text: 'a\nb\nc\nd' }, // more lines of text than the range
+      { startLine: 1, endLine: 3, text: 'a\nb' }, // fewer lines of text than the range
+      { startLine: 1, endLine: 2, text: 'a\nb\n' }, // a trailing line break is an extra line
+    ];
+    for (const patch of bad) {
+      expect(terminalReadAnswerBody.safeParse(withResult(patch)).success).toBe(false);
+    }
+  });
+
+  it('terminalReadAnswerBody bounds line numbers and sizes', () => {
+    for (const field of ['totalLines', 'startLine', 'endLine']) {
+      for (const bad of [-1, 1.5, maxLine + 1]) {
+        expect(terminalReadAnswerBody.safeParse(withResult({ [field]: bad })).success).toBe(false);
+      }
+    }
+    expect(terminalReadAnswerBody.safeParse(withResult({ totalLines: maxLine })).success).toBe(true);
+    expect(
+      terminalReadAnswerBody.safeParse(
+        withResult({ totalLines: maxLine, startLine: maxLine, endLine: maxLine, text: 'x' }),
+      ).success,
+    ).toBe(true);
+    for (const [field, bad] of [
+      ['cols', TERMINAL.minCols - 1],
+      ['cols', TERMINAL.maxCols + 1],
+      ['cols', TERMINAL.defaultCols + 0.5],
+      ['rows', TERMINAL.minRows - 1],
+      ['rows', TERMINAL.maxRows + 1],
+      ['rows', TERMINAL.defaultRows + 0.5],
+    ] as const) {
+      expect(terminalReadAnswerBody.safeParse(withInfo({ [field]: bad })).success).toBe(false);
+    }
+    expect(terminalReadAnswerBody.safeParse(withInfo({ cols: TERMINAL.minCols, rows: TERMINAL.minRows })).success).toBe(
+      true,
+    );
+    expect(terminalReadAnswerBody.safeParse(withInfo({ cols: TERMINAL.maxCols, rows: TERMINAL.maxRows })).success).toBe(
+      true,
+    );
   });
 });
 
