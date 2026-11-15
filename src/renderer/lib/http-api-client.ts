@@ -122,12 +122,23 @@ export class HttpApiClient implements ApiClient {
   }
   sendMessage(
     chatId: Id,
-    input: { text: string; attachmentIds: Id[]; model: string; effort?: ReasoningEffort | null },
+    input: {
+      text: string;
+      attachmentIds: Id[];
+      model: string;
+      effort?: ReasoningEffort | null;
+      /** This client can answer terminal reads, so the server may offer `read_terminal` (terminal plan §4.2). */
+      terminal?: boolean;
+    },
     signal: AbortSignal,
   ) {
     return this.stream(`/chats/${enc(chatId)}/messages`, input, signal);
   }
-  retry(chatId: Id, input: { model: string; effort?: ReasoningEffort | null }, signal: AbortSignal) {
+  retry(
+    chatId: Id,
+    input: { model: string; effort?: ReasoningEffort | null; terminal?: boolean },
+    signal: AbortSignal,
+  ) {
     return this.stream(`/chats/${enc(chatId)}/retry`, input, signal);
   }
   uploadAttachment(file: File) {

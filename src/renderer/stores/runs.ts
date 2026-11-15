@@ -7,6 +7,7 @@
 import type { ApiErrorInfo } from '@shared/errors';
 import { errorInfo } from '@shared/errors';
 import type { AgentEvent } from '@shared/events';
+import type { TerminalBridge, TerminalReadAnswer, TerminalReadRequest } from '@shared/terminal';
 import type {
   AssistantMessage,
   AttachmentRef,
@@ -134,7 +135,7 @@ export function reduceRun(run: RunState, ev: RunEvent): RunState {
       // The card reads the `chatChanges` query; `consume` invalidates it when this event arrives.
       return run;
     case 'terminal_read_request':
-      // T0 stub (terminal plan §4.2): no state change. T3 relays the read from `consume`.
+      // No state: `consume` relays it to the bridge and posts the answer back (see `relayTerminalRead`).
       return run;
     case 'tool_call':
       return run.runningToolIds.includes(ev.toolCall.id)
@@ -179,6 +180,36 @@ export function reduceRun(run: RunState, ev: RunEvent): RunState {
 export interface RunDeps {
   api: ApiClient;
   queryClient: QueryClient;
+  /**
+   * The PTY bridge from the preload, when this client can answer terminal reads (terminal plan §4.2). Its presence is
+   * what makes each turn say `terminal: true` and what lets `terminal_read_request` be relayed.
+   */
+  terminal?: TerminalBridge;
+}
+
+/**
+ * T3.6: the `read_terminal` relay. The backend asks through the run stream; the renderer reads main's buffer and posts
+ * the answer under the same request id. Without a bridge the answer is `unavailable`, and a failed post is ignored:
+ * the backend times out and tells the model the terminal didn't answer.
+ */
+export async function relayTerminalRead(
+  deps: RunDeps,
+  chatId: Id,
+  request: { requestId: Id; request: TerminalReadRequest },
+): Promise<void> {
+  let answer: TerminalReadAnswer = { ok: false, reason: 'unavailable' };
+  if (deps.terminal) {
+    try {
+      answer = await deps.terminal.read(chatId, request.request);
+    } catch {
+      answer = { ok: false, reason: 'unavailable' };
+    }
+  }
+  try {
+    await deps.api.answerTerminalRead(chatId, request.requestId, answer);
+  } catch {
+    // 404 when the backend already timed out or the run was aborted; nothing left to answer.
+  }
 }
 
 export interface SendInput {
@@ -312,6 +343,7 @@ export const useRunsStore = create<RunsState>()((set, get) => {
     try {
       for await (const ev of open()) {
         apply(chatId, token, ev);
+        if (ev.type === 'terminal_read_request') void relayTerminalRead(deps, chatId, ev);
         if (ev.type === 'chat_updated') patchChatSummary(deps.queryClient, ev.chat);
         if (ev.type === 'changes_updated') {
           void deps.queryClient.invalidateQueries({ queryKey: queryKeys.chatChanges(chatId) });
@@ -374,6 +406,7 @@ export const useRunsStore = create<RunsState>()((set, get) => {
             attachmentIds: input.attachments.map((a) => a.id),
             model: input.model,
             ...(input.effort !== undefined ? { effort: input.effort } : {}),
+            ...(deps.terminal ? { terminal: true } : {}),
           },
           controller.signal,
         ),
@@ -405,7 +438,11 @@ export const useRunsStore = create<RunsState>()((set, get) => {
       get().setChatModel(chatId, model);
       if (effort !== undefined) get().setChatEffort(chatId, effort);
       await consume(deps, chatId, token, controller, () =>
-        deps.api.retry(chatId, { model, ...(effort !== undefined ? { effort } : {}) }, controller.signal),
+        deps.api.retry(
+          chatId,
+          { model, ...(effort !== undefined ? { effort } : {}), ...(deps.terminal ? { terminal: true } : {}) },
+          controller.signal,
+        ),
       );
     },
 

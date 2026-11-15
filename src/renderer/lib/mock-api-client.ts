@@ -277,12 +277,23 @@ export class MockApiClient implements ApiClient {
 
   sendMessage(
     chatId: Id,
-    input: { text: string; attachmentIds: Id[]; model: string; effort?: ReasoningEffort | null },
+    input: {
+      text: string;
+      attachmentIds: Id[];
+      model: string;
+      effort?: ReasoningEffort | null;
+      /** Ignored here: the mock never asks for terminal reads (see `answerTerminalRead`). */
+      terminal?: boolean;
+    },
     signal: AbortSignal,
   ) {
     return this.run(chatId, input.model, input.effort, signal, input);
   }
-  retry(chatId: Id, input: { model: string; effort?: ReasoningEffort | null }, signal: AbortSignal) {
+  retry(
+    chatId: Id,
+    input: { model: string; effort?: ReasoningEffort | null; terminal?: boolean },
+    signal: AbortSignal,
+  ) {
     return this.run(chatId, input.model, input.effort, signal);
   }
 

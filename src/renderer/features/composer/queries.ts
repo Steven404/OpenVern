@@ -6,6 +6,7 @@ import { useMemo } from 'react';
 import { useApiClient } from '../../lib/api-context';
 import { queryKeys } from '../../lib/query-keys';
 import type { RunDeps } from '../../stores/runs';
+import { getTerminalBridge } from '../terminal/bridge';
 
 export function useSettings() {
   const api = useApiClient();
@@ -37,5 +38,6 @@ export function useChat(chatId: Id) {
 export function useRunDeps(): RunDeps {
   const api = useApiClient();
   const queryClient = useQueryClient();
-  return useMemo(() => ({ api, queryClient }), [api, queryClient]);
+  // `terminal` present = this client can answer `read_terminal` (Electron with the preload bridge; terminal plan §4.2).
+  return useMemo(() => ({ api, queryClient, terminal: getTerminalBridge() ?? undefined }), [api, queryClient]);
 }
