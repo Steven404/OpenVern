@@ -1,6 +1,14 @@
 // /chats* (CRUD + the two streaming routes)
 
-import { applyChangesBody, createChatBody, ROUTES, retryBody, sendMessageBody, updateChatBody } from '@shared/api';
+import {
+  applyChangesBody,
+  createChatBody,
+  ROUTES,
+  retryBody,
+  sendMessageBody,
+  terminalReadAnswerBody,
+  updateChatBody,
+} from '@shared/api';
 import { LIMITS } from '@shared/constants';
 import type { Id } from '@shared/types';
 import { Hono } from 'hono';
@@ -133,6 +141,7 @@ export function chatRoutes(core: Core): Hono {
       model: body.model,
       newUserMessage: { text: body.text, attachmentIds: body.attachmentIds },
       effort: body.effort,
+      terminal: body.terminal,
       release,
     });
   });
@@ -144,7 +153,17 @@ export function chatRoutes(core: Core): Hono {
     if (!chat.messages.some((m) => m.role === 'user'))
       throw new CoreError('invalid_request', 'There is no message to retry in this chat.');
     const release = claim(chatId);
-    return streamTurn(c, core, { chatId, model: body.model, effort: body.effort, release });
+    return streamTurn(c, core, { chatId, model: body.model, effort: body.effort, terminal: body.terminal, release });
+  });
+
+  // The client's answer to a `terminal_read_request` (terminal plan §4.2, T2.5). The body is validated before the
+  // broker sees it; the broker accepts it once, only for a request still waiting under this chat. Anything else
+  // (unknown, expired, answered, another chat's id) is the same 404, so the route reveals nothing about other chats.
+  r.post(ROUTES.chatTerminalRead, async (c) => {
+    const body = await readJson(c, terminalReadAnswerBody);
+    if (!core.terminalReads.answer(c.req.param('id'), c.req.param('requestId'), body))
+      throw new CoreError('not_found', 'No terminal read is waiting under that id.');
+    return c.body(null, 204);
   });
 
   r.get(ROUTES.chatChanges, async (c) => {
