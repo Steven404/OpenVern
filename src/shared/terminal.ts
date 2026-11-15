@@ -17,7 +17,12 @@ export const TERMINAL = {
   writeMaxBytes: 64 * 1024,
   readDefaultLines: 200,
   readMaxLines: 1_000,
+  /** Cap on the `read_terminal` tool's output, applied by the tool after redaction. Main never applies it. */
   readMaxBytes: 50 * 1024,
+  /** Largest text main can send: the whole buffer, (scrollbackLines + maxRows) * maxCols characters. */
+  readWireMaxChars: 2_600_000,
+  /** Largest accepted body of a read answer (the text as JSON, at most 3 bytes per character, plus the rest). */
+  readWireMaxBytes: 8 * 1024 * 1024,
   /** How long the backend waits for the renderer's answer. */
   readTimeoutMs: 10_000,
   selectionMaxChars: 20_000,
@@ -64,19 +69,32 @@ export interface TerminalExitEvent {
 }
 
 /** Lines are 1-based from the top of the scrollback. Both omitted = the last `readDefaultLines`. */
+/**
+ * Lines are logical lines (wrapped rows joined), 1-based from the top of the scrollback. Both omitted = the last
+ * `readDefaultLines`. A `count` that runs past the end is clamped.
+ */
 export interface TerminalReadRequest {
   startLine?: number;
   count?: number;
 }
 export interface TerminalReadResult {
   info: TerminalInfo;
-  /** Lines in the buffer, without trailing blank lines. */
+  /** Logical lines in the buffer, without trailing blank lines. */
   totalLines: number;
+  /**
+   * `1 <= startLine <= endLine <= totalLines`, and at most `readMaxLines` lines. An empty buffer, or a `startLine`
+   * past the end, gives `startLine: 0`, `endLine: 0` and `text: ''`.
+   */
   startLine: number;
   endLine: number;
-  /** Plain text, no escape codes; wrapped rows joined; trailing spaces trimmed. Not redacted. */
+  /**
+   * Plain text, no escape codes; whole lines only; trailing spaces trimmed. Never cut by size: a cut before
+   * redaction can strip a key's prefix and leave its body unmatched. Main runs the pattern passes of
+   * `redactSecrets` over the whole buffer before it selects the lines, so a secret that starts above the range
+   * (a private-key block) is still caught. The tool redacts again with the stored key.
+   */
   text: string;
-  /** The byte cap cut the range short (the tail is kept). */
+  /** Always false from main. Kept so the answer's shape is stable. */
   truncated: boolean;
 }
 export type TerminalReadAnswer =
