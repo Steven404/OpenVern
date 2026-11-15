@@ -1,31 +1,30 @@
-// Wires the terminal manager to the real world: node-pty, the user's shell and environment, the file system, and the
-// main window as the only receiver of `data` and `exit` events.
+// Wires the terminal manager to the real world: node-pty, the user's shell and environment, the file system, the
+// own-child check, and the main window as the only receiver of `data` and `exit` events.
 
 import { statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { TERMINAL_IPC } from '@shared/terminal';
 import type { BrowserWindow } from 'electron';
-import { spawn } from 'node-pty';
+import { type IPty, spawn } from 'node-pty';
 import { isAppUrl } from '../origin';
 import { TerminalManager } from './manager';
-import { pendingWriteBytes } from './node-pty-internals';
-import { createProcessTable, signalProcess } from './processes';
+import { closeWithoutSignal, pendingWriteBytes } from './node-pty-internals';
+import { createIsOwnChild } from './own-child';
 import type { SpawnPty } from './pty';
 import { buildShellEnv, chooseShell, SHELL_ARGS } from './shell';
 
 const spawnNodePty: SpawnPty = (file, args, options) => {
-  const pty = spawn(file, [...args], options);
+  const pty: IPty = spawn(file, [...args], options);
+  const pid = pty.pid;
   return {
-    get pid() {
-      return pty.pid;
-    },
+    pid,
     onData: (listener) => pty.onData(listener),
     onExit: (listener) => pty.onExit(listener),
     write: (data) => pty.write(data),
     resize: (cols, rows) => pty.resize(cols, rows),
-    kill: (signal) => pty.kill(signal),
-    pause: () => pty.pause(),
-    resume: () => pty.resume(),
+    // What node-pty's own kill() does, without going through it (see closeWithoutSignal).
+    kill: (signal) => process.kill(pid, signal),
+    close: () => closeWithoutSignal(pty),
     pendingInputBytes: () => pendingWriteBytes(pty),
   };
 };
@@ -51,8 +50,7 @@ export function createTerminalManager(getWindow: () => BrowserWindow | null): Te
     shell: () => ({ file: chooseShell(process.env.SHELL), args: SHELL_ARGS, env: buildShellEnv(process.env) }),
     homeDir: homedir,
     isDirectory,
-    processTable: createProcessTable(),
-    signal: signalProcess,
+    isOwnChild: createIsOwnChild(),
     events: {
       data: (event) => send(TERMINAL_IPC.data, event),
       exit: (event) => send(TERMINAL_IPC.exit, event),

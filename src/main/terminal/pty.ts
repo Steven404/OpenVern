@@ -1,5 +1,5 @@
-// The slice of a PTY the terminal service uses. node-pty's `IPty` satisfies it structurally, so the service can be
-// driven by a fake in tests; only ./service.ts imports node-pty itself.
+// The slice of a PTY the terminal service uses, so the service can be driven by a fake in tests. Only ./service.ts
+// imports node-pty itself and adapts it to this.
 
 export interface PtyDisposable {
   dispose(): void;
@@ -13,19 +13,20 @@ export interface PtyExit {
 export interface PtyProcess {
   readonly pid: number;
   onData(listener: (data: string) => void): PtyDisposable;
+  /** Reported once the shell has been reaped (node-pty: up to 200 ms later). */
   onExit(listener: (exit: PtyExit) => void): PtyDisposable;
   write(data: string): void;
   resize(cols: number, rows: number): void;
-  /** Sends a signal (`SIGHUP` when omitted) to the shell. */
-  kill(signal?: string): void;
-  /** Stops reading output until `resume()`; used for flow control. */
-  pause(): void;
-  resume(): void;
+  /** Sends `signal` to the shell's pid. The caller decides when that pid is still the shell. */
+  kill(signal: 'SIGHUP' | 'SIGKILL'): void;
+  /** Closes the terminal device (the master side), which hangs up the shell's session. Sends no signal itself. */
+  close(): void;
   /**
-   * Bytes written but not yet read by the shell (node-pty queues them without limit). Null when it cannot be told;
-   * absent when the PTY does not support it. Used to bound queued input (`TERMINAL.pendingInputMaxBytes`).
+   * Bytes written but not yet read by the shell (node-pty queues them without limit), or null when that cannot be
+   * told. Used to bound queued input (`TERMINAL.pendingInputMaxBytes`); the caller refuses input when it cannot be
+   * told.
    */
-  pendingInputBytes?(): number | null;
+  pendingInputBytes(): number | null;
 }
 
 export interface PtySpawnOptions {

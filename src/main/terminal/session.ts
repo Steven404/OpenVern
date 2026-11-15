@@ -1,32 +1,22 @@
-// One terminal session: a PTY running the shell plus the headless screen its output is written into (plan T1.2).
-// Output passes through an OutputFilter (./output-filter.ts), then goes to the screen and out as data events with a
-// sequence number that increases by one per event, so a reattaching renderer can tell which events its snapshot
-// already holds. Every event ends with xterm's parser at rest, so every snapshot does too.
+// One terminal session (docs/terminal-plan.md T1.2, T1.4): a PTY running the shell and a bounded copy of its raw
+// output for replay. Output is never interpreted here: each chunk goes out unmodified as a data event, with a `seq`
+// that increases by one per event, and into the replay buffer. Both happen in the same synchronous step, so the
+// replay and the `seq` read together always agree: the replay holds every event up to that `seq` and none after.
 
-import type {
-  TerminalDataEvent,
-  TerminalExitEvent,
-  TerminalInfo,
-  TerminalReadRequest,
-  TerminalReadResult,
-  TerminalStatus,
-} from '@shared/terminal';
+import type { TerminalDataEvent, TerminalExitEvent, TerminalInfo, TerminalStatus } from '@shared/terminal';
 import { TERMINAL } from '@shared/terminal';
 import type { Id } from '@shared/types';
-import { OutputFilter, type OutputFilterOptions } from './output-filter';
-import { type KillSignal, SessionProcesses, type SignalProcess, signalProcess } from './processes';
+import type { IsOwnChild } from './own-child';
 import type { PtyDisposable, PtyProcess } from './pty';
-import type { TerminalScreen } from './screen';
+import { ReplayBuffer } from './replay-buffer';
 
-/**
- * How long the processes get after SIGHUP before SIGKILL, and how long the shell then gets to report its exit before
- * the kill gives up waiting.
- */
+/** How long the shell gets after SIGHUP before SIGKILL, and after SIGKILL before the end stops waiting for it. */
 export const KILL_GRACE_MS = 1_000;
 
-// Flow control: stop reading the PTY while this much output (in UTF-16 units) is waiting to be parsed.
-const BACKLOG_HIGH = 1024 * 1024;
-const BACKLOG_LOW = 128 * 1024;
+/** Shown in the terminal when input is refused because the queue waiting for the shell cannot be measured. */
+export const INPUT_UNMEASURABLE_NOTICE =
+  '\r\n[OpenVern] This terminal no longer accepts input: OpenVern cannot tell how much input is waiting for the ' +
+  'shell, so it cannot keep that input bounded. Output still shows. Open a new terminal after updating OpenVern.\r\n';
 
 export interface SessionEvents {
   data(event: TerminalDataEvent): void;
@@ -36,48 +26,53 @@ export interface SessionEvents {
 export interface SessionOptions {
   chatId: Id;
   pty: PtyProcess;
-  screen: TerminalScreen;
   /** Basename of the shell, e.g. `zsh`. */
   shell: string;
   cwd: string;
+  cols: number;
+  rows: number;
   events: SessionEvents;
+  /** Checked right before every signal to the shell's pid; false skips the signal. */
+  isOwnChild: IsOwnChild;
   killGraceMs?: number;
-  /** The processes in the shell's session. Default: none known, so only the shell is signalled. */
-  processes?: SessionProcesses;
-  /** How processes other than the shell are signalled. Default: `process.kill`. */
-  signal?: SignalProcess;
   /** Bytes of input that may wait for the shell to read them. Default: `TERMINAL.pendingInputMaxBytes`. */
   pendingInputMaxBytes?: number;
-  filter?: OutputFilterOptions;
+  /** Raw output kept for replay. Default: `TERMINAL.replayMaxBytes`. */
+  replayMaxBytes?: number;
   log?: (message: string) => void;
+}
+
+export interface SessionReplay {
+  replay: string;
+  replayTruncated: boolean;
+  seq: number;
 }
 
 export class TerminalSession {
   readonly chatId: Id;
   private readonly pty: PtyProcess;
-  private readonly screen: TerminalScreen;
   private readonly shell: string;
   private readonly cwd: string;
+  private cols: number;
+  private rows: number;
   private readonly events: SessionEvents;
+  private readonly isOwnChild: IsOwnChild;
   private readonly killGraceMs: number;
-  private readonly processes: SessionProcesses;
-  private readonly signal: SignalProcess;
   private readonly pendingInputMax: number;
-  private readonly filter: OutputFilter;
   private readonly log: (message: string) => void;
-  private readonly dataSubscription: PtyDisposable;
-  private readonly exitSubscription: PtyDisposable;
+  private readonly buffer: ReplayBuffer;
+  private readonly subscriptions: PtyDisposable[];
   private status: TerminalStatus = { state: 'running' };
   private seq = 0;
-  private backlog = 0;
-  private paused = false;
   private muted = false;
-  /** One warning per stretch of dropped input, and one if the queue cannot be measured. */
+  /** End has begun: no more input or resizes reach the PTY. */
+  private endStarted = false;
+  private ending: Promise<void> | null = null;
+  private ptyClosed = false;
+  /** One log line per stretch of dropped input. */
   private inputDropWarned = false;
-  private inputUnmeasuredWarned = false;
-  private killing: Promise<void> | null = null;
-  /** The lookup made when the shell exited, which records what it left behind (Linux). */
-  private exitLookup: Promise<void> = Promise.resolve();
+  /** The queued input could not be measured once: input stays refused for the rest of the session. */
+  private inputRefused = false;
   private readonly exitWaiters = new Set<() => void>();
   private resolveExited!: () => void;
   /** Resolves once node-pty has reported the shell's exit. */
@@ -88,29 +83,32 @@ export class TerminalSession {
   constructor(options: SessionOptions) {
     this.chatId = options.chatId;
     this.pty = options.pty;
-    this.screen = options.screen;
     this.shell = options.shell;
     this.cwd = options.cwd;
+    this.cols = options.cols;
+    this.rows = options.rows;
     this.events = options.events;
+    this.isOwnChild = options.isOwnChild;
     this.killGraceMs = options.killGraceMs ?? KILL_GRACE_MS;
-    this.processes = options.processes ?? new SessionProcesses(options.pty.pid, null);
-    this.signal = options.signal ?? signalProcess;
     this.pendingInputMax = options.pendingInputMaxBytes ?? TERMINAL.pendingInputMaxBytes;
-    this.filter = new OutputFilter(options.filter);
     this.log = options.log ?? console.warn;
-    this.dataSubscription = this.pty.onData((data) => this.handleData(data));
-    this.exitSubscription = this.pty.onExit(({ exitCode, signal }) => this.handleExit(exitCode, signal ?? null));
+    this.buffer = new ReplayBuffer(options.replayMaxBytes ?? TERMINAL.replayMaxBytes);
+    this.subscriptions = [
+      this.pty.onData((data) => this.output(data)),
+      this.pty.onExit(({ exitCode, signal }) => this.handleExit(exitCode, signal ?? null)),
+    ];
   }
 
   get pid(): number {
     return this.pty.pid;
   }
 
+  /** Until node-pty reports the exit. A shell that is being ended is still running. */
   get running(): boolean {
     return this.status.state === 'running';
   }
 
-  /** The sequence number of the last data event sent. */
+  /** The `seq` of the last data event sent. */
   get lastSeq(): number {
     return this.seq;
   }
@@ -120,25 +118,40 @@ export class TerminalSession {
       chatId: this.chatId,
       shell: this.shell,
       cwd: this.cwd,
-      cols: this.screen.cols,
-      rows: this.screen.rows,
+      cols: this.cols,
+      rows: this.rows,
       status: { ...this.status },
     };
   }
 
+  /** The raw output kept so far and the `seq` of the last event in it. Synchronous, so the two always agree. */
+  replay(): SessionReplay {
+    const { text, truncated } = this.buffer.snapshot();
+    return { replay: text, replayTruncated: truncated, seq: this.seq };
+  }
+
+  /** Drops the kept output (the renderer crashed); the shell keeps running and new output is kept again. */
+  clearReplay(): void {
+    this.buffer.clear();
+  }
+
   /**
    * Passes input to the shell, unless more than `pendingInputMaxBytes` would then be waiting for it to read (a shell
-   * that is not reading, e.g. stopped with Ctrl+S, or a huge paste): that write is dropped whole.
+   * that is not reading, e.g. stopped with Ctrl+S, or a huge paste): that write is dropped whole. When the waiting
+   * input cannot be measured, input is refused for good and the terminal says why (failing closed).
    */
   write(data: string): void {
-    if (!this.running || data.length === 0) return;
-    const pending = this.pty.pendingInputBytes?.();
+    if (!this.running || this.endStarted || this.inputRefused || data.length === 0) return;
+    const pending = this.pendingInput();
     if (pending === null) {
-      if (!this.inputUnmeasuredWarned) {
-        this.inputUnmeasuredWarned = true;
-        this.log('[openvern] terminal: cannot measure queued input (node-pty internals changed); input is not bounded');
-      }
-    } else if (pending !== undefined && pending + Buffer.byteLength(data, 'utf8') > this.pendingInputMax) {
+      this.inputRefused = true;
+      this.log(
+        '[openvern] terminal: cannot measure the input waiting for the shell; input to this terminal is refused',
+      );
+      this.output(INPUT_UNMEASURABLE_NOTICE);
+      return;
+    }
+    if (pending + Buffer.byteLength(data, 'utf8') > this.pendingInputMax) {
       if (!this.inputDropWarned) {
         this.inputDropWarned = true;
         this.log(
@@ -152,87 +165,66 @@ export class TerminalSession {
   }
 
   resize(cols: number, rows: number): void {
-    if (cols === this.screen.cols && rows === this.screen.rows) return;
-    if (this.running) {
-      try {
-        this.pty.resize(cols, rows);
-      } catch {
-        // The PTY can close between the exit and our status update; the screen still resizes.
-      }
+    if (cols === this.cols && rows === this.rows) return;
+    this.cols = cols;
+    this.rows = rows;
+    if (!this.running || this.endStarted) return;
+    try {
+      this.pty.resize(cols, rows);
+    } catch {
+      // The PTY can close between the shell's exit and its report.
     }
-    this.screen.resize(cols, rows);
   }
 
-  /** The serialized screen and the `seq` it is current to. Rejects if the session is disposed while waiting. */
-  snapshot(): Promise<{ snapshot: string; seq: number; info: TerminalInfo }> {
-    // Every event up to `seq` was written to the screen before this marker, and every later one after it.
-    const seq = this.seq;
-    return this.screen.afterParsed(() => ({ snapshot: this.screen.serialize(), seq, info: this.info() }));
-  }
-
-  /** The requested range, once pending output has been parsed. Rejects if the session is disposed while waiting. */
-  read(request: TerminalReadRequest): Promise<TerminalReadResult> {
-    return this.screen.afterParsed(() => ({ info: this.info(), ...this.screen.read(request) }));
-  }
-
-  /** Stops data and exit events (the session has been forgotten; a new one may already use the chat id). */
+  /** Stops data and exit events and frees the kept output (the session has been forgotten). */
   mute(): void {
     this.muted = true;
+    this.buffer.clear();
   }
 
   /**
-   * Ends the shell and every process still in its session (plan §2, "Ending a terminal"): SIGHUP to all of them, then,
-   * after `killGraceMs`, SIGKILL to those that remain, whether or not the shell is still there. When the shell was
-   * the only process, it resolves as soon as the shell exits. Otherwise it resolves after the SIGKILL, once the shell
-   * has reported its exit or another `killGraceMs` has passed. Also sweeps a session whose shell already exited.
+   * Ends the shell (plan §2, "Ending a terminal"): SIGHUP; if the shell has not exited after `killGraceMs`, close the
+   * terminal device (which hangs up its foreground job too) and SIGKILL it. Only the shell is signalled, never once
+   * its exit has been reported, and only after checking that its pid is still a child of this process. Resolves once
+   * the exit has been reported, or `killGraceMs` after the SIGKILL step. Idempotent.
+   *
+   * The device is closed only after the grace period, not together with the SIGHUP: closing it makes the kernel send
+   * the shell a second SIGHUP, and bash, getting it while it is still handling the first, dies at once without
+   * passing the hang-up on to its jobs, so a plain `sleep 100 &` would outlive the terminal (seen with bash 3.2 on
+   * macOS; zsh is not affected). A shell that exits on the SIGHUP needs no close: node-pty closes the device itself.
    */
-  kill(): Promise<void> {
-    this.killing ??= this.endProcesses();
-    return this.killing;
+  end(): Promise<void> {
+    this.ending ??= this.runEnd();
+    return this.ending;
   }
 
-  /** SIGKILL now, synchronously, to the shell and its session. For process exit, when nothing can wait. */
+  /** SIGKILL now, synchronously, if the shell is still ours. For process exit, when nothing can wait. */
   killNow(): void {
-    const others = this.processes.members(this.processes.snapshotSync());
-    if (this.running) this.signalShell('SIGKILL');
-    for (const entry of others) this.signal(entry.pid, 'SIGKILL');
+    this.signal('SIGKILL');
   }
 
-  /** Resolves once the kill has finished and the shell has exited: until then the session still holds a process. */
-  whenGone(): Promise<void> {
-    return Promise.all([this.kill(), this.exited]).then(() => undefined);
+  private async runEnd(): Promise<void> {
+    this.endStarted = true;
+    if (!this.running) return;
+    // Not our child any more: the device's hang-up is the only one left to give.
+    if (!this.signal('SIGHUP')) this.closePty();
+    if (await this.waitForExit(this.killGraceMs)) return;
+    this.closePty();
+    this.signal('SIGKILL');
+    await this.waitForExit(this.killGraceMs);
   }
 
-  /** Mutes, kills and frees the screen. Resolves when the kill has finished (see `kill`). */
-  dispose(): Promise<void> {
-    this.mute();
-    const killed = this.kill();
-    // Rejects pending snapshot and read waits, so no IPC call is left hanging.
-    this.screen.dispose();
-    void this.exited.then(() => this.exitSubscription.dispose());
-    return killed.finally(() => this.dataSubscription.dispose());
-  }
-
-  private async endProcesses(): Promise<void> {
-    await this.exitLookup;
-    // Look before signalling: on macOS the session's processes can only be told apart while the shell is alive.
-    const first = this.processes.members(await this.processes.snapshot());
-    if (!this.running && first.length === 0) return;
-    if (this.running) this.signalShell('SIGHUP');
-    for (const entry of first) this.signal(entry.pid, 'SIGHUP');
-    if (first.length === 0) {
-      if (await this.waitForExit(this.killGraceMs)) return;
-    } else {
-      await delay(this.killGraceMs);
+  private closePty(): void {
+    if (this.ptyClosed) return;
+    this.ptyClosed = true;
+    try {
+      this.pty.close();
+    } catch {
+      // Already closed.
     }
-    // Look again right before SIGKILL: only processes that are still the ones seen (pid and start time) get it.
-    const second = this.processes.members(await this.processes.snapshot());
-    if (this.running) this.signalShell('SIGKILL');
-    for (const entry of second) this.signal(entry.pid, 'SIGKILL');
-    if (this.running) await this.waitForExit(this.killGraceMs);
   }
 
-  /** Resolves true when the shell exits within `ms`, false otherwise. */
+  /** Resolves true when the shell's exit is reported within `ms`, false otherwise. */
   private waitForExit(ms: number): Promise<boolean> {
     if (!this.running) return Promise.resolve(true);
     return new Promise((resolve) => {
@@ -247,65 +239,54 @@ export class TerminalSession {
     });
   }
 
-  /** Signals the shell through node-pty. Only while it has not reported the exit, so never a reaped pid. */
-  private signalShell(signal: KillSignal): void {
-    if (!this.running) return;
+  /**
+   * Signals the shell's pid, only while its exit has not been reported and only when the pid is still our child
+   * (checked right before, with nothing in between that could let the exit report run). True when it was sent.
+   */
+  private signal(signal: 'SIGHUP' | 'SIGKILL'): boolean {
+    if (!this.running) return false;
+    if (!this.isOwnChild(this.pty.pid)) {
+      this.log(`[openvern] terminal: pid ${this.pty.pid} is no longer this app's child; ${signal} not sent`);
+      return false;
+    }
     try {
       this.pty.kill(signal);
+      return true;
     } catch {
-      // Already gone.
+      return false; // Already gone.
     }
   }
 
-  private handleData(data: string): void {
-    this.emit(this.filter.push(data));
-  }
-
-  private emit(data: string): void {
-    if (data.length === 0) return;
+  /** Shell output (or a notice of ours): into the replay buffer and out as the next data event, unmodified. */
+  private output(data: string): void {
+    if (data.length === 0 || this.muted) return;
     this.seq += 1;
-    const seq = this.seq;
-    this.backlog += data.length;
-    this.screen.write(data, () => {
-      this.backlog -= data.length;
-      if (this.paused && this.backlog <= BACKLOG_LOW) {
-        this.paused = false;
-        this.pty.resume();
-      }
-    });
-    if (!this.paused && this.running && this.backlog > BACKLOG_HIGH) {
-      this.paused = true;
-      this.pty.pause();
-    }
-    // Delivery to the renderer is not flow-controlled: a renderer that falls behind is not waited for. Acknowledgement
-    // based flow control (the renderer confirming what it has drawn, main pausing the PTY) would go here; it is out of
-    // scope for now (T1 review decision).
-    if (!this.muted) this.events.data({ chatId: this.chatId, seq, data });
+    this.buffer.append(data);
+    // Delivery is not flow-controlled: a renderer that falls behind is not waited for. Acknowledgement-based flow
+    // control (the renderer confirming how much it has written into its emulator, main calling pause() on the PTY
+    // while too much is unconfirmed and resume() once it catches up) would go here. Deferred by decision.
+    this.events.data({ chatId: this.chatId, seq: this.seq, data });
   }
 
   private handleExit(exitCode: number, signal: number | null): void {
     if (!this.running) return;
-    // The shell is gone: nothing will complete a sequence it left open.
-    this.emit(this.filter.flush());
     // node-pty reports a signal death as code 0 plus the signal; report no code then.
     this.status = { state: 'exited', exitCode: signal ? null : exitCode, signal: signal || null };
-    if (this.paused) {
-      this.paused = false;
-      this.pty.resume();
-    }
-    // node-pty has reaped the shell, so its pid may be reused from here on: nothing signals it again. (node-pty 1.1.0's
-    // kill() is only process.kill(pid) and frees nothing.)
-    this.processes.leaderGone();
-    // Record what the shell left in its session while that can still be told (Linux; see ./processes.ts).
-    this.exitLookup = this.processes.snapshot().then((snapshot) => {
-      this.processes.members(snapshot, { justExited: true });
-    });
+    // node-pty has reaped the shell, so its pid may be reused from here on: nothing signals it again (see `signal`).
+    // node-pty emits the exit only after its read side has closed, so no output follows.
+    for (const subscription of this.subscriptions) subscription.dispose();
     for (const resolve of [...this.exitWaiters]) resolve();
     this.resolveExited();
     if (!this.muted) this.events.exit({ chatId: this.chatId, status: { ...this.status } });
   }
-}
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  private pendingInput(): number | null {
+    let value: unknown;
+    try {
+      value = this.pty.pendingInputBytes();
+    } catch {
+      return null;
+    }
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+  }
 }

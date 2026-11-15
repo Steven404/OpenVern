@@ -1,12 +1,11 @@
 // Terminal sessions by chat id (plan T1.3, T1.4). Inputs here are already validated (./validate.ts); the PTY, the
-// shell, the file system and where events go are injected, so tests can run it with a fake PTY.
+// shell, the file system, the own-child check and where events go are injected, so tests run it with a fake PTY.
 
 import { basename, isAbsolute, resolve } from 'node:path';
-import { TERMINAL, type TerminalOpenResult, type TerminalReadAnswer, type TerminalReadRequest } from '@shared/terminal';
+import { TERMINAL, type TerminalInfo, type TerminalOpenResult } from '@shared/terminal';
 import type { Id } from '@shared/types';
-import { type ProcessTable, SessionProcesses, type SignalProcess } from './processes';
+import type { IsOwnChild } from './own-child';
 import type { PtyProcess, SpawnPty } from './pty';
-import { TerminalScreen } from './screen';
 import { type SessionEvents, TerminalSession } from './session';
 
 export interface ShellCommand {
@@ -24,15 +23,13 @@ export interface TerminalManagerDeps {
   /** Whether the path is an existing directory. Must not throw. */
   isDirectory: (path: string) => boolean;
   events: SessionEvents;
-  /** Finds the processes in each shell's session. Null or omitted: only the shells themselves are signalled. */
-  processTable?: ProcessTable | null;
-  /** How those processes are signalled. Default: `process.kill`. */
-  signal?: SignalProcess;
+  /** Whether a pid is still a child of this process; checked right before every signal to a shell. */
+  isOwnChild: IsOwnChild;
   killGraceMs?: number;
   maxSessions?: number;
   maxSpawnsPerRun?: number;
   pendingInputMaxBytes?: number;
-  scrollbackLines?: number;
+  replayMaxBytes?: number;
   log?: (message: string) => void;
 }
 
@@ -72,11 +69,11 @@ export class TerminalShutdownError extends Error {
 
 export class TerminalManager {
   private readonly sessions = new Map<Id, TerminalSession>();
-  /** Forgotten sessions whose kill has not finished or whose shell has not yet reported its exit. */
+  /** Forgotten sessions whose shell has not yet reported its exit. They still count against `maxSessions`. */
   private readonly dying = new Set<TerminalSession>();
   private readonly maxSessions: number;
   private readonly maxSpawns: number;
-  /** Shells started in this app run (see `TerminalSpawnLimitError`). */
+  /** Spawn attempts in this app run, failed ones included (see `TerminalSpawnLimitError`). */
   private spawned = 0;
   private shuttingDown = false;
 
@@ -90,14 +87,12 @@ export class TerminalManager {
     return this.sessions.size;
   }
 
-  /** What counts against `maxSessions`: every session by chat id, plus forgotten ones whose shell is still running. */
+  /** What counts against `maxSessions`: every session by chat id, plus forgotten ones whose exit is not reported. */
   get liveCount(): number {
-    let count = this.sessions.size;
-    for (const session of this.dying) if (session.running) count += 1;
-    return count;
+    return this.sessions.size + this.dying.size;
   }
 
-  /** Shells started so far in this app run. */
+  /** Spawn attempts so far in this app run. */
   get spawnCount(): number {
     return this.spawned;
   }
@@ -119,27 +114,31 @@ export class TerminalManager {
     return this.sessions.has(chatId);
   }
 
+  /** The info of every session held, running or exited, oldest first. */
+  list(): TerminalInfo[] {
+    return [...this.sessions.values()].map((session) => session.info());
+  }
+
   /**
-   * Attaches to the chat's session, running or exited (its snapshot and `seq`; the requested size is ignored, `info`
+   * Attaches to the chat's session, running or exited (its replay and `seq`; the requested size is ignored, `info`
    * carries the session's), or starts a new one. With `restart`, an exited session is replaced by a fresh shell.
-   * Throws `TerminalShutdownError` during shutdown, `TerminalSpawnLimitError` once `maxSpawnsPerRun` shells have been
-   * started, `TerminalLimitError` at `maxSessions`, and whatever the spawn throws.
+   * Throws `TerminalShutdownError` during shutdown, `TerminalSpawnLimitError` once `maxSpawnsPerRun` spawns have been
+   * attempted, `TerminalLimitError` at `maxSessions`, and whatever the spawn throws. Synchronous throughout, so no
+   * output can arrive between reading the replay and its `seq`, and two opens for one chat can't both create.
    */
   async open(params: OpenParams): Promise<TerminalOpenResult> {
     if (this.shuttingDown) throw new TerminalShutdownError();
     const existing = this.sessions.get(params.chatId);
     if (existing && (existing.running || params.restart !== true)) {
-      const { snapshot, seq, info } = await existing.snapshot();
-      return { info, snapshot, seq, created: false };
+      return { info: existing.info(), ...existing.replay(), created: false };
     }
-    // Synchronous from here to the map insert, so two opens for one chat can't both create.
     if (this.spawned >= this.maxSpawns) throw new TerminalSpawnLimitError(this.maxSpawns);
-    // Room first: a refused restart keeps the exited session (and its scrollback).
+    // Room first: a refused restart keeps the exited session (and its replay).
     this.makeRoom(existing);
-    if (existing) this.forget(existing);
     const session = this.create(params);
+    if (existing) void this.forget(existing);
     this.sessions.set(params.chatId, session);
-    return { info: session.info(), snapshot: '', seq: 0, created: true };
+    return { info: session.info(), replay: '', replayTruncated: false, seq: 0, created: true };
   }
 
   write(chatId: Id, data: string): void {
@@ -150,55 +149,52 @@ export class TerminalManager {
     this.sessions.get(chatId)?.resize(cols, rows);
   }
 
-  /** Reads a running or exited session. `no_terminal` when the chat has none (or it is closed while reading). */
-  async read(chatId: Id, request: TerminalReadRequest): Promise<TerminalReadAnswer> {
-    const session = this.sessions.get(chatId);
-    if (!session) return { ok: false, reason: 'no_terminal' };
-    try {
-      return { ok: true, result: await session.read(request) };
-    } catch {
-      return { ok: false, reason: 'no_terminal' };
-    }
-  }
-
   /**
-   * Ends the session's processes and forgets it. Resolves at once; they finish dying in the background, and a shell
-   * still running counts against `maxSessions` until it has exited.
+   * Forgets the session and ends its shell. Resolves once the shell's exit is reported, or after the grace period
+   * that follows the SIGKILL. The shell counts against `maxSessions` until its exit is reported.
    */
   async close(chatId: Id): Promise<void> {
     const session = this.sessions.get(chatId);
-    if (session) this.forget(session);
+    if (session) await this.forget(session);
   }
 
-  /** Forgets every session and resolves once all their kills have finished (SIGKILL after the grace period). */
+  /** Forgets every session and resolves once every shell being ended has exited or been given up on. */
   async disposeAll(): Promise<void> {
-    for (const session of [...this.sessions.values()]) this.forget(session);
-    await Promise.all([...this.dying].map((session) => session.kill()));
+    for (const session of [...this.sessions.values()]) void this.forget(session);
+    await Promise.all([...this.dying].map((session) => session.end()));
   }
 
-  /** SIGKILL to every session's processes. Synchronous, for `process.on('exit')`. */
+  /** The renderer crashed: drop every session's kept output, so it can't be replayed into the next one. */
+  clearReplays(): void {
+    for (const session of this.sessions.values()) session.clearReplay();
+  }
+
+  /** SIGKILL to every shell still ours. Synchronous, for `process.on('exit')`. */
   killAllNow(): void {
     for (const session of this.sessions.values()) session.killNow();
     for (const session of this.dying) session.killNow();
   }
 
-  private forget(session: TerminalSession): void {
+  private forget(session: TerminalSession): Promise<void> {
     if (this.sessions.get(session.chatId) === session) this.sessions.delete(session.chatId);
-    this.dying.add(session);
-    void session.dispose();
-    void session.whenGone().then(() => this.dying.delete(session));
+    session.mute();
+    if (session.running) {
+      this.dying.add(session);
+      void session.exited.then(() => this.dying.delete(session));
+    }
+    return session.end();
   }
 
   /**
-   * At the limit, drops the oldest exited session (kept only for reads); refuses when that does not make room.
-   * `replacing` is an exited session the caller is about to forget, so its slot counts as free.
+   * At the limit, drops the oldest exited session; refuses when that does not make room. `replacing` is an exited
+   * session the caller is about to forget, so its slot counts as free.
    */
   private makeRoom(replacing?: TerminalSession): void {
     const used = () => this.liveCount - (replacing ? 1 : 0);
     if (used() < this.maxSessions) return;
     for (const session of this.sessions.values()) {
       if (!session.running && session !== replacing) {
-        this.forget(session);
+        void this.forget(session);
         break;
       }
     }
@@ -208,33 +204,27 @@ export class TerminalManager {
   private create(params: OpenParams): TerminalSession {
     const cwd = this.resolveCwd(params.cwd);
     const shell = this.deps.shell();
-    const screen = new TerminalScreen(params.cols, params.rows, this.deps.scrollbackLines ?? TERMINAL.scrollbackLines);
-    let pty: PtyProcess;
     // Counted before the call: a spawn that fails in native code may leak as well.
     this.spawned += 1;
-    try {
-      pty = this.deps.spawn(shell.file, shell.args, {
-        name: 'xterm-256color',
-        cols: params.cols,
-        rows: params.rows,
-        cwd,
-        env: shell.env,
-      });
-    } catch (err) {
-      screen.dispose();
-      throw err;
-    }
+    const pty: PtyProcess = this.deps.spawn(shell.file, shell.args, {
+      name: 'xterm-256color',
+      cols: params.cols,
+      rows: params.rows,
+      cwd,
+      env: shell.env,
+    });
     return new TerminalSession({
       chatId: params.chatId,
       pty,
-      screen,
       shell: basename(shell.file),
       cwd,
+      cols: params.cols,
+      rows: params.rows,
       events: this.deps.events,
+      isOwnChild: this.deps.isOwnChild,
       killGraceMs: this.deps.killGraceMs,
-      processes: new SessionProcesses(pty.pid, this.deps.processTable ?? null),
-      signal: this.deps.signal,
       pendingInputMaxBytes: this.deps.pendingInputMaxBytes,
+      replayMaxBytes: this.deps.replayMaxBytes,
       log: this.deps.log,
     });
   }

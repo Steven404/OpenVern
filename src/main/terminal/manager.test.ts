@@ -1,9 +1,8 @@
-// Sessions by chat id (docs/terminal-plan.md T1.3): create or attach, the session limit, close, replacement after
-// exit, the starting folder and process lifetime. Driven by a fake PTY, so no real shell is ever spawned.
+// Sessions by chat id (docs/terminal-plan.md T1.3, T1.4): create or attach with a raw replay, list, the session and
+// spawn limits, restart, close, the starting folder and shutdown. Driven by a fake PTY, so no real shell is spawned.
 
 import { TERMINAL, type TerminalDataEvent, type TerminalExitEvent } from '@shared/terminal';
 import { describe, expect, it } from 'vitest';
-import { createFakeProcessTable } from './fake-processes';
 import { createFakePty, type FakePty } from './fake-pty';
 import {
   type OpenParams,
@@ -48,7 +47,9 @@ function makeManager(over: Partial<TerminalManagerDeps> = {}): Harness {
     homeDir: () => '/home/me',
     isDirectory: () => true,
     events: { data: (event) => data.push(event), exit: (event) => exits.push(event) },
+    isOwnChild: () => true,
     killGraceMs: 1,
+    log: () => {},
     ...over,
   });
   return { manager, ptys, spawns, data, exits };
@@ -90,13 +91,14 @@ describe('TerminalManager.open', () => {
         rows: 24,
         status: { state: 'running' },
       },
-      snapshot: '',
+      replay: '',
+      replayTruncated: false,
       seq: 0,
       created: true,
     });
   });
 
-  it('attaches a second open to the running session, with its snapshot and seq', async () => {
+  it('attaches a second open to the running session, with its raw replay and seq', async () => {
     const harness = makeManager();
     const first = await harness.manager.open(open('chat-1', '/project'));
     expect(first.created).toBe(true);
@@ -107,8 +109,8 @@ describe('TerminalManager.open', () => {
     const again = await harness.manager.open(open('chat-1', '/elsewhere', 120, 40));
     expect(again.created).toBe(false);
     expect(again.seq).toBe(2);
-    expect(again.snapshot).toContain('one');
-    expect(again.snapshot).toContain('two');
+    expect(again.replay).toBe('one\r\ntwo\r\n');
+    expect(again.replayTruncated).toBe(false);
     // The requested folder and size are ignored: the session keeps its own.
     expect(again.info).toMatchObject({ chatId: 'chat-1', cwd: '/project', cols: 80, rows: 24 });
     expect(harness.spawns).toHaveLength(1);
@@ -146,16 +148,13 @@ describe('TerminalManager.open', () => {
     ptyAt(harness, 0).emitExit(0);
 
     const fresh = await harness.manager.open({ ...open('chat-1'), restart: true });
-    expect(fresh).toMatchObject({ created: true, snapshot: '', seq: 0 });
+    expect(fresh).toMatchObject({ created: true, replay: '', replayTruncated: false, seq: 0 });
     expect(fresh.info.status).toStrictEqual({ state: 'running' });
     expect(harness.spawns).toHaveLength(2);
     expect(harness.manager.size).toBe(1);
 
     ptyAt(harness, 1).emitData('new output\r\n');
-    expect(await harness.manager.read('chat-1', {})).toMatchObject({
-      ok: true,
-      result: { totalLines: 1, text: 'new output' },
-    });
+    expect(await harness.manager.open(open('chat-1'))).toMatchObject({ replay: 'new output\r\n', seq: 1 });
   });
 
   it('does not keep a session when the spawn throws', async () => {
@@ -169,6 +168,7 @@ describe('TerminalManager.open', () => {
       homeDir: () => '/home/me',
       isDirectory: () => true,
       events: { data: () => {}, exit: () => {} },
+      isOwnChild: () => true,
     });
 
     await expect(manager.open(open('chat-1'))).rejects.toThrow('posix_spawnp failed.');
@@ -194,7 +194,7 @@ describe('TerminalManager exited sessions and restart', () => {
     const again = await harness.manager.open(open('chat-1'));
     expect(again.created).toBe(false);
     expect(again.seq).toBe(1);
-    expect(again.snapshot).toContain('build failed');
+    expect(again.replay).toBe('build failed\r\n');
     expect(again.info.status).toStrictEqual({ state: 'exited', exitCode: 2, signal: null });
     expect(harness.spawns).toHaveLength(1);
   });
@@ -270,6 +270,7 @@ describe('TerminalManager limits', () => {
       homeDir: () => '/home/me',
       isDirectory: () => true,
       events: { data: () => {}, exit: () => {} },
+      isOwnChild: () => true,
       maxSpawnsPerRun: 2,
     });
     await expect(manager.open(open('chat-1'))).rejects.toThrow('posix_spawnp');
@@ -288,6 +289,27 @@ describe('TerminalManager limits', () => {
     await expect(harness.manager.open({ ...open('b'), restart: true })).resolves.toMatchObject({ created: true });
     expect(harness.manager.liveCount).toBe(2);
     await expect(harness.manager.open(open('c'))).rejects.toThrow(TerminalLimitError);
+  });
+
+  it('at the limit with a shell still dying, drops the oldest exited session before refusing', async () => {
+    const harness = makeManager({ maxSessions: 3 });
+    await harness.manager.open(open('a'));
+    await harness.manager.open(open('b'));
+    await harness.manager.open(open('c'));
+    ptyAt(harness, 1).emitExit(0);
+    ptyAt(harness, 2).emitExit(0);
+    await harness.manager.close('a'); // ignores SIGHUP and SIGKILL in this fake: still dying
+    expect(harness.manager.liveCount).toBe(3);
+
+    await expect(harness.manager.open(open('d'))).resolves.toMatchObject({ created: true });
+    expect(harness.manager.list().map((info) => info.chatId)).toStrictEqual(['c', 'd']);
+    await expect(harness.manager.open(open('e'))).resolves.toMatchObject({ created: true });
+    expect(harness.manager.list().map((info) => info.chatId)).toStrictEqual(['d', 'e']);
+    // Nothing exited is left to drop, and the dying shell still holds its slot.
+    await expect(harness.manager.open(open('f'))).rejects.toThrow(TerminalLimitError);
+    ptyAt(harness, 0).emitExit(0, 9);
+    await settle();
+    await expect(harness.manager.open(open('f'))).resolves.toMatchObject({ created: true });
   });
 
   it('does not end an exited session just to refuse a restart at the spawn limit', async () => {
@@ -311,24 +333,6 @@ describe('TerminalManager shutdown', () => {
 
     harness.manager.endShutdown();
     await expect(harness.manager.open(open('chat-2'))).resolves.toMatchObject({ created: true });
-  });
-});
-
-describe('TerminalManager process sessions', () => {
-  it('close ends the processes in the shell’s session through the injected table and signal', async () => {
-    const procs = createFakeProcessTable('linux');
-    const harness = makeManager({ processTable: procs.table, signal: procs.signal });
-    await harness.manager.open(open('chat-1'));
-    const pid = ptyAt(harness, 0).pid;
-    procs.add({ pid, start: '1', session: procs.keyOf(pid) });
-    procs.add({ pid: 900, start: '2', session: procs.keyOf(pid), ignoresHup: true });
-    await harness.manager.close('chat-1');
-    await settle();
-    expect(procs.signals).toStrictEqual([
-      { pid: 900, signal: 'SIGHUP' },
-      { pid: 900, signal: 'SIGKILL' },
-    ]);
-    expect(ptyAt(harness, 0).killSignals).toStrictEqual(['SIGHUP', 'SIGKILL']);
   });
 });
 
@@ -369,14 +373,62 @@ describe('TerminalManager starting folder', () => {
 });
 
 describe('TerminalManager.close and lifetime', () => {
-  it('close kills the shell and forgets the session', async () => {
-    const harness = makeManager();
+  it('close hangs up the shell, forgets the session, and resolves once the exit is reported', async () => {
+    const harness = makeManager({ killGraceMs: 10_000 });
     await harness.manager.open(open('chat-1'));
 
-    await expect(harness.manager.close('chat-1')).resolves.toBeUndefined();
+    let done = false;
+    const closed = harness.manager.close('chat-1').then(() => {
+      done = true;
+    });
     expect(harness.manager.has('chat-1')).toBe(false);
     expect(harness.manager.size).toBe(0);
+    expect(harness.manager.list()).toStrictEqual([]);
+    expect(ptyAt(harness, 0).calls).toStrictEqual(['SIGHUP']);
+    await settle();
+    expect(done).toBe(false);
+    ptyAt(harness, 0).emitExit(0, 1);
+    await closed;
     expect(ptyAt(harness, 0).killSignals).toStrictEqual(['SIGHUP']);
+    expect(harness.manager.liveCount).toBe(0);
+  });
+
+  it('close of a shell that ignores SIGHUP resolves after the SIGKILL and its grace period', async () => {
+    const harness = makeManager();
+    await harness.manager.open(open('chat-1'));
+    await harness.manager.close('chat-1');
+    expect(ptyAt(harness, 0).calls).toStrictEqual(['SIGHUP', 'close', 'SIGKILL']);
+  });
+
+  it('close never SIGKILLs a pid that is no longer our child', async () => {
+    const checked: number[] = [];
+    let ours = true;
+    const harness = makeManager({
+      isOwnChild: (pid) => {
+        checked.push(pid);
+        return ours;
+      },
+    });
+    await harness.manager.open(open('chat-1'));
+    const closed = harness.manager.close('chat-1');
+    ours = false; // reaped and reused by an unrelated process before the delayed SIGKILL
+    await closed;
+    expect(ptyAt(harness, 0).killSignals).toStrictEqual(['SIGHUP']);
+    expect(checked).toStrictEqual([4_242, 4_242]);
+    // It still counts until node-pty reports the exit.
+    expect(harness.manager.liveCount).toBe(1);
+    ptyAt(harness, 0).emitExit(0);
+    await settle();
+    expect(harness.manager.liveCount).toBe(0);
+  });
+
+  it('close of an exited session sends nothing', async () => {
+    const harness = makeManager();
+    await harness.manager.open(open('chat-1'));
+    ptyAt(harness, 0).emitExit(0);
+    await harness.manager.close('chat-1');
+    expect(ptyAt(harness, 0).calls).toStrictEqual([]);
+    expect(harness.manager.liveCount).toBe(0);
   });
 
   it('close resolves when the chat has no session', async () => {
@@ -425,38 +477,145 @@ describe('TerminalManager.close and lifetime', () => {
     expect(harness.data).toStrictEqual([]);
   });
 
-  it('killAllNow SIGKILLs every session synchronously', async () => {
-    const harness = makeManager();
+  it('disposeAll resolves as soon as every shell has reported its exit', async () => {
+    const harness = makeManager({ killGraceMs: 10_000 });
     await harness.manager.open(open('chat-1'));
     await harness.manager.open(open('chat-2'));
+    const disposed = harness.manager.disposeAll();
+    for (const pty of harness.ptys) pty.emitExit(0, 1);
+    await disposed;
+    expect(harness.ptys.map((pty) => pty.calls)).toStrictEqual([['SIGHUP'], ['SIGHUP']]);
+    expect(harness.manager.liveCount).toBe(0);
+  });
 
-    harness.manager.killAllNow();
-    expect(harness.ptys.map((pty) => pty.killSignals)).toStrictEqual([['SIGKILL'], ['SIGKILL']]);
+  it('disposeAll also waits for shells closed earlier that are still dying', async () => {
+    const harness = makeManager({ killGraceMs: 10_000 });
+    await harness.manager.open(open('chat-1'));
+    void harness.manager.close('chat-1');
+    let done = false;
+    const disposed = harness.manager.disposeAll().then(() => {
+      done = true;
+    });
+    await settle();
+    expect(done).toBe(false);
+    ptyAt(harness, 0).emitExit(0, 1);
+    await disposed;
+    expect(done).toBe(true);
+  });
+
+  it('killAllNow SIGKILLs every running shell that is still ours, synchronously', async () => {
+    const pids = [1, 2, 7];
+    const ptys: FakePty[] = [];
+    const manager = new TerminalManager({
+      spawn: () => {
+        const pty = createFakePty(pids[ptys.length]);
+        ptys.push(pty);
+        return pty;
+      },
+      shell: () => SHELL,
+      homeDir: () => '/home/me',
+      isDirectory: () => true,
+      events: { data: () => {}, exit: () => {} },
+      isOwnChild: (pid) => pid !== 7,
+      log: () => {},
+    });
+    await manager.open(open('chat-1'));
+    await manager.open(open('chat-2'));
+    await manager.open(open('chat-3'));
+    ptys[1]?.emitExit(0);
+
+    manager.killAllNow();
+    expect(ptys.map((pty) => pty.killSignals)).toStrictEqual([['SIGKILL'], [], []]);
   });
 });
 
-describe('TerminalManager.read', () => {
-  it('reads a running session and answers no_terminal without one', async () => {
+describe('TerminalManager.list', () => {
+  it('lists every session held, running or exited, oldest first, and not the ones closed', async () => {
     const harness = makeManager();
-    expect(await harness.manager.read('chat-1', {})).toStrictEqual({ ok: false, reason: 'no_terminal' });
+    expect(harness.manager.list()).toStrictEqual([]);
+    await harness.manager.open(open('a', '/project'));
+    await harness.manager.open(open('b'));
+    await harness.manager.open(open('c'));
+    ptyAt(harness, 1).emitExit(4);
+    harness.manager.resize('a', 100, 30);
+    void harness.manager.close('c');
 
-    await harness.manager.open(open('chat-1'));
-    ptyAt(harness, 0).emitData('hello\r\n');
-    expect(await harness.manager.read('chat-1', {})).toMatchObject({
-      ok: true,
-      result: { totalLines: 1, startLine: 1, endLine: 1, text: 'hello' },
-    });
+    expect(harness.manager.list()).toStrictEqual([
+      { chatId: 'a', shell: 'zsh', cwd: '/project', cols: 100, rows: 30, status: { state: 'running' } },
+      {
+        chatId: 'b',
+        shell: 'zsh',
+        cwd: '/home/me',
+        cols: 80,
+        rows: 24,
+        status: { state: 'exited', exitCode: 4, signal: null },
+      },
+    ]);
   });
 
-  it('still reads an exited session, and stops reading once it is closed', async () => {
+  it('returns copies, so a caller cannot change a session through them', async () => {
+    const harness = makeManager();
+    await harness.manager.open(open('a'));
+    const [info] = harness.manager.list();
+    if (!info) throw new Error('no session listed');
+    info.cols = 1;
+    info.status = { state: 'exited', exitCode: 0, signal: null };
+    expect(harness.manager.list()[0]).toMatchObject({ cols: 80, status: { state: 'running' } });
+  });
+});
+
+describe('TerminalManager replay on attach', () => {
+  it('the replay and seq agree exactly with the events, with output interleaved between attaches', async () => {
     const harness = makeManager();
     await harness.manager.open(open('chat-1'));
-    ptyAt(harness, 0).emitData('before exit\r\n');
-    ptyAt(harness, 0).emitExit(0);
+    const pty = ptyAt(harness, 0);
+    const events = () => harness.data.filter((event) => event.chatId === 'chat-1');
+    const upTo = (seq: number) =>
+      events()
+        .filter((event) => event.seq <= seq)
+        .map((event) => event.data)
+        .join('');
 
-    expect(await harness.manager.read('chat-1', {})).toMatchObject({ ok: true, result: { text: 'before exit' } });
+    const pieces = ['$ ', 'e', 'cho hi', '\r\n', 'hi\r\n', '\x1b[1;32m$ \x1b[0m'];
+    for (const piece of pieces) {
+      // An attach started, then output, then the attach's result is used: it must reflect the moment it was made.
+      const pending = harness.manager.open(open('chat-1'));
+      pty.emitData(piece);
+      const result = await pending;
+      expect(result.replay).toBe(upTo(result.seq));
+      expect(result.seq).toBe(events().length - 1);
+      // The renderer drops events at or below seq; what is left continues the replay exactly.
+      const rest = events()
+        .filter((event) => event.seq > result.seq)
+        .map((event) => event.data)
+        .join('');
+      expect(result.replay + rest).toBe(upTo(Number.MAX_SAFE_INTEGER));
+    }
+  });
 
-    await harness.manager.close('chat-1');
-    expect(await harness.manager.read('chat-1', {})).toStrictEqual({ ok: false, reason: 'no_terminal' });
+  it('a truncated replay starts at a line start and says so', async () => {
+    const harness = makeManager({ replayMaxBytes: 16 });
+    await harness.manager.open(open('chat-1'));
+    ptyAt(harness, 0).emitData('first line\r\nsecond line\r\n$ ');
+    const result = await harness.manager.open(open('chat-1'));
+    expect(result).toMatchObject({ replay: 'second line\r\n$ ', replayTruncated: true, seq: 1, created: false });
+  });
+
+  it('clearReplays drops every session’s output and keeps every shell running', async () => {
+    const harness = makeManager();
+    await harness.manager.open(open('a'));
+    await harness.manager.open(open('b'));
+    ptyAt(harness, 0).emitData('\x1b[that crashed the renderer\r\n');
+    ptyAt(harness, 1).emitData('other\r\n');
+    ptyAt(harness, 1).emitExit(0);
+
+    harness.manager.clearReplays();
+    for (const chatId of ['a', 'b']) {
+      expect(await harness.manager.open(open(chatId))).toMatchObject({ replay: '', replayTruncated: true, seq: 1 });
+    }
+    expect(harness.ptys.map((pty) => pty.calls)).toStrictEqual([[], []]);
+    expect(harness.manager.list().map((info) => info.status.state)).toStrictEqual(['running', 'exited']);
+    ptyAt(harness, 0).emitData('$ ls\r\nafter\r\n');
+    expect(await harness.manager.open(open('a'))).toMatchObject({ replay: 'after\r\n', seq: 2 });
   });
 });

@@ -1,127 +1,146 @@
-// One session: sequence numbers, exit handling and the kill escalation (docs/terminal-plan.md T1.2, T1.6).
+// One session (docs/terminal-plan.md T1.2, T1.4): raw output with `seq`, the replay that agrees with it, the input
+// bound that fails closed, exit handling, and ending the shell. Driven by a fake PTY; the own-child check is injected.
 
 import { TERMINAL, type TerminalDataEvent, type TerminalExitEvent } from '@shared/terminal';
-import { describe, expect, it, vi } from 'vitest';
-import { createFakePty, type FakePty } from './fake-pty';
-import { TerminalScreen } from './screen';
-import { KILL_GRACE_MS, TerminalSession } from './session';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createFakePty, type FakePty, type PendingInputMode } from './fake-pty';
+import { INPUT_UNMEASURABLE_NOTICE, KILL_GRACE_MS, TerminalSession } from './session';
 
 interface Harness {
   readonly pty: FakePty;
   readonly session: TerminalSession;
   readonly data: TerminalDataEvent[];
   readonly exits: TerminalExitEvent[];
+  readonly log: ReturnType<typeof vi.fn>;
+  /** pids the own-child check was asked about, in order. */
+  readonly checked: number[];
+  /** What the own-child check answers from now on. */
+  ownChild: boolean;
 }
 
 interface SessionOverrides {
   killGraceMs?: number;
-  pty?: FakePty;
   pendingInputMaxBytes?: number;
-  log?: (message: string) => void;
+  replayMaxBytes?: number;
+  pendingInput?: PendingInputMode;
 }
 
 function makeSession(options: SessionOverrides = {}): Harness {
-  const pty = options.pty ?? createFakePty();
+  const pty = createFakePty(4_242, { pendingInput: options.pendingInput });
   const data: TerminalDataEvent[] = [];
   const exits: TerminalExitEvent[] = [];
-  const session = new TerminalSession({
-    chatId: 'terminal-1',
+  const log = vi.fn();
+  const checked: number[] = [];
+  const harness = {
     pty,
-    screen: new TerminalScreen(80, 24),
+    data,
+    exits,
+    log,
+    checked,
+    ownChild: true,
+  } as Omit<Harness, 'session'> & { session?: TerminalSession; ownChild: boolean };
+  harness.session = new TerminalSession({
+    chatId: 'chat-1',
+    pty,
     shell: 'zsh',
     cwd: '/home/me',
+    cols: 80,
+    rows: 24,
     events: { data: (event) => data.push(event), exit: (event) => exits.push(event) },
+    isOwnChild: (pid) => {
+      checked.push(pid);
+      return harness.ownChild;
+    },
     killGraceMs: options.killGraceMs,
     pendingInputMaxBytes: options.pendingInputMaxBytes,
-    log: options.log ?? (() => {}),
+    replayMaxBytes: options.replayMaxBytes,
+    log,
   });
-  return { pty, session, data, exits };
+  return harness as Harness;
 }
 
-describe('TerminalSession data events', () => {
-  it('increases seq by exactly one per data event', () => {
+describe('TerminalSession output', () => {
+  it('forwards output unmodified, with seq increasing by exactly one per event', () => {
     const { pty, session, data } = makeSession();
-    pty.emitData('a');
-    pty.emitData('bc');
-    pty.emitData('def');
+    // Half an escape sequence, a lone ESC, and the rest: main never looks inside.
+    pty.emitData('a\x1b[3');
+    pty.emitData('1mb\x1b');
+    pty.emitData(']8;;x\x07');
     expect(data).toStrictEqual([
-      { chatId: 'terminal-1', seq: 1, data: 'a' },
-      { chatId: 'terminal-1', seq: 2, data: 'bc' },
-      { chatId: 'terminal-1', seq: 3, data: 'def' },
+      { chatId: 'chat-1', seq: 1, data: 'a\x1b[3' },
+      { chatId: 'chat-1', seq: 2, data: '1mb\x1b' },
+      { chatId: 'chat-1', seq: 3, data: ']8;;x\x07' },
     ]);
     expect(session.lastSeq).toBe(3);
   });
 
-  it('returns a snapshot whose seq matches the events it contains', async () => {
+  it('passes a sequence that once made the emulator in main ask for gigabytes straight through', () => {
     const { pty, session, data } = makeSession();
-    pty.emitData('first\r\n');
-    pty.emitData('second\r\n');
-    const snapshot = await session.snapshot();
-    expect(snapshot.seq).toBe(2);
-    expect(snapshot.snapshot).toContain('first');
-    expect(snapshot.snapshot).toContain('second');
-    expect(snapshot.info).toStrictEqual({
-      chatId: 'terminal-1',
-      shell: 'zsh',
-      cwd: '/home/me',
-      cols: 80,
-      rows: 24,
-      status: { state: 'running' },
-    });
-
-    // Later output is a later event: a renderer replays the snapshot, then applies events with a greater seq.
-    pty.emitData('third\r\n');
-    expect(data.at(-1)?.seq).toBe(3);
-    const later = await session.snapshot();
-    expect(later.seq).toBe(3);
-    expect(later.snapshot).toContain('third');
+    pty.emitData('\x1b[99999999L');
+    expect(data).toStrictEqual([{ chatId: 'chat-1', seq: 1, data: '\x1b[99999999L' }]);
+    expect(session.replay()).toStrictEqual({ replay: '\x1b[99999999L', replayTruncated: false, seq: 1 });
   });
 
-  it('does not write to the PTY once the shell has exited', () => {
-    const { pty, session } = makeSession();
-    pty.emitExit(0);
-    session.write('typed after exit');
-    expect(pty.writes).toStrictEqual([]);
-  });
-
-  it('stops forwarding data and exit events once muted', () => {
-    const { pty, session, data, exits } = makeSession();
-    session.mute();
-    pty.emitData('hidden');
-    pty.emitExit(0);
+  it('sends no event and uses no seq for an empty chunk', () => {
+    const { pty, session, data } = makeSession();
+    pty.emitData('');
     expect(data).toStrictEqual([]);
-    expect(exits).toStrictEqual([]);
+    expect(session.lastSeq).toBe(0);
+  });
+
+  it('starts with an empty replay at seq 0', () => {
+    const { session } = makeSession();
+    expect(session.replay()).toStrictEqual({ replay: '', replayTruncated: false, seq: 0 });
   });
 });
 
-describe('TerminalSession output boundaries', () => {
-  it('ends an event before an incomplete escape sequence and sends it with the rest', () => {
-    const { pty, data } = makeSession();
-    pty.emitData('x \u001b[31');
-    pty.emitData('mR');
-    expect(data).toStrictEqual([
-      { chatId: 'terminal-1', seq: 1, data: 'x ' },
-      { chatId: 'terminal-1', seq: 2, data: '\u001b[31mR' },
-    ]);
-  });
-
-  it('sends no event, and uses no seq, for a chunk that is all incomplete sequence', async () => {
+describe('TerminalSession replay and seq', () => {
+  it('holds every event up to its seq and none after, read between any two events', () => {
     const { pty, session, data } = makeSession();
-    pty.emitData('\u001b]0;tit');
-    expect(data).toStrictEqual([]);
-    expect(session.lastSeq).toBe(0);
-    // The snapshot is at rest: it holds nothing of the open sequence.
-    const snapshot = await session.snapshot();
-    expect(snapshot.seq).toBe(0);
-    expect(snapshot.snapshot).not.toContain('tit');
+    const chunks = ['$ ', 'l', 's', '\r\n', 'a.txt  b.txt\r\n', '\x1b[1m$ \x1b[0m'];
+    for (const chunk of chunks) {
+      const { replay, seq } = session.replay();
+      // Exactly the events with seq <= the replay's seq, concatenated.
+      expect(replay).toBe(
+        data
+          .filter((event) => event.seq <= seq)
+          .map((event) => event.data)
+          .join(''),
+      );
+      expect(data.every((event) => event.seq <= seq)).toBe(true);
+      pty.emitData(chunk);
+    }
+    expect(session.replay()).toStrictEqual({ replay: chunks.join(''), replayTruncated: false, seq: chunks.length });
   });
 
-  it('flushes what is held when the shell exits, before the exit event', () => {
-    const { pty, data, exits } = makeSession();
-    pty.emitData('done\u001b[');
-    pty.emitExit(0);
-    expect(data.map((event) => event.data)).toStrictEqual(['done', '\u001b[']);
-    expect(exits).toHaveLength(1);
+  it('when truncated, holds a suffix of the events up to seq that starts at a line start', () => {
+    const { pty, session, data } = makeSession({ replayMaxBytes: 32 });
+    for (let i = 0; i < 20; i++) pty.emitData(`line ${i}\r\n`);
+    pty.emitData('$ ');
+    const { replay, replayTruncated, seq } = session.replay();
+    const all = data
+      .filter((event) => event.seq <= seq)
+      .map((event) => event.data)
+      .join('');
+    expect(seq).toBe(21);
+    expect(replayTruncated).toBe(true);
+    expect(Buffer.byteLength(replay, 'utf8')).toBeLessThanOrEqual(32);
+    expect(all.endsWith(replay)).toBe(true);
+    expect(all[all.length - replay.length - 1]).toBe('\n');
+    expect(replay.endsWith('line 19\r\n$ ')).toBe(true);
+  });
+
+  it('clearReplay drops the kept output and keeps the shell, its seq and new output', () => {
+    const { pty, session, data } = makeSession();
+    pty.emitData('\x1b[crash me\r\n$ ');
+    session.clearReplay();
+    expect(session.replay()).toStrictEqual({ replay: '', replayTruncated: true, seq: 1 });
+    expect(session.running).toBe(true);
+    expect(pty.killSignals).toStrictEqual([]);
+    expect(pty.closeCount).toBe(0);
+    pty.emitData('ls\r\nfile\r\n');
+    expect(session.replay()).toStrictEqual({ replay: 'file\r\n', replayTruncated: true, seq: 2 });
+    expect(data.map((event) => event.seq)).toStrictEqual([1, 2]);
   });
 });
 
@@ -130,194 +149,288 @@ describe('TerminalSession queued input', () => {
     expect(TERMINAL.pendingInputMaxBytes).toBe(1024 * 1024);
   });
 
-  it('drops writes that would queue more than the bound, with one warning per stretch of drops', () => {
-    const logs: string[] = [];
-    const { pty, session } = makeSession({ pendingInputMaxBytes: 10, log: (line) => logs.push(line) });
+  it('drops writes that would queue more than the bound, with one log line per stretch of drops', () => {
+    const { pty, session, log } = makeSession({ pendingInputMaxBytes: 10 });
     session.write('12345');
     session.write('67890');
-    // The shell is not reading: 10 bytes wait.
-    for (let i = 0; i < 128; i++) session.write('more');
+    session.write('x');
+    session.write('y');
     expect(pty.writes).toStrictEqual(['12345', '67890']);
-    expect(pty.pendingBytes).toBe(10);
-    expect(logs).toHaveLength(1);
-    expect(logs[0]).toMatch(/not reading its input/);
-
-    // It reads again: input flows, and a later stretch of drops warns once more.
+    expect(log).toHaveBeenCalledTimes(1);
     pty.drainInput();
-    session.write('ok');
-    expect(pty.writes.at(-1)).toBe('ok');
-    session.write('x'.repeat(9));
-    session.write('y'.repeat(9));
-    expect(logs).toHaveLength(2);
+    session.write('z');
+    expect(pty.writes).toStrictEqual(['12345', '67890', 'z']);
+    session.write('0123456789');
+    expect(log).toHaveBeenCalledTimes(2);
   });
 
   it('measures in UTF-8 bytes', () => {
-    const { pty, session } = makeSession({ pendingInputMaxBytes: 6 });
-    session.write('éé'); // 4 bytes
-    session.write('éé'); // would be 8
-    expect(pty.writes).toStrictEqual(['éé']);
+    const { pty, session } = makeSession({ pendingInputMaxBytes: 8 });
+    session.write('😀');
+    session.write('😀');
+    session.write('é');
+    expect(pty.writes).toStrictEqual(['😀', '😀']);
   });
 
   it('the reviewer’s case: 128 writes of 64 KiB to a shell that does not read queue at most 1 MiB', () => {
     const { pty, session } = makeSession();
-    const chunk = 'x'.repeat(TERMINAL.writeMaxBytes);
+    const chunk = 'a'.repeat(TERMINAL.writeMaxBytes);
     for (let i = 0; i < 128; i++) session.write(chunk);
     expect(pty.pendingBytes).toBeLessThanOrEqual(TERMINAL.pendingInputMaxBytes);
     expect(pty.writes).toHaveLength(16);
   });
 
-  it('warns once and passes input through when node-pty’s queue cannot be measured', () => {
-    const logs: string[] = [];
-    const pty = createFakePty(4_242, { pendingInput: 'unknown' });
-    const { session } = makeSession({ pty, pendingInputMaxBytes: 1, log: (line) => logs.push(line) });
-    session.write('abc');
-    session.write('def');
-    expect(pty.writes).toStrictEqual(['abc', 'def']);
-    expect(logs).toHaveLength(1);
-    expect(logs[0]).toMatch(/cannot measure/);
+  it.each(['unknown', 'nan', 'negative', 'infinite', 'throws'] as const)(
+    'refuses input for good when the measurement is %s, and says so in the terminal once',
+    (mode) => {
+      const { pty, session, data, log } = makeSession({ pendingInput: mode });
+      pty.emitData('$ ');
+      session.write('ls\r');
+      session.write('pwd\r');
+      expect(pty.writes).toStrictEqual([]);
+      expect(data).toStrictEqual([
+        { chatId: 'chat-1', seq: 1, data: '$ ' },
+        { chatId: 'chat-1', seq: 2, data: INPUT_UNMEASURABLE_NOTICE },
+      ]);
+      // The notice is terminal output like any other, so a reload replays it.
+      expect(session.replay()).toStrictEqual({
+        replay: `$ ${INPUT_UNMEASURABLE_NOTICE}`,
+        replayTruncated: false,
+        seq: 2,
+      });
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('cannot measure'));
+      // Even if the measurement comes back, the session stays refused: it does not flip between bounded and not.
+      pty.pendingInput = 'tracked';
+      session.write('ls\r');
+      expect(pty.writes).toStrictEqual([]);
+      expect(session.running).toBe(true);
+    },
+  );
+
+  it('the notice is plain text on lines of its own', () => {
+    expect(INPUT_UNMEASURABLE_NOTICE.startsWith('\r\n')).toBe(true);
+    expect(INPUT_UNMEASURABLE_NOTICE.endsWith('\r\n')).toBe(true);
+    expect(INPUT_UNMEASURABLE_NOTICE).not.toContain('\x1b');
   });
 });
 
 describe('TerminalSession input and size', () => {
-  it('passes writes and resizes to the PTY while running', () => {
+  it('passes writes and resizes to the PTY while running, and keeps the size in info', () => {
     const { pty, session } = makeSession();
     session.write('ls\r');
+    session.write('');
+    session.resize(100, 30);
     session.resize(100, 30);
     expect(pty.writes).toStrictEqual(['ls\r']);
     expect(pty.resizes).toStrictEqual([{ cols: 100, rows: 30 }]);
-    expect(session.info()).toMatchObject({ cols: 100, rows: 30 });
-    // The same size twice is a no-op.
-    session.resize(100, 30);
-    expect(pty.resizes).toHaveLength(1);
+    expect(session.info()).toStrictEqual({
+      chatId: 'chat-1',
+      shell: 'zsh',
+      cwd: '/home/me',
+      cols: 100,
+      rows: 30,
+      status: { state: 'running' },
+    });
   });
 
-  it('resizes the screen but not a dead PTY after exit', () => {
+  it('after exit, writes go nowhere and a resize only updates info', () => {
     const { pty, session } = makeSession();
     pty.emitExit(0);
+    session.write('ls\r');
     session.resize(120, 40);
+    expect(pty.writes).toStrictEqual([]);
     expect(pty.resizes).toStrictEqual([]);
     expect(session.info()).toMatchObject({ cols: 120, rows: 40 });
+  });
+
+  it('a resize that throws (the PTY closed before the exit report) is swallowed', () => {
+    const { pty, session } = makeSession();
+    pty.resize = () => {
+      throw new Error('ioctl(2) failed, EBADF');
+    };
+    expect(() => session.resize(90, 30)).not.toThrow();
+    expect(session.info()).toMatchObject({ cols: 90, rows: 30 });
   });
 });
 
 describe('TerminalSession exit', () => {
-  it('records the code and emits exit, and never signals the reaped shell', () => {
+  it('records the code, emits exit, and detaches from the PTY', () => {
     const { pty, session, exits } = makeSession();
     pty.emitExit(3);
-    expect(exits).toStrictEqual([{ chatId: 'terminal-1', status: { state: 'exited', exitCode: 3, signal: null } }]);
     expect(session.running).toBe(false);
+    expect(exits).toStrictEqual([{ chatId: 'chat-1', status: { state: 'exited', exitCode: 3, signal: null } }]);
     expect(session.info().status).toStrictEqual({ state: 'exited', exitCode: 3, signal: null });
-    // node-pty has reaped the shell; its pid may already belong to another process (T1 review).
-    expect(pty.killSignals).toStrictEqual([]);
+    expect(pty.dataListenerCount).toBe(0);
+    expect(pty.exitListenerCount).toBe(0);
   });
 
   it('records a signal death without a code', () => {
-    const { pty, exits } = makeSession();
+    const { pty, session } = makeSession();
     pty.emitExit(0, 9);
-    expect(exits).toStrictEqual([{ chatId: 'terminal-1', status: { state: 'exited', exitCode: null, signal: 9 } }]);
+    expect(session.info().status).toStrictEqual({ state: 'exited', exitCode: null, signal: 9 });
   });
 
-  it('emits exit once, however many times the PTY reports it', () => {
-    const { pty, exits } = makeSession();
+  it('keeps the replay after exit, so an attach still shows the scrollback', () => {
+    const { pty, session } = makeSession();
+    pty.emitData('build failed\r\n');
+    pty.emitExit(2);
+    expect(session.replay()).toStrictEqual({ replay: 'build failed\r\n', replayTruncated: false, seq: 1 });
+  });
+
+  it('mute stops data and exit events and frees the replay', () => {
+    const { pty, session, data, exits } = makeSession();
+    pty.emitData('kept?');
+    session.mute();
+    pty.emitData('late');
     pty.emitExit(0);
-    pty.emitExit(1, 9);
-    expect(exits).toStrictEqual([{ chatId: 'terminal-1', status: { state: 'exited', exitCode: 0, signal: null } }]);
-    expect(pty.killSignals).toStrictEqual([]);
+    expect(data).toHaveLength(1);
+    expect(exits).toStrictEqual([]);
+    expect(session.replay().replay).toBe('');
   });
 });
 
-describe('TerminalSession kill', () => {
-  it('sends SIGHUP, escalates to SIGKILL after the grace period, then settles', async () => {
+describe('TerminalSession end', () => {
+  beforeEach(() => {
     vi.useFakeTimers();
-    try {
-      const { pty, session } = makeSession({ killGraceMs: 500 });
-      let settled = false;
-      const killed = session.kill().then(() => {
-        settled = true;
-      });
-      // The session's processes are looked up first (none here), then signalled.
-      await vi.advanceTimersByTimeAsync(0);
-      expect(pty.killSignals).toStrictEqual(['SIGHUP']);
-
-      await vi.advanceTimersByTimeAsync(499);
-      expect(pty.killSignals).toStrictEqual(['SIGHUP']);
-      expect(settled).toBe(false);
-
-      await vi.advanceTimersByTimeAsync(1);
-      expect(pty.killSignals).toStrictEqual(['SIGHUP', 'SIGKILL']);
-      expect(settled).toBe(false);
-
-      // The second grace period is the last resort for a shell that never reports its exit.
-      await vi.advanceTimersByTimeAsync(500);
-      expect(settled).toBe(true);
-      await killed;
-      // One kill chain per session.
-      expect(session.kill()).toBe(session.kill());
-    } finally {
-      vi.useRealTimers();
-    }
+  });
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
-  it('defaults to the one-second grace period from the plan', async () => {
-    expect(KILL_GRACE_MS).toBe(1_000);
-    vi.useFakeTimers();
-    try {
-      const { pty, session } = makeSession();
-      const killed = session.kill();
-      await vi.advanceTimersByTimeAsync(999);
-      expect(pty.killSignals).toStrictEqual(['SIGHUP']);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(pty.killSignals).toStrictEqual(['SIGHUP', 'SIGKILL']);
-      await vi.advanceTimersByTimeAsync(KILL_GRACE_MS);
-      await killed;
-    } finally {
-      vi.useRealTimers();
-    }
+  it('SIGHUPs the shell, and resolves as soon as the exit is reported without closing the PTY', async () => {
+    const { pty, session, checked } = makeSession();
+    let done = false;
+    const ended = session.end().then(() => {
+      done = true;
+    });
+    // No close with the SIGHUP: the kernel's second hang-up would stop bash passing the first on to its jobs.
+    expect(pty.calls).toStrictEqual(['SIGHUP']);
+    expect(checked).toStrictEqual([4_242]);
+    await vi.advanceTimersByTimeAsync(KILL_GRACE_MS / 2);
+    expect(pty.closeCount).toBe(0);
+    expect(done).toBe(false);
+    pty.emitExit(0, 1);
+    await ended;
+    expect(done).toBe(true);
+    // No close and no SIGKILL, ever, even after the grace period (node-pty closes the device of an exited shell).
+    await vi.advanceTimersByTimeAsync(KILL_GRACE_MS * 3);
+    expect(pty.calls).toStrictEqual(['SIGHUP']);
   });
 
-  it('resolves as soon as the shell exits, and sends no SIGKILL', async () => {
-    vi.useFakeTimers();
-    try {
-      const { pty, session } = makeSession({ killGraceMs: 1_000 });
-      let settled = false;
-      const killed = session.kill().then(() => {
-        settled = true;
-      });
-      pty.emitExit(0, 15);
-      await killed;
-      expect(settled).toBe(true);
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(pty.killSignals).not.toContain('SIGKILL');
-    } finally {
-      vi.useRealTimers();
-    }
+  it('after 1 s closes the PTY and SIGKILLs a shell that ignores SIGHUP, checking first that it is still our child', async () => {
+    const { pty, session, checked } = makeSession();
+    let done = false;
+    const ended = session.end().then(() => {
+      done = true;
+    });
+    await vi.advanceTimersByTimeAsync(KILL_GRACE_MS - 1);
+    expect(pty.calls).toStrictEqual(['SIGHUP']);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(pty.calls).toStrictEqual(['SIGHUP', 'close', 'SIGKILL']);
+    expect(checked).toStrictEqual([4_242, 4_242]);
+    expect(done).toBe(false);
+    pty.emitExit(0, 9);
+    await ended;
+    expect(done).toBe(true);
   });
 
-  it('resolves at once for a session that already exited', async () => {
+  it('resolves the grace period after SIGKILL when the exit is never reported, and keeps the shell running', async () => {
     const { pty, session } = makeSession();
+    let done = false;
+    void session.end().then(() => {
+      done = true;
+    });
+    await vi.advanceTimersByTimeAsync(KILL_GRACE_MS);
+    expect(pty.killSignals).toStrictEqual(['SIGHUP', 'SIGKILL']);
+    await vi.advanceTimersByTimeAsync(KILL_GRACE_MS - 1);
+    expect(done).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(done).toBe(true);
+    expect(session.running).toBe(true);
+    expect(pty.killSignals).toStrictEqual(['SIGHUP', 'SIGKILL']);
+  });
+
+  it('skips the SIGKILL when the pid now has another parent', async () => {
+    const harness = makeSession();
+    const { pty, session, log } = harness;
+    const ended = session.end();
+    harness.ownChild = false;
+    await vi.advanceTimersByTimeAsync(KILL_GRACE_MS);
+    expect(pty.killSignals).toStrictEqual(['SIGHUP']);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('SIGKILL not sent'));
+    await vi.advanceTimersByTimeAsync(KILL_GRACE_MS);
+    await ended;
+    expect(pty.killSignals).toStrictEqual(['SIGHUP']);
+  });
+
+  it('skips the SIGHUP too when the pid is not our child, but still closes the PTY', async () => {
+    const harness = makeSession();
+    harness.ownChild = false;
+    const ended = harness.session.end();
+    expect(harness.pty.calls).toStrictEqual(['close']);
+    await vi.advanceTimersByTimeAsync(KILL_GRACE_MS * 2);
+    await ended;
+    expect(harness.pty.killSignals).toStrictEqual([]);
+  });
+
+  it('sends nothing at all once the exit has been reported, not even after the grace period', async () => {
+    const { pty, session, checked } = makeSession();
     pty.emitExit(0);
-    pty.killSignals.length = 0;
-    await expect(session.kill()).resolves.toBeUndefined();
-    expect(pty.killSignals).toStrictEqual([]);
-  });
-
-  it('killNow sends SIGKILL immediately', () => {
-    const { pty, session } = makeSession();
+    await session.end();
     session.killNow();
-    expect(pty.killSignals).toStrictEqual(['SIGKILL']);
+    await vi.advanceTimersByTimeAsync(KILL_GRACE_MS * 3);
+    expect(pty.calls).toStrictEqual([]);
+    expect(checked).toStrictEqual([]);
   });
 
-  it('dispose detaches the PTY and rejects a pending read', async () => {
-    const { pty, session, data } = makeSession({ killGraceMs: 1 });
-    const pending = session.read({});
-    const disposed = session.dispose();
-    // A real shell reports the exit; the fake one needs telling.
-    pty.emitExit(0, 15);
-    await expect(pending).rejects.toThrow('The terminal was closed.');
-    await disposed;
-    expect(pty.dataListenerCount).toBe(0);
-    expect(pty.exitListenerCount).toBe(0);
-    pty.emitData('late');
-    expect(data).toStrictEqual([]);
+  it('sends no SIGKILL when the exit is reported during the grace period, however late', async () => {
+    const { pty, session, checked } = makeSession();
+    const ended = session.end();
+    await vi.advanceTimersByTimeAsync(KILL_GRACE_MS - 1);
+    pty.emitExit(0, 1);
+    await vi.advanceTimersByTimeAsync(KILL_GRACE_MS * 3);
+    await ended;
+    expect(pty.killSignals).toStrictEqual(['SIGHUP']);
+    expect(checked).toStrictEqual([4_242]);
+  });
+
+  it('is idempotent, refuses input and resizes once it has begun', async () => {
+    const { pty, session } = makeSession();
+    const first = session.end();
+    expect(session.end()).toBe(first);
+    session.write('ls\r');
+    session.resize(100, 30);
+    expect(pty.writes).toStrictEqual([]);
+    expect(pty.resizes).toStrictEqual([]);
+    pty.emitExit(0, 1);
+    await first;
+    expect(pty.calls).toStrictEqual(['SIGHUP']);
+  });
+
+  it('defaults to the one-second grace period from the plan', () => {
+    expect(KILL_GRACE_MS).toBe(1_000);
+  });
+
+  it('killNow SIGKILLs a running shell at once, only when it is still our child', () => {
+    const harness = makeSession();
+    harness.session.killNow();
+    expect(harness.pty.killSignals).toStrictEqual(['SIGKILL']);
+    harness.ownChild = false;
+    harness.session.killNow();
+    expect(harness.pty.killSignals).toStrictEqual(['SIGKILL']);
+  });
+
+  it('a kill that throws (the shell is already gone) is swallowed', async () => {
+    const { pty, session } = makeSession();
+    pty.kill = () => {
+      throw new Error('ESRCH');
+    };
+    pty.close = () => {
+      throw new Error('EBADF');
+    };
+    const ended = session.end();
+    await vi.advanceTimersByTimeAsync(KILL_GRACE_MS * 2);
+    await expect(ended).resolves.toBeUndefined();
   });
 });

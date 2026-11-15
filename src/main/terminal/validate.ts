@@ -2,7 +2,7 @@
 // boundary where a page gets to spawn a shell and write to it, so every value is checked here and nothing throws:
 // each parser returns `null` for a payload it rejects.
 
-import { TERMINAL, type TerminalReadRequest } from '@shared/terminal';
+import { TERMINAL } from '@shared/terminal';
 import type { Id } from '@shared/types';
 import type { OpenParams } from './manager';
 
@@ -53,22 +53,4 @@ export function parseWriteData(value: unknown): string | null {
   // Every UTF-16 unit is at least one byte, so a longer string is over the cap without measuring it.
   if (value.length > TERMINAL.writeMaxBytes) return null;
   return Buffer.byteLength(value, 'utf8') <= TERMINAL.writeMaxBytes ? value : null;
-}
-
-function optionalLine(value: unknown): number | undefined | null {
-  if (value === undefined) return undefined;
-  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1 ? value : null;
-}
-
-/** `{ startLine?, count? }`: positive integers. `count` above `readMaxLines` is capped later, not refused. */
-export function parseReadRequest(value: unknown): TerminalReadRequest | null {
-  if (value === undefined) return {};
-  if (!isRecord(value)) return null;
-  const startLine = optionalLine(value.startLine);
-  const count = optionalLine(value.count);
-  if (startLine === null || count === null) return null;
-  const request: TerminalReadRequest = {};
-  if (startLine !== undefined) request.startLine = startLine;
-  if (count !== undefined) request.count = count;
-  return request;
 }

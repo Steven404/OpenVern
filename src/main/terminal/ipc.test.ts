@@ -2,14 +2,7 @@
 // nothing here may throw out of a `send` listener in main. A page that isn't the app's main-window page must never
 // reach the manager.
 
-import {
-  TERMINAL,
-  TERMINAL_IPC,
-  type TerminalInfo,
-  type TerminalOpenResult,
-  type TerminalReadAnswer,
-  type TerminalReadRequest,
-} from '@shared/terminal';
+import { TERMINAL, TERMINAL_IPC, type TerminalInfo, type TerminalOpenResult } from '@shared/terminal';
 import type { IpcMainEvent, IpcMainInvokeEvent } from 'electron';
 import { describe, expect, it, type Mock, vi } from 'vitest';
 import { INVALID_REQUEST, registerTerminalIpc, type TerminalIpcMain, UNTRUSTED_SENDER } from './ipc';
@@ -23,15 +16,11 @@ const INFO: TerminalInfo = {
   rows: 24,
   status: { state: 'running' },
 };
-const OPEN_RESULT: TerminalOpenResult = { info: INFO, snapshot: '', seq: 0, created: true };
-const READ_ANSWER: TerminalReadAnswer = {
-  ok: true,
-  result: { info: INFO, totalLines: 1, startLine: 1, endLine: 1, text: 'x', truncated: false },
-};
+const OPEN_RESULT: TerminalOpenResult = { info: INFO, replay: '', replayTruncated: false, seq: 0, created: true };
 
 interface FakeManager {
   open: Mock<(params: OpenParams) => Promise<TerminalOpenResult>>;
-  read: Mock<(chatId: string, request: TerminalReadRequest) => Promise<TerminalReadAnswer>>;
+  list: Mock<() => TerminalInfo[]>;
   close: Mock<(chatId: string) => Promise<void>>;
   write: Mock<(chatId: string, data: string) => void>;
   resize: Mock<(chatId: string, cols: number, rows: number) => void>;
@@ -40,7 +29,7 @@ interface FakeManager {
 function createManager(): FakeManager {
   return {
     open: vi.fn(async (_params: OpenParams): Promise<TerminalOpenResult> => OPEN_RESULT),
-    read: vi.fn(async (_chatId: string, _request: TerminalReadRequest): Promise<TerminalReadAnswer> => READ_ANSWER),
+    list: vi.fn((): TerminalInfo[] => [INFO]),
     close: vi.fn(async (_chatId: string): Promise<void> => {}),
     write: vi.fn((_chatId: string, _data: string): void => {}),
     resize: vi.fn((_chatId: string, _cols: number, _rows: number): void => {}),
@@ -116,12 +105,12 @@ describe('registerTerminalIpc channels', () => {
   it('registers every inbound channel and no outbound one', () => {
     const { fake } = setup();
     expect([...fake.handled.keys()].sort()).toStrictEqual(
-      [TERMINAL_IPC.open, TERMINAL_IPC.read, TERMINAL_IPC.close].sort(),
+      [TERMINAL_IPC.open, TERMINAL_IPC.list, TERMINAL_IPC.close].sort(),
     );
     expect([...fake.listened.keys()].sort()).toStrictEqual([TERMINAL_IPC.write, TERMINAL_IPC.resize].sort());
     // data and exit only go the other way.
     expect([...fake.handled.keys(), ...fake.listened.keys()].sort()).toStrictEqual(
-      [TERMINAL_IPC.open, TERMINAL_IPC.read, TERMINAL_IPC.close, TERMINAL_IPC.write, TERMINAL_IPC.resize].sort(),
+      [TERMINAL_IPC.open, TERMINAL_IPC.list, TERMINAL_IPC.close, TERMINAL_IPC.write, TERMINAL_IPC.resize].sort(),
     );
     expect(fake.handled.has(TERMINAL_IPC.data)).toBe(false);
     expect(fake.listened.has(TERMINAL_IPC.data)).toBe(false);
@@ -135,13 +124,13 @@ describe('registerTerminalIpc sender check', () => {
     const { fake, manager, log, untrusted } = setup();
 
     await expect(fake.invoke(TERMINAL_IPC.open, untrusted, GOOD_OPEN)).rejects.toThrow(UNTRUSTED_SENDER);
-    await expect(fake.invoke(TERMINAL_IPC.read, untrusted, 'chat-1', {})).rejects.toThrow(UNTRUSTED_SENDER);
+    await expect(fake.invoke(TERMINAL_IPC.list, untrusted)).rejects.toThrow(UNTRUSTED_SENDER);
     await expect(fake.invoke(TERMINAL_IPC.close, untrusted, 'chat-1')).rejects.toThrow(UNTRUSTED_SENDER);
     expect(() => fake.send(TERMINAL_IPC.write, untrusted, 'chat-1', 'ls\r')).not.toThrow();
     expect(() => fake.send(TERMINAL_IPC.resize, untrusted, 'chat-1', 100, 30)).not.toThrow();
 
     expect(manager.open).not.toHaveBeenCalled();
-    expect(manager.read).not.toHaveBeenCalled();
+    expect(manager.list).not.toHaveBeenCalled();
     expect(manager.close).not.toHaveBeenCalled();
     expect(manager.write).not.toHaveBeenCalled();
     expect(manager.resize).not.toHaveBeenCalled();
@@ -161,8 +150,14 @@ describe('registerTerminalIpc sender check', () => {
     });
 
     await expect(fake.invoke(TERMINAL_IPC.open, {}, GOOD_OPEN)).rejects.toThrow(UNTRUSTED_SENDER);
+    await expect(fake.invoke(TERMINAL_IPC.list, {})).rejects.toThrow(UNTRUSTED_SENDER);
+    await expect(fake.invoke(TERMINAL_IPC.close, {}, 'chat-1')).rejects.toThrow(UNTRUSTED_SENDER);
     expect(() => fake.send(TERMINAL_IPC.write, {}, 'chat-1', 'x')).not.toThrow();
+    expect(() => fake.send(TERMINAL_IPC.resize, {}, 'chat-1', 80, 24)).not.toThrow();
     expect(manager.open).not.toHaveBeenCalled();
+    expect(manager.list).not.toHaveBeenCalled();
+    expect(manager.close).not.toHaveBeenCalled();
+    expect(manager.resize).not.toHaveBeenCalled();
     expect(manager.write).not.toHaveBeenCalled();
   });
 });
@@ -174,15 +169,13 @@ describe('registerTerminalIpc valid calls', () => {
     await expect(
       fake.invoke(TERMINAL_IPC.open, trusted, { chatId: 'chat-1', cwd: '/project', cols: 120, rows: 40 }),
     ).resolves.toBe(OPEN_RESULT);
-    await expect(fake.invoke(TERMINAL_IPC.read, trusted, 'chat-1', { startLine: 2, count: 5 })).resolves.toBe(
-      READ_ANSWER,
-    );
+    await expect(fake.invoke(TERMINAL_IPC.list, trusted)).resolves.toStrictEqual([INFO]);
     await expect(fake.invoke(TERMINAL_IPC.close, trusted, 'chat-1')).resolves.toBeUndefined();
     fake.send(TERMINAL_IPC.write, trusted, 'chat-1', 'ls\r');
     fake.send(TERMINAL_IPC.resize, trusted, 'chat-1', 120, 40);
 
     expect(manager.open).toHaveBeenCalledWith({ chatId: 'chat-1', cwd: '/project', cols: 120, rows: 40 });
-    expect(manager.read).toHaveBeenCalledWith('chat-1', { startLine: 2, count: 5 });
+    expect(manager.list).toHaveBeenCalledWith();
     expect(manager.close).toHaveBeenCalledWith('chat-1');
     expect(manager.write).toHaveBeenCalledWith('chat-1', 'ls\r');
     expect(manager.resize).toHaveBeenCalledWith('chat-1', 120, 40);
@@ -196,28 +189,6 @@ describe('registerTerminalIpc valid calls', () => {
       INVALID_REQUEST,
     );
     expect(manager.open).toHaveBeenCalledTimes(1);
-  });
-
-  it('accepts a read with no request as the default range', async () => {
-    const { fake, manager, trusted } = setup();
-    await fake.invoke(TERMINAL_IPC.read, trusted, 'chat-1');
-    expect(manager.read).toHaveBeenCalledWith('chat-1', {});
-  });
-
-  it('forwards the read answer unchanged', async () => {
-    const { fake, manager, trusted } = setup();
-    const answer: TerminalReadAnswer = { ok: false, reason: 'no_terminal' };
-    manager.read.mockResolvedValueOnce(answer);
-    await expect(fake.invoke(TERMINAL_IPC.read, trusted, 'chat-1', {})).resolves.toBe(answer);
-  });
-
-  it('turns a throwing read into unavailable instead of a rejection', async () => {
-    const { fake, manager, trusted } = setup();
-    manager.read.mockRejectedValueOnce(new Error('read failed'));
-    await expect(fake.invoke(TERMINAL_IPC.read, trusted, 'chat-1', {})).resolves.toStrictEqual({
-      ok: false,
-      reason: 'unavailable',
-    });
   });
 
   it('propagates a refused open', async () => {
@@ -270,34 +241,6 @@ describe('registerTerminalIpc malformed open', () => {
     const { fake, manager, trusted } = setup();
     await expect(fake.invoke(TERMINAL_IPC.open, trusted, payload)).rejects.toThrow(INVALID_REQUEST);
     expect(manager.open).not.toHaveBeenCalled();
-  });
-});
-
-describe('registerTerminalIpc malformed read', () => {
-  const cases: Array<{ name: string; chatId: unknown; request: unknown }> = [
-    { name: 'a null chat id', chatId: null, request: {} },
-    { name: 'a numeric chat id', chatId: 7, request: {} },
-    { name: 'an empty chat id', chatId: '', request: {} },
-    { name: 'a chat id with a space', chatId: 'bad id', request: {} },
-    { name: 'the index chat id', chatId: 'index', request: {} },
-    { name: 'a huge chat id', chatId: 'x'.repeat(129), request: {} },
-    { name: 'a null request', chatId: 'chat-1', request: null },
-    { name: 'a string request', chatId: 'chat-1', request: 'last 10' },
-    { name: 'a zero startLine', chatId: 'chat-1', request: { startLine: 0 } },
-    { name: 'a fractional startLine', chatId: 'chat-1', request: { startLine: 1.5 } },
-    { name: 'a negative count', chatId: 'chat-1', request: { count: -1 } },
-    { name: 'a zero count', chatId: 'chat-1', request: { count: 0 } },
-    { name: 'NaN startLine', chatId: 'chat-1', request: { startLine: Number.NaN } },
-    { name: 'string count', chatId: 'chat-1', request: { count: '5' } },
-  ];
-
-  it.each(cases)('answers unavailable for $name without throwing', async ({ chatId, request }) => {
-    const { fake, manager, trusted } = setup();
-    await expect(fake.invoke(TERMINAL_IPC.read, trusted, chatId, request)).resolves.toStrictEqual({
-      ok: false,
-      reason: 'unavailable',
-    });
-    expect(manager.read).not.toHaveBeenCalled();
   });
 });
 
@@ -358,5 +301,27 @@ describe('registerTerminalIpc malformed resize', () => {
     expect(() => fake.send(TERMINAL_IPC.resize, trusted, chatId, cols, rows)).not.toThrow();
     expect(manager.resize).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith(expect.stringContaining('invalid payload'));
+  });
+});
+
+describe('registerTerminalIpc list and failures', () => {
+  it('answers list with the manager’s sessions and ignores any arguments', async () => {
+    const { fake, manager, trusted } = setup();
+    await expect(fake.invoke(TERMINAL_IPC.list, trusted, 'chat-1', { anything: true })).resolves.toStrictEqual([INFO]);
+    expect(manager.list).toHaveBeenCalledWith();
+  });
+
+  it('logs a write or resize that throws in the manager instead of throwing in main', () => {
+    const { fake, manager, trusted, log } = setup();
+    manager.write.mockImplementationOnce(() => {
+      throw new Error('EBADF');
+    });
+    manager.resize.mockImplementationOnce(() => {
+      throw new Error('EBADF');
+    });
+    expect(() => fake.send(TERMINAL_IPC.write, trusted, 'chat-1', 'x')).not.toThrow();
+    expect(() => fake.send(TERMINAL_IPC.resize, trusted, 'chat-1', 80, 24)).not.toThrow();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining(`${TERMINAL_IPC.write} failed`));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining(`${TERMINAL_IPC.resize} failed`));
   });
 });

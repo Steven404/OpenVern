@@ -1,5 +1,5 @@
 // How quitting ends the terminals (plan §2, "App lifetime" and "Ending a terminal"), apart from Electron so it can be
-// tested. The first `before-quit` is held: opens are refused, every terminal's processes are ended, then the quit is
+// tested. The first `before-quit` is held: opens are refused, every terminal's shell is ended, then the quit is
 // started again and goes through. A quit that is cancelled after that (the page's unload handler keeps the window
 // open) must not leave opens refused for good, so `quitCancelled` lets them through again and makes the next quit end
 // the terminals again.

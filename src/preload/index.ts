@@ -5,10 +5,9 @@ import type {
   TerminalBridge,
   TerminalDataEvent,
   TerminalExitEvent,
+  TerminalInfo,
   TerminalOpenRequest,
   TerminalOpenResult,
-  TerminalReadAnswer,
-  TerminalReadRequest,
 } from '@shared/terminal';
 import { contextBridge, type IpcRendererEvent, ipcRenderer } from 'electron';
 
@@ -18,7 +17,7 @@ const IPC_PICK_DIRECTORY = 'openvern:pick-directory';
 // Keep in sync with TERMINAL_IPC in src/shared/terminal.ts, for the same reason.
 export const PRELOAD_TERMINAL_IPC = {
   open: 'openvern:terminal:open',
-  read: 'openvern:terminal:read',
+  list: 'openvern:terminal:list',
   close: 'openvern:terminal:close',
   write: 'openvern:terminal:write',
   resize: 'openvern:terminal:resize',
@@ -38,9 +37,9 @@ function subscribe<T>(channel: string, listener: (payload: T) => void): () => vo
 
 const terminal: TerminalBridge = {
   open: (req: TerminalOpenRequest): Promise<TerminalOpenResult> => ipcRenderer.invoke(IPC.open, req),
+  list: (): Promise<TerminalInfo[]> => ipcRenderer.invoke(IPC.list),
   write: (chatId, data) => ipcRenderer.send(IPC.write, chatId, data),
   resize: (chatId, cols, rows) => ipcRenderer.send(IPC.resize, chatId, cols, rows),
-  read: (chatId, req: TerminalReadRequest): Promise<TerminalReadAnswer> => ipcRenderer.invoke(IPC.read, chatId, req),
   close: (chatId): Promise<void> => ipcRenderer.invoke(IPC.close, chatId),
   onData: (listener) => subscribe<TerminalDataEvent>(IPC.data, listener),
   onExit: (listener) => subscribe<TerminalExitEvent>(IPC.exit, listener),

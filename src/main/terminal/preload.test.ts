@@ -67,9 +67,14 @@ describe('the exposed terminal bridge', () => {
     const exposed = bridge();
     expect(exposed.isElectron).toBe(true);
     expect(exposed.terminal).toBeTypeOf('object');
-    for (const method of ['open', 'write', 'resize', 'read', 'close', 'onData', 'onExit'] as const) {
+    for (const method of ['open', 'list', 'write', 'resize', 'close', 'onData', 'onExit'] as const) {
       expect(typeof exposed.terminal[method]).toBe('function');
     }
+    // Fixed methods only: nothing that hands out ipcRenderer or a way to name a channel.
+    expect(Object.keys(exposed.terminal).sort()).toStrictEqual(
+      ['close', 'list', 'onData', 'onExit', 'open', 'resize', 'write'].sort(),
+    );
+    expect(Object.keys(exposed).sort()).toStrictEqual(['isElectron', 'pickDirectory', 'terminal']);
   });
 
   it('forwards each call over the documented channel with only its arguments', async () => {
@@ -85,8 +90,8 @@ describe('the exposed terminal bridge', () => {
     terminal.resize('chat-1', 100, 30);
     expect(mocks.ipcRenderer.send).toHaveBeenCalledWith(TERMINAL_IPC.resize, 'chat-1', 100, 30);
 
-    await terminal.read('chat-1', { startLine: 1 });
-    expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith(TERMINAL_IPC.read, 'chat-1', { startLine: 1 });
+    await terminal.list();
+    expect(mocks.ipcRenderer.invoke).toHaveBeenLastCalledWith(TERMINAL_IPC.list);
 
     await terminal.close('chat-1');
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith(TERMINAL_IPC.close, 'chat-1');

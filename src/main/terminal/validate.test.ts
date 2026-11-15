@@ -3,7 +3,7 @@
 
 import { TERMINAL } from '@shared/terminal';
 import { describe, expect, it } from 'vitest';
-import { parseChatId, parseOpenRequest, parseReadRequest, parseSize, parseWriteData } from './validate';
+import { parseChatId, parseOpenRequest, parseSize, parseWriteData } from './validate';
 
 describe('parseChatId', () => {
   it('accepts ids made of letters, digits, dashes and underscores', () => {
@@ -141,31 +141,6 @@ describe('parseWriteData', () => {
     expect(parseWriteData(`${'😀'.repeat(16_384)}a`)).toBeNull();
     for (const value of [null, undefined, 7, {}, [], true]) {
       expect(parseWriteData(value)).toBeNull();
-    }
-  });
-});
-
-describe('parseReadRequest', () => {
-  it('accepts omitted, partial and full requests', () => {
-    expect(parseReadRequest(undefined)).toStrictEqual({});
-    expect(parseReadRequest({})).toStrictEqual({});
-    expect(parseReadRequest({ startLine: 1 })).toStrictEqual({ startLine: 1 });
-    expect(parseReadRequest({ count: 1 })).toStrictEqual({ count: 1 });
-    expect(parseReadRequest({ startLine: 4_800, count: 200 })).toStrictEqual({ startLine: 4_800, count: 200 });
-  });
-
-  it('accepts a count above readMaxLines: the screen caps it, validation does not refuse it', () => {
-    expect(parseReadRequest({ count: TERMINAL.readMaxLines + 1 })).toStrictEqual({ count: TERMINAL.readMaxLines + 1 });
-    expect(parseReadRequest({ count: 1_000_000 })).toStrictEqual({ count: 1_000_000 });
-  });
-
-  it('refuses a request that is not an object of positive integers', () => {
-    for (const value of [null, 7, 'last 10', [], true]) {
-      expect(parseReadRequest(value)).toBeNull();
-    }
-    for (const value of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1, '1', null]) {
-      expect(parseReadRequest({ startLine: value })).toBeNull();
-      expect(parseReadRequest({ count: value })).toBeNull();
     }
   });
 });
