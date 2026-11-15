@@ -4,9 +4,11 @@
 // xterm parses writes asynchronously, so anything that looks at the buffer goes through `afterParsed`, which runs its
 // callback once everything written so far has been parsed, and before anything written later.
 
+import { redactSecrets } from '@shared/redact';
 import { TERMINAL, type TerminalReadRequest, type TerminalReadResult } from '@shared/terminal';
 import { SerializeAddon } from '@xterm/addon-serialize/lib/addon-serialize.mjs';
 import { Terminal } from '@xterm/headless';
+import { withReplayState } from './snapshot-state';
 
 export type ScreenRead = Omit<TerminalReadResult, 'info'>;
 
@@ -68,14 +70,21 @@ export class TerminalScreen {
     });
   }
 
-  /** Screen, scrollback and modes as escape sequences, for a renderer xterm of the same size. Call via `afterParsed`. */
+  /**
+   * Screen, scrollback, modes, scroll region and saved cursor as escape sequences, for a fresh renderer xterm of the
+   * same size. Call via `afterParsed`. Output reaches the screen only in pieces that end with the parser at rest
+   * (./output-filter.ts), so the snapshot never starts a sequence the replay would finish differently.
+   */
   serialize(): string {
-    return this.serializer.serialize({ scrollback: TERMINAL.scrollbackLines });
+    return withReplayState(this.serializer.serialize({ scrollback: TERMINAL.scrollbackLines }), this.term);
   }
 
-  /** The requested range per §4.1, from the active buffer (the screen the user sees). Call via `afterParsed`. */
+  /**
+   * The requested range per §4.1, from the active buffer (the screen the user sees), redacted and bounded by
+   * `readWireMaxChars` (see `readLines`). Call via `afterParsed`.
+   */
   read(request: TerminalReadRequest): ScreenRead {
-    return selectLines(this.logicalLines(), request);
+    return readLines(this.logicalLines(), request);
   }
 
   dispose(): void {
@@ -115,13 +124,58 @@ function trimRight(line: string): string {
 }
 
 /**
+ * A read per §4.1, in the order that keeps secrets out: the pattern passes of `redactSecrets` run over the whole
+ * buffer first (so a private-key block that starts above the range is still caught, and nothing has been cut yet),
+ * then the range is selected, then `boundLines` fits it into `maxChars`. `redactSecrets` keeps the number of line
+ * breaks, so line numbers are the same before and after.
+ */
+export function readLines(
+  lines: readonly string[],
+  request: TerminalReadRequest,
+  maxChars: number = TERMINAL.readWireMaxChars,
+): ScreenRead {
+  const redacted = lines.length === 0 ? [] : redactSecrets(lines.join('\n')).text.split('\n');
+  // Should never happen (see above); refuse rather than return lines under the wrong numbers.
+  if (redacted.length !== lines.length) throw new Error('terminal read: redaction changed the line count');
+  const selected = selectLines(redacted, request);
+  if (selected.startLine === 0) return selected;
+  return boundLines(redacted.slice(selected.startLine - 1, selected.endLine), selected, maxChars);
+}
+
+/** The one-line stand-in for a line longer than the whole answer may be. */
+export function omittedLinePlaceholder(lineNumber: number, length: number): string {
+  return `[line ${lineNumber} omitted: ${length} characters, more than one read can return]`;
+}
+
+/**
+ * Fits whole lines into `maxChars` (joined with '\n'): a line longer than `maxChars` on its own becomes a placeholder,
+ * then whole lines are dropped from the start of the range until the rest fits, and `startLine` moves to the first
+ * line kept. `truncated` says either happened. Never a cut inside a line.
+ */
+function boundLines(range: readonly string[], selected: ScreenRead, maxChars: number): ScreenRead {
+  let truncated = false;
+  const kept = range.map((line, index) => {
+    if (line.length <= maxChars) return line;
+    truncated = true;
+    return omittedLinePlaceholder(selected.startLine + index, line.length);
+  });
+  let first = 0;
+  let size = kept.reduce((sum, line) => sum + line.length, 0) + kept.length - 1;
+  // Keep at least the last line: on its own it fits (a placeholder is short).
+  while (size > maxChars && first < kept.length - 1) {
+    size -= (kept[first]?.length ?? 0) + 1;
+    first += 1;
+    truncated = true;
+  }
+  const startLine = selected.startLine + first;
+  return { ...selected, startLine, text: kept.slice(first).join('\n'), truncated };
+}
+
+/**
  * Picks whole logical lines (1-based) per §4.1. Both omitted: the last `readDefaultLines`. Only `count`: the last
  * `count`. `startLine` set: from there, `count` (default `readDefaultLines`) lines, clamped to the end. `count` is
  * capped at `readMaxLines`. An empty buffer, or a `startLine` past `totalLines`, gives `startLine: 0, endLine: 0` and
- * no text.
- *
- * Never cut by bytes: a cut could drop a key's prefix and leave its body where no redaction pattern matches, so the
- * backend applies `readMaxBytes` after redacting. `truncated` is therefore always false here.
+ * no text. Not bounded by size: `readLines` does that, after redaction.
  */
 export function selectLines(lines: readonly string[], request: TerminalReadRequest): ScreenRead {
   const totalLines = lines.length;
