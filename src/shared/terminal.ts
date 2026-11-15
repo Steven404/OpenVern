@@ -49,6 +49,11 @@ export interface TerminalOpenRequest {
   cwd: string | null;
   cols: number;
   rows: number;
+  /**
+   * True = replace an exited session with a fresh shell (the Restart button). Without it, opening a chat whose shell
+   * has exited attaches to it, so the exit code and the scrollback stay visible. Ignored while the shell is running.
+   */
+  restart?: boolean;
 }
 export interface TerminalOpenResult {
   info: TerminalInfo;
@@ -102,8 +107,13 @@ export type TerminalReadAnswer =
   | { ok: false; reason: 'no_terminal' | 'unavailable' };
 
 export interface TerminalBridge {
-  /** Creates the chat's session, or attaches to the existing one. Rejects when `maxSessions` is reached. */
+  /**
+   * Creates the chat's session, or attaches to the existing one (running or exited; see `restart`). Rejects when
+   * `maxSessions` is reached. Subscribe to `onData` before calling it: events above the result's `seq` can arrive
+   * before it resolves.
+   */
   open(req: TerminalOpenRequest): Promise<TerminalOpenResult>;
+  /** At most `writeMaxBytes` UTF-8 bytes per call; a larger write is dropped, so split a big paste. */
   write(chatId: Id, data: string): void;
   resize(chatId: Id, cols: number, rows: number): void;
   read(chatId: Id, req: TerminalReadRequest): Promise<TerminalReadAnswer>;
