@@ -127,6 +127,14 @@ function isConsistentRead(r: { totalLines: number; startLine: number; endLine: n
   for (let i = r.text.indexOf('\n'); i !== -1; i = r.text.indexOf('\n', i + 1)) lines++;
   return lines === r.endLine - r.startLine + 1;
 }
+/**
+ * A read's text is an emulator's plain text, which never holds C0 controls (other than tab and line feed), DEL or C1
+ * controls. An answer that does is refused whole rather than cleaned: removing an escape sequence can take the first
+ * character of a key with it, and redacting before the removal can split a key that a control was hiding, so no
+ * order of cleaning and redacting is safe.
+ */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the point
+const TERMINAL_TEXT_FORBIDDEN = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/;
 const terminalStatus = z.discriminatedUnion('state', [
   z.object({ state: z.literal('running') }),
   z.object({
@@ -153,7 +161,12 @@ export const terminalReadAnswerBody = z.discriminatedUnion('ok', [
         totalLines: lineNumber,
         startLine: lineNumber,
         endLine: lineNumber,
-        text: z.string().max(TERMINAL.readWireMaxChars),
+        text: z
+          .string()
+          .max(TERMINAL.readWireMaxChars)
+          .refine((text) => !TERMINAL_TEXT_FORBIDDEN.test(text), {
+            message: 'The text contains control characters.',
+          }),
         truncated: z.boolean(),
       })
       .refine(isConsistentRead, { message: 'The line numbers and the text do not fit together.' }),

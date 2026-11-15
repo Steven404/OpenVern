@@ -114,7 +114,8 @@ export interface TerminalReadResult {
   startLine: number;
   endLine: number;
   /**
-   * Plain text, no escape codes; whole lines only, joined by `\n` with no trailing one, so it has exactly
+   * Plain text: no escape codes and no control characters other than tab (an answer holding any other C0 control,
+   * DEL or a C1 control is refused); whole lines only, joined by `\n` with no trailing one, so it has exactly
    * `endLine - startLine + 1` lines; trailing spaces trimmed. The renderer runs the pattern passes of
    * `redactSecrets` over the whole buffer before it selects the lines, so a secret that starts above the range (a
    * private-key block) is still caught, and nothing is ever cut before that redaction: a cut first can strip a key's
