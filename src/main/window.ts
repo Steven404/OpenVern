@@ -53,6 +53,8 @@ export interface MainWindowOptions {
   onClosed?: () => void;
   /** Runs when the page's unload handler kept the window open, which also cancels a quit in progress. */
   onUnloadPrevented?: () => void;
+  /** Runs when the window's renderer process is gone (crashed, killed, out of memory), not on a reload. */
+  onRendererGone?: () => void;
 }
 
 export function createMainWindow(options: MainWindowOptions = {}): BrowserWindow {
@@ -83,6 +85,7 @@ export function createMainWindow(options: MainWindowOptions = {}): BrowserWindow
   });
   // Not prevented here, so the page's handler wins and the window stays open; the owner only learns of it.
   win.webContents.on('will-prevent-unload', () => options.onUnloadPrevented?.());
+  win.webContents.on('render-process-gone', () => options.onRendererGone?.());
   win.once('ready-to-show', () => win.show());
   harden(win);
 

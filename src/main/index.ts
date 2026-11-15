@@ -37,8 +37,8 @@ if (!app.requestSingleInstanceLock()) {
   // Terminal sessions live as long as the main window: a reload keeps them, closing the window or quitting ends every
   // shell (docs/terminal-plan.md T1.6).
   const terminals = createTerminalManager(getMainWindow);
-  // Hold the quit until every terminal's processes have ended (SIGHUP, then SIGKILL after 1 s), so none outlives the
-  // app; no terminal may open once the quit has begun, unless the quit is cancelled (./terminal/quit.ts).
+  // Hold the quit until every shell has ended (SIGHUP, then SIGKILL after 1 s if it is still running), so none
+  // outlives the app; no terminal may open once the quit has begun, unless the quit is cancelled (./terminal/quit.ts).
   const quitGuard = createQuitGuard({ terminals, quit: () => app.quit() });
   const openMainWindow = () => {
     quitGuard.windowOpening();
@@ -46,10 +46,13 @@ if (!app.requestSingleInstanceLock()) {
       onClosed: () => void terminals.disposeAll(),
       // The page's unload handler kept the window open, which also cancels a quit in progress.
       onUnloadPrevented: () => quitGuard.quitCancelled(),
+      // The shells keep running, but their kept output is dropped: if a sequence in it crashed the renderer, replaying
+      // it into the reloaded page would crash that too.
+      onRendererGone: () => terminals.clearReplays(),
     });
   };
   app.on('before-quit', (event) => quitGuard.beforeQuit(event));
-  // Last resort when main exits without a quit (app.exit, a fatal error): SIGKILL whatever is left.
+  // Last resort when main exits without a quit (app.exit, a fatal error): SIGKILL every shell still running.
   process.on('exit', () => terminals.killAllNow());
 
   void app.whenReady().then(async () => {
