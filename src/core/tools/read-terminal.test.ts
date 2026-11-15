@@ -466,6 +466,21 @@ describe('read_terminal removes C1 and directional controls (review finding 4)',
     expect(res.output).toContain(redactionNote(1));
   });
 
+  it.each([
+    ['a 7-bit CSI', '\x1b[31'],
+    ['an 8-bit CSI', '\u009b31'],
+  ])("redacts before cleaning too, so %s ending in a key's first character cannot strip its prefix", async (_, csi) => {
+    // Cleaning reads `ESC[31s` as one escape sequence and removes the key's leading `s` with it.
+    const res = await run(
+      {},
+      ctx(answerFor([`${csi}${FAKE_OPENROUTER_KEY}`]), { knownSecrets: [FAKE_OPENROUTER_KEY] }),
+    );
+    expect(res.ok).toBe(true);
+    expect(res.output).not.toContain(FAKE_OPENROUTER_KEY.slice(1));
+    expect(res.output).not.toContain(FAKE_OPENROUTER_KEY.slice(9));
+    expect(res.output).toContain(redactionNote(1));
+  });
+
   it('defuses marker look-alikes with zero-width characters, hyphens or spaces', async () => {
     const res = await run(
       {},

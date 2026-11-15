@@ -228,7 +228,12 @@ function formatResult(
   // redaction keeps the line breaks of what it replaces. Redact before any cut: a cut first could split a key so
   // that no pattern matches either half.
   const expected = endLine - startLine + 1;
-  const redacted = redactSecrets(plainText(result.text), { known: ctx.knownSecrets });
+  // Twice around the cleaning. First on the text as sent: cleaning removes escape sequences, and a sequence that
+  // ends in a key's first character (`ESC[31` + `sk-…`) would take that character with it, leaving a body no pattern
+  // matches. Then again on the cleaned text, for a key that only becomes whole once a control inside it is gone.
+  const raw = redactSecrets(result.text, { known: ctx.knownSecrets });
+  const cleaned = redactSecrets(plainText(raw.text), { known: ctx.knownSecrets });
+  const redacted = { text: cleaned.text, count: raw.count + cleaned.count };
   const lines = defuseMarkers(redacted.text).split('\n');
   // Only a stored secret holding a line break could change the count; then the numbers can't be trusted.
   if (lines.length !== expected) return fail(TERMINAL_INVALID_OUTPUT, 'Terminal answer not valid');
