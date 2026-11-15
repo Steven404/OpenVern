@@ -1,0 +1,228 @@
+// One session: sequence numbers, exit handling and the kill escalation (docs/terminal-plan.md T1.2, T1.6).
+
+import type { TerminalDataEvent, TerminalExitEvent } from '@shared/terminal';
+import { describe, expect, it, vi } from 'vitest';
+import { createFakePty, type FakePty } from './fake-pty';
+import { TerminalScreen } from './screen';
+import { KILL_GRACE_MS, TerminalSession } from './session';
+
+interface Harness {
+  readonly pty: FakePty;
+  readonly session: TerminalSession;
+  readonly data: TerminalDataEvent[];
+  readonly exits: TerminalExitEvent[];
+}
+
+function makeSession(options: { killGraceMs?: number } = {}): Harness {
+  const pty = createFakePty();
+  const data: TerminalDataEvent[] = [];
+  const exits: TerminalExitEvent[] = [];
+  const session = new TerminalSession({
+    chatId: 'terminal-1',
+    pty,
+    screen: new TerminalScreen(80, 24),
+    shell: 'zsh',
+    cwd: '/home/me',
+    events: { data: (event) => data.push(event), exit: (event) => exits.push(event) },
+    killGraceMs: options.killGraceMs,
+  });
+  return { pty, session, data, exits };
+}
+
+describe('TerminalSession data events', () => {
+  it('increases seq by exactly one per data event', () => {
+    const { pty, session, data } = makeSession();
+    pty.emitData('a');
+    pty.emitData('bc');
+    pty.emitData('def');
+    expect(data).toStrictEqual([
+      { chatId: 'terminal-1', seq: 1, data: 'a' },
+      { chatId: 'terminal-1', seq: 2, data: 'bc' },
+      { chatId: 'terminal-1', seq: 3, data: 'def' },
+    ]);
+    expect(session.lastSeq).toBe(3);
+  });
+
+  it('returns a snapshot whose seq matches the events it contains', async () => {
+    const { pty, session, data } = makeSession();
+    pty.emitData('first\r\n');
+    pty.emitData('second\r\n');
+    const snapshot = await session.snapshot();
+    expect(snapshot.seq).toBe(2);
+    expect(snapshot.snapshot).toContain('first');
+    expect(snapshot.snapshot).toContain('second');
+    expect(snapshot.info).toStrictEqual({
+      chatId: 'terminal-1',
+      shell: 'zsh',
+      cwd: '/home/me',
+      cols: 80,
+      rows: 24,
+      status: { state: 'running' },
+    });
+
+    // Later output is a later event: a renderer replays the snapshot, then applies events with a greater seq.
+    pty.emitData('third\r\n');
+    expect(data.at(-1)?.seq).toBe(3);
+    const later = await session.snapshot();
+    expect(later.seq).toBe(3);
+    expect(later.snapshot).toContain('third');
+  });
+
+  it('does not write to the PTY once the shell has exited', () => {
+    const { pty, session } = makeSession();
+    pty.emitExit(0);
+    session.write('typed after exit');
+    expect(pty.writes).toStrictEqual([]);
+  });
+
+  it('stops forwarding data and exit events once muted', () => {
+    const { pty, session, data, exits } = makeSession();
+    session.mute();
+    pty.emitData('hidden');
+    pty.emitExit(0);
+    expect(data).toStrictEqual([]);
+    expect(exits).toStrictEqual([]);
+  });
+});
+
+describe('TerminalSession input and size', () => {
+  it('passes writes and resizes to the PTY while running', () => {
+    const { pty, session } = makeSession();
+    session.write('ls\r');
+    session.resize(100, 30);
+    expect(pty.writes).toStrictEqual(['ls\r']);
+    expect(pty.resizes).toStrictEqual([{ cols: 100, rows: 30 }]);
+    expect(session.info()).toMatchObject({ cols: 100, rows: 30 });
+    // The same size twice is a no-op.
+    session.resize(100, 30);
+    expect(pty.resizes).toHaveLength(1);
+  });
+
+  it('resizes the screen but not a dead PTY after exit', () => {
+    const { pty, session } = makeSession();
+    pty.emitExit(0);
+    session.resize(120, 40);
+    expect(pty.resizes).toStrictEqual([]);
+    expect(session.info()).toMatchObject({ cols: 120, rows: 40 });
+  });
+});
+
+describe('TerminalSession exit', () => {
+  it('records the code, emits exit and kills the PTY to release its descriptor', () => {
+    const { pty, session, exits } = makeSession();
+    pty.emitExit(3);
+    expect(exits).toStrictEqual([{ chatId: 'terminal-1', status: { state: 'exited', exitCode: 3, signal: null } }]);
+    expect(session.running).toBe(false);
+    expect(session.info().status).toStrictEqual({ state: 'exited', exitCode: 3, signal: null });
+    // Bare `kill()` is node-pty's SIGHUP.
+    expect(pty.killSignals).toStrictEqual([undefined]);
+  });
+
+  it('records a signal death without a code', () => {
+    const { pty, exits } = makeSession();
+    pty.emitExit(0, 9);
+    expect(exits).toStrictEqual([{ chatId: 'terminal-1', status: { state: 'exited', exitCode: null, signal: 9 } }]);
+  });
+
+  it('emits exit once, however many times the PTY reports it', () => {
+    const { pty, exits } = makeSession();
+    pty.emitExit(0);
+    pty.emitExit(1, 9);
+    expect(exits).toStrictEqual([{ chatId: 'terminal-1', status: { state: 'exited', exitCode: 0, signal: null } }]);
+    expect(pty.killSignals).toHaveLength(1);
+  });
+});
+
+describe('TerminalSession kill', () => {
+  it('sends SIGHUP, escalates to SIGKILL after the grace period, then settles', async () => {
+    vi.useFakeTimers();
+    try {
+      const { pty, session } = makeSession({ killGraceMs: 500 });
+      let settled = false;
+      const killed = session.kill().then(() => {
+        settled = true;
+      });
+      expect(pty.killSignals).toStrictEqual(['SIGHUP']);
+
+      await vi.advanceTimersByTimeAsync(499);
+      expect(pty.killSignals).toStrictEqual(['SIGHUP']);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(pty.killSignals).toStrictEqual(['SIGHUP', 'SIGKILL']);
+      expect(settled).toBe(false);
+
+      // The second grace period is the last resort for a shell that never reports its exit.
+      await vi.advanceTimersByTimeAsync(500);
+      expect(settled).toBe(true);
+      await killed;
+      // One kill chain per session.
+      expect(session.kill()).toBe(session.kill());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('defaults to the one-second grace period from the plan', async () => {
+    expect(KILL_GRACE_MS).toBe(1_000);
+    vi.useFakeTimers();
+    try {
+      const { pty, session } = makeSession();
+      const killed = session.kill();
+      await vi.advanceTimersByTimeAsync(999);
+      expect(pty.killSignals).toStrictEqual(['SIGHUP']);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(pty.killSignals).toStrictEqual(['SIGHUP', 'SIGKILL']);
+      await vi.advanceTimersByTimeAsync(KILL_GRACE_MS);
+      await killed;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('resolves as soon as the shell exits, and sends no SIGKILL', async () => {
+    vi.useFakeTimers();
+    try {
+      const { pty, session } = makeSession({ killGraceMs: 1_000 });
+      let settled = false;
+      const killed = session.kill().then(() => {
+        settled = true;
+      });
+      pty.emitExit(0, 15);
+      await killed;
+      expect(settled).toBe(true);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(pty.killSignals).not.toContain('SIGKILL');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('resolves at once for a session that already exited', async () => {
+    const { pty, session } = makeSession();
+    pty.emitExit(0);
+    pty.killSignals.length = 0;
+    await expect(session.kill()).resolves.toBeUndefined();
+    expect(pty.killSignals).toStrictEqual([]);
+  });
+
+  it('killNow sends SIGKILL immediately', () => {
+    const { pty, session } = makeSession();
+    session.killNow();
+    expect(pty.killSignals).toStrictEqual(['SIGKILL']);
+  });
+
+  it('dispose detaches the PTY and rejects a pending read', async () => {
+    const { pty, session, data } = makeSession({ killGraceMs: 1 });
+    const pending = session.read({});
+    const disposed = session.dispose();
+    // A real shell reports the exit; the fake one needs telling.
+    pty.emitExit(0, 15);
+    await expect(pending).rejects.toThrow('The terminal was closed.');
+    await disposed;
+    expect(pty.dataListenerCount).toBe(0);
+    expect(pty.exitListenerCount).toBe(0);
+    pty.emitData('late');
+    expect(data).toStrictEqual([]);
+  });
+});
