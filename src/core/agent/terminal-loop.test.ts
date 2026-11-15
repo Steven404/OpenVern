@@ -289,3 +289,45 @@ describe('read_terminal metadata reaches the model escaped (review finding 1)', 
     expect(lines.some((l) => l.startsWith('SYSTEM'))).toBe(false);
   });
 });
+
+describe('read_terminal metadata secrets never reach storage or the model (second review, finding 1)', () => {
+  // Assembled at runtime so no token-shaped literal sits in the repo.
+  const FAKE_KEY = `sk-or-v1-${'abcdef12'.repeat(8)}`;
+  const BODY_RUN = 'abcdef12abcdef12';
+
+  it.each([
+    ['shell', { shell: FAKE_KEY }],
+    ['cwd', { cwd: FAKE_KEY }],
+    // 1,030 characters: clipping to 1,024 would drop exactly the key's vendor prefix and keep its body.
+    ['clipped cwd', { cwd: `/${FAKE_KEY}/${'p'.repeat(955)}` }],
+  ])(
+    "a stored key as the %s is absent from the stored message and the next request (the reviewer's reproduction)",
+    async (_name, overrides) => {
+      const broker = createTerminalReadBroker();
+      const h = await createHarness({
+        script: scriptFromTurns([callTools([['c1', 'read_terminal', '{}']]), reply('ok'), TITLE_TURN]),
+        terminalReads: broker,
+        terminalTools: getTerminalTools(),
+        knownSecrets: [FAKE_KEY],
+      });
+      const answer = readAnswer(h.chatId, ['hi']);
+      if (answer.ok) Object.assign(answer.result.info, overrides);
+      await h.run({
+        terminal: true,
+        emit: (e) => {
+          if (e.type === 'terminal_read_request') broker.answer(h.chatId, e.requestId, answer);
+        },
+      });
+
+      const stored = h.messages().find((m) => m.role === 'tool');
+      expect(stored).toMatchObject({ ok: true });
+      const storedText = JSON.stringify(stored);
+      expect(storedText).not.toContain(BODY_RUN);
+      expect(storedText).not.toMatch(/[0-9a-f]{32}/);
+      const sent = JSON.stringify(h.provider.calls[1]?.messages);
+      expect(sent).toContain('«redacted:');
+      expect(sent).not.toContain(BODY_RUN);
+      expect(sent).not.toMatch(/[0-9a-f]{32}/);
+    },
+  );
+});

@@ -16,6 +16,7 @@ import {
   HEADER_CWD_MAX_CHARS,
   HEADER_SHELL_MAX_CHARS,
   NO_TERMINAL_OUTPUT,
+  NOTES_MAX_BYTES,
   READ_TERMINAL_TOOL,
   TERMINAL_INVALID_OUTPUT,
   TERMINAL_OUTPUT_CLOSE,
@@ -253,25 +254,22 @@ describe('read_terminal caps', () => {
     expect(res.output).toBe(TERMINAL_INVALID_OUTPUT);
   });
 
-  it(`text with more lines than its range keeps the last ${TERMINAL.readMaxLines} and says so`, async () => {
-    const answer = answerFor(numbered(501, 1500), { startLine: 501, totalLines: 1500 });
+  it.each([
+    ['more lines than its range', 'a\nb\nc', 2],
+    ['fewer lines than its range', 'a\nb', 3],
+    ['a trailing line break', 'a\nb\n', 2],
+    [
+      `${TERMINAL.readMaxLines + 500} lines for a ${TERMINAL.readMaxLines}-line range`,
+      numbered(1, 1500).join('\n'),
+      1000,
+    ],
+  ])('text with %s is not valid', async (_name, text, rangeLines) => {
+    const answer = answerFor(numbered(1, rangeLines as number), { totalLines: 2000 });
     if (!answer.ok) throw new Error('unreachable');
-    answer.result.text = numbered(1, 1500).join('\n'); // 1500 lines of text for a 1000-line range
+    answer.result.text = text as string;
     const res = await run({}, ctx(answer));
-
-    expect(res.ok).toBe(true);
-    expect(res.output.split('\n')[1]).toBe('Lines 501-1500 of 1500.');
-    const shown = body(res.output);
-    expect(shown.split('\n')).toHaveLength(TERMINAL.readMaxLines);
-    expect(shown).toContain('L1500');
-    expect(shown).not.toContain('L0500');
-    expect(res.summary).toBe(`Read ${TERMINAL.readMaxLines} lines from the terminal`);
-
-    const note = afterBlock(res.output);
-    expect(note).toContain(`${TERMINAL.readMaxLines} lines`);
-    expect(note).toContain(`${Math.round(TERMINAL.readMaxBytes / 1024)} KB`);
-    expect(note).toContain('the end was kept');
-    expect(note).toContain('start_line');
+    expect(res.ok).toBe(false);
+    expect(res.output).toBe(TERMINAL_INVALID_OUTPUT);
   });
 
   it(`keeps the tail that fits in ${TERMINAL.readMaxBytes / 1024} KB and says so`, async () => {
@@ -304,7 +302,8 @@ describe('read_terminal caps', () => {
     expect(Buffer.byteLength(shown)).toBeLessThanOrEqual(TERMINAL.readMaxBytes);
     expect(shown.endsWith(' end')).toBe(true);
     expect(shown).not.toContain('start ');
-    expect(afterBlock(res.output)).toContain('longer than');
+    expect(afterBlock(res.output)).toContain('too long to show');
+    expect(res.output.split('\n')[1]).toBe('Lines 1-1 of 1.');
   });
 });
 
@@ -479,19 +478,33 @@ describe('read_terminal removes C1 and directional controls (review finding 4)',
 });
 
 describe('read_terminal always discloses a cut (review finding 5)', () => {
-  it("a cut by the tool whose shown lines start at line 1 still says so (the reviewer's reproduction)", async () => {
-    // The range claims lines 1-3 but the text has 1200 lines: the tool keeps the last 1000, still numbered from 1.
-    const answer = answerFor(['a', 'b', 'c'], { totalLines: 3 });
-    if (!answer.ok) throw new Error('unreachable');
-    answer.result.text = numbered(1, 1200).join('\n');
-    const res = await run({}, ctx(answer));
+  it("a cut by the tool whose shown range starts at line 1 still says so (the reviewer's reproduction)", async () => {
+    // One over-long line at line 1: the range shown starts at line 1, and only the line's end is in the block.
+    const res = await run({}, ctx(answerFor([`${'y'.repeat(80 * 1024)} end`], { totalLines: 1 })));
 
     expect(res.ok).toBe(true);
-    expect(res.output.split('\n')[1]).toBe('Lines 1-3 of 3.');
-    expect(body(res.output).split('\n')).toHaveLength(TERMINAL.readMaxLines);
+    expect(res.output.split('\n')[1]).toBe('Lines 1-1 of 1.');
+    expect(afterBlock(res.output)).toContain('only its end is shown');
+  });
+
+  it('a huge last line after shorter ones says those were left out too', async () => {
+    const res = await run({}, ctx(answerFor(['first', `${'y'.repeat(80 * 1024)} end`])));
+    expect(res.output.split('\n')[1]).toBe('Lines 2-2 of 2.');
     const note = afterBlock(res.output);
-    expect(note).toContain('cut');
-    expect(note).toContain('missing');
+    expect(note).toContain('only its end is shown');
+    expect(note).toContain('Read the lines before 2 with start_line');
+  });
+
+  it('a cut that keeps lines 2-3 of a range starting at line 1 says which lines were left out', async () => {
+    const res = await run(
+      {},
+      ctx(answerFor([`L0001 ${'y'.repeat(45 * 1024)}`, `L0002 ${'z'.repeat(10 * 1024)}`, 'L0003 end'])),
+    );
+
+    expect(res.output.split('\n')[1]).toBe('Lines 2-3 of 3.');
+    expect(body(res.output).split('\n')).toHaveLength(2);
+    expect(afterBlock(res.output)).toContain('Read the lines before 2 with start_line');
+    expect(res.summary).toBe('Read 2 lines from the terminal');
   });
 
   it('truncated: true from main with a range starting at line 1 says earlier lines were left out', async () => {
@@ -503,8 +516,10 @@ describe('read_terminal always discloses a cut (review finding 5)', () => {
     expect(res.ok).toBe(true);
     expect(res.output.split('\n')[1]).toBe('Lines 1-3 of 10.');
     const note = afterBlock(res.output);
-    expect(note).toContain('left out earlier lines of the requested range');
-    expect(note).toContain('starts at line 1');
+    expect(note).toContain('shortened this answer to fit its size limit');
+    expect(note).toContain('left out lines from the start of the requested range');
+    expect(note).toContain('this answer starts at line 1');
+    expect(note).toContain('replaced a line too long to send with a placeholder');
     expect(note).toContain('smaller count');
   });
 
@@ -516,8 +531,8 @@ describe('read_terminal always discloses a cut (review finding 5)', () => {
 
     expect(res.output.split('\n')[1]).toBe('Lines 4801-5000 of 5000.');
     const note = afterBlock(res.output);
-    expect(note).toContain('left out earlier lines of the requested range');
-    expect(note).toContain('starts at line 4801');
+    expect(note).toContain('left out lines from the start of the requested range');
+    expect(note).toContain('this answer starts at line 4801');
     expect(note).toContain('start_line');
     expect(note).toContain('smaller count');
   });
@@ -529,7 +544,7 @@ describe('read_terminal always discloses a cut (review finding 5)', () => {
     );
     const note = afterBlock(res.output);
     expect(note).toContain('the end was kept');
-    expect(note).toContain('left out earlier lines of the requested range');
+    expect(note).toContain('left out lines from the start of the requested range');
   });
 
   it('an uncut answer has no note', async () => {
@@ -567,5 +582,242 @@ describe('read_terminal empty result (review finding 7)', () => {
       TERMINAL_OUTPUT_CLOSE,
     ]);
     expect(afterBlock(res.output)).toContain('start_line 9 is past the end of the output (5 lines)');
+  });
+});
+
+// Assembled at runtime, in the style of the redaction tests, so no token-shaped literal sits in the repo.
+const FAKE_OPENROUTER_KEY = `sk-or-v1-${'abcdef12'.repeat(8)}`;
+const fakePem = (): string[] => [
+  '-----BEGIN OPENSSH PRIVATE KEY-----',
+  'b3BlbnNzaC1rZXktdjEAAAAA'.repeat(3),
+  '-----END OPENSSH PRIVATE KEY-----',
+];
+
+describe('read_terminal redacts the metadata before clipping it (second review, finding 1)', () => {
+  /** Any 16-character run of the key's body would be most of a credential. */
+  const leaksBody = (output: string) => output.includes('abcdef12abcdef12');
+
+  it.each([
+    ['shell', { shell: FAKE_OPENROUTER_KEY }],
+    ['cwd', { cwd: FAKE_OPENROUTER_KEY }],
+  ])("a stored key as the %s is redacted whole (the reviewer's reproduction)", async (_name, overrides) => {
+    const res = await run(
+      {},
+      ctx(answerFor(['x'], { info: info(overrides) }), { knownSecrets: [FAKE_OPENROUTER_KEY] }),
+    );
+
+    expect(res.ok).toBe(true);
+    expect(leaksBody(res.output)).toBe(false);
+    expect(res.output.split('\n')[0]).toContain('«redacted:stored-key»');
+    expect(res.output).toContain(redactionNote(1));
+  });
+
+  it('a vendor key the app does not know is redacted whole too', async () => {
+    const res = await run({}, ctx(answerFor(['x'], { info: info({ shell: FAKE_OPENROUTER_KEY }) })));
+    expect(leaksBody(res.output)).toBe(false);
+    expect(res.output.split('\n')[0]).toContain('«redacted:sk-or-v1-…»');
+  });
+
+  it('a key at the start of a cwd that is clipped to its end is redacted before the clip', async () => {
+    const cwd = `/${FAKE_OPENROUTER_KEY}${'0123456789abcdef'.repeat(100)}/project`;
+    const res = await run({}, ctx(answerFor(['x'], { info: info({ cwd }) })));
+    // Without redaction first, the clip would keep a long hex run with the vendor prefix cut off.
+    expect(res.output).not.toMatch(/[0-9a-f]{32}/);
+    expect(res.output).toContain(redactionNote(1));
+  });
+
+  it.each([
+    ['shell', { shell: `${FAKE_OPENROUTER_KEY}`.padEnd(70, 'q') }],
+    ['cwd', { cwd: `/${FAKE_OPENROUTER_KEY}/${'p'.repeat(955)}` }],
+  ])('a key whose prefix the %s clip would drop is redacted first', async (_name, overrides) => {
+    // Clipping keeps the end; these lengths put the cut inside `sk-or-v1-`, leaving the key's body.
+    const res = await run(
+      {},
+      ctx(answerFor(['x'], { info: info(overrides) }), { knownSecrets: [FAKE_OPENROUTER_KEY] }),
+    );
+    expect(leaksBody(res.output)).toBe(false);
+    expect(res.output).toContain(redactionNote(1));
+  });
+
+  it('a control character inside a key in the cwd cannot hide it', async () => {
+    const split = `${FAKE_OPENROUTER_KEY.slice(0, 20)}${String.fromCharCode(0x85)}${FAKE_OPENROUTER_KEY.slice(20)}`;
+    const res = await run(
+      {},
+      ctx(answerFor(['x'], { info: info({ cwd: split }) }), { knownSecrets: [FAKE_OPENROUTER_KEY] }),
+    );
+    expect(leaksBody(res.output)).toBe(false);
+    expect(res.output).not.toContain(FAKE_OPENROUTER_KEY.slice(20, 40));
+    expect(res.output.split('\n')[0]).toContain('started in «redacted:terminal-metadata», 120x30');
+  });
+
+  it('the empty result redacts the metadata too', async () => {
+    const res = await run(
+      {},
+      ctx(
+        {
+          ok: true,
+          result: {
+            info: info({ cwd: FAKE_OPENROUTER_KEY }),
+            totalLines: 0,
+            startLine: 0,
+            endLine: 0,
+            text: '',
+            truncated: false,
+          },
+        },
+        { knownSecrets: [FAKE_OPENROUTER_KEY] },
+      ),
+    );
+    expect(leaksBody(res.output)).toBe(false);
+    expect(res.output.split('\n').slice(1, 4)).toEqual([
+      'Lines 0-0 of 0.',
+      TERMINAL_OUTPUT_OPEN,
+      TERMINAL_OUTPUT_CLOSE,
+    ]);
+    expect(afterBlock(res.output)).toContain(redactionNote(1));
+  });
+
+  it('counts metadata and text redactions in one note', async () => {
+    const res = await run(
+      {},
+      ctx(answerFor([`echo ${FAKE_OPENROUTER_KEY}`], { info: info({ cwd: FAKE_OPENROUTER_KEY }) }), {
+        knownSecrets: [FAKE_OPENROUTER_KEY],
+      }),
+    );
+    expect(res.output).toContain(redactionNote(2));
+  });
+});
+
+describe('read_terminal keeps one output line per line of the range (second review, finding 3)', () => {
+  it("a private-key block covering lines 1-3 is reported as lines 1-3 (the reviewer's reproduction)", async () => {
+    const res = await run({}, ctx(answerFor(fakePem())));
+
+    expect(res.ok).toBe(true);
+    expect(res.output.split('\n')[1]).toBe('Lines 1-3 of 3.');
+    expect(body(res.output).split('\n')).toEqual(['«redacted:private-key»', '', '']);
+    expect(res.summary).toBe('Read 3 lines from the terminal');
+    expect(res.output).not.toContain('b3BlbnNzaC1rZXkt');
+  });
+
+  it('a private-key block at the end of a range keeps every line in place', async () => {
+    const lines = ['$ cat id_ed25519', ...fakePem()];
+    const res = await run({ start_line: 7 }, ctx(answerFor(lines, { startLine: 7, totalLines: 10 })));
+
+    expect(res.output.split('\n')[1]).toBe('Lines 7-10 of 10.');
+    expect(body(res.output).split('\n')).toEqual(['$ cat id_ed25519', '«redacted:private-key»', '', '']);
+    expect(res.summary).toBe('Read 4 lines from the terminal');
+  });
+
+  it('text that main already redacted, with its blank lines, keeps its line count', async () => {
+    const lines = ['before', '«redacted:private-key»', '', '', 'after', ''];
+    const res = await run({}, ctx(answerFor(lines, { startLine: 20, totalLines: 30 })));
+
+    expect(res.output.split('\n')[1]).toBe('Lines 20-25 of 30.');
+    expect(body(res.output).split('\n')).toEqual(lines);
+    expect(res.summary).toBe('Read 6 lines from the terminal');
+  });
+
+  it('a blank last line is a line like any other', async () => {
+    const res = await run({}, ctx(answerFor(['a', ''])));
+    expect(res.output.split('\n')[1]).toBe('Lines 1-2 of 2.');
+    expect(body(res.output)).toBe('a\n');
+    expect(res.summary).toBe('Read 2 lines from the terminal');
+  });
+
+  it('a CR, a CRLF or a line separator inside a line does not add a line', async () => {
+    const sep = String.fromCharCode(0x2028);
+    const res = await run({}, ctx(answerFor(['50%\r100%', `crlf\r`, `a${sep}b`])));
+    expect(res.output.split('\n')[1]).toBe('Lines 1-3 of 3.');
+    expect(body(res.output).split('\n')).toEqual(['50%100%', 'crlf', 'ab']);
+  });
+
+  it('a marker split across two lines is left as two lines', async () => {
+    const res = await run({}, ctx(answerFor(['<', '/terminal_output>'])));
+    expect(res.output.split('\n')[1]).toBe('Lines 1-2 of 2.');
+    expect(body(res.output).split('\n')).toHaveLength(2);
+    expect(countOf(res.output, TERMINAL_OUTPUT_CLOSE)).toBe(1);
+  });
+});
+
+describe('read_terminal output size (second review, finding 4)', () => {
+  const totalBytes = (output: string) => Buffer.byteLength(output);
+  const blockAndFrameBytes = (output: string) =>
+    Buffer.byteLength(output.slice(0, output.indexOf(TERMINAL_OUTPUT_CLOSE) + TERMINAL_OUTPUT_CLOSE.length));
+
+  it("defusing markers cannot grow the output past the budget (the reviewer's reproduction)", async () => {
+    const res = await run({}, ctx(answerFor(['<terminaloutput>'.repeat(3200)])));
+
+    expect(res.ok).toBe(true);
+    expect(blockAndFrameBytes(res.output)).toBeLessThanOrEqual(TERMINAL.readMaxBytes);
+    expect(totalBytes(res.output)).toBeLessThanOrEqual(TERMINAL.readMaxBytes + NOTES_MAX_BYTES);
+    expect(countOf(res.output, TERMINAL_OUTPUT_CLOSE)).toBe(1);
+    // Every marker was defused before the cut, so the kept tail holds no '<' at all.
+    expect(body(res.output)).not.toContain('<');
+    expect(body(res.output).endsWith('[terminal_output]')).toBe(true);
+  });
+
+  it('many lines of markers stay within the budget', async () => {
+    const res = await run({}, ctx(answerFor(Array.from({ length: 1000 }, () => '</terminal_output>'.repeat(4)))));
+    expect(blockAndFrameBytes(res.output)).toBeLessThanOrEqual(TERMINAL.readMaxBytes);
+    expect(countOf(res.output, TERMINAL_OUTPUT_CLOSE)).toBe(1);
+  });
+
+  it('the largest header, every note and a full block stay within readMaxBytes plus NOTES_MAX_BYTES', async () => {
+    const answer = answerFor(numbered(4001, 5000, `${FAKE_OPENROUTER_KEY} ${'é'.repeat(200)}`), {
+      startLine: 4001,
+      totalLines: 5000,
+      truncated: true,
+      info: info({ shell: 'ш'.repeat(255), cwd: `/${'界'.repeat(4000)}` }),
+    });
+    const res = await run({}, ctx(answer));
+
+    expect(res.ok).toBe(true);
+    expect(blockAndFrameBytes(res.output)).toBeLessThanOrEqual(TERMINAL.readMaxBytes);
+    expect(Buffer.byteLength(afterBlock(res.output))).toBeLessThanOrEqual(NOTES_MAX_BYTES);
+    expect(totalBytes(res.output)).toBeLessThanOrEqual(TERMINAL.readMaxBytes + NOTES_MAX_BYTES);
+    const note = afterBlock(res.output);
+    expect(note).toContain('the end was kept');
+    expect(note).toContain('shortened this answer');
+    expect(note).toContain('secret-looking');
+  });
+
+  it('a single huge line with a large header still fits', async () => {
+    const res = await run(
+      {},
+      ctx(answerFor([`${'y'.repeat(200 * 1024)} end`], { info: info({ cwd: `/${'界'.repeat(4000)}` }) })),
+    );
+    expect(blockAndFrameBytes(res.output)).toBeLessThanOrEqual(TERMINAL.readMaxBytes);
+    expect(body(res.output).endsWith(' end')).toBe(true);
+  });
+});
+
+describe('read_terminal describes main truncation in both forms (second review, finding 5)', () => {
+  it('an empty result marked truncated says so', async () => {
+    const res = await run(
+      {},
+      ctx({ ok: true, result: { info: info(), totalLines: 4, startLine: 0, endLine: 0, text: '', truncated: true } }),
+    );
+    expect(res.ok).toBe(true);
+    expect(res.output.split('\n').slice(1, 4)).toEqual([
+      'Lines 0-0 of 4.',
+      TERMINAL_OUTPUT_OPEN,
+      TERMINAL_OUTPUT_CLOSE,
+    ]);
+    expect(afterBlock(res.output)).toContain('marked this answer as shortened');
+    expect(afterBlock(res.output)).toContain('smaller count');
+  });
+
+  it('a one-line placeholder from main is covered by the note', async () => {
+    const res = await run(
+      { start_line: 12, count: 1 },
+      ctx(answerFor(['[line too long to send]'], { startLine: 12, totalLines: 40, truncated: true })),
+    );
+    expect(res.output.split('\n')[1]).toBe('Lines 12-12 of 40.');
+    expect(afterBlock(res.output)).toContain('replaced a line too long to send with a placeholder');
+  });
+
+  it.each([true, false])('truncated: %s is said exactly when it is true', async (truncated) => {
+    const res = await run({}, ctx(answerFor(['a', 'b'], { truncated })));
+    expect(afterBlock(res.output).includes('shortened this answer')).toBe(truncated);
   });
 });

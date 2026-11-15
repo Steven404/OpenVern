@@ -334,6 +334,8 @@ export interface HarnessOptions {
   terminalReads?: TerminalReadBroker;
   /** Tools offered in any chat when `terminalReads` is set and the run's input says `terminal: true`. */
   terminalTools?: Tool<ChatToolContext>[];
+  /** Values the loop redacts as the stored key (what `getKnownSecrets` returns in the app). */
+  knownSecrets?: string[];
 }
 
 export interface Harness {
@@ -377,6 +379,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     ...(opts.changes ? { changes: opts.changes } : {}),
     ...(opts.terminalReads ? { terminalReads: opts.terminalReads } : {}),
     ...(terminalTools ? { getTerminalTools: () => terminalTools } : {}),
+    ...(opts.knownSecrets ? { getKnownSecrets: async () => opts.knownSecrets ?? [] } : {}),
     renderTree:
       opts.renderTree ??
       (async (root, o) => {

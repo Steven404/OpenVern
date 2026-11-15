@@ -3,15 +3,16 @@
 //
 // The answer has crossed two trust boundaries: it arrives over HTTP from the renderer, and everything in it, the text
 // and the metadata alike, comes from the user's machine (a program printed the text; a folder name can hold a
-// newline). The tool re-validates the whole answer itself, writes each metadata value as one escaped, bounded line,
-// strips control characters from the text, redacts secrets before anything is cut or formatted, and defuses marker
-// look-alikes so nothing can close the `<terminal_output>` block or forge a header line. The loop's redaction backstop
-// runs after this.
+// newline). The tool re-validates the whole answer itself, redacts each metadata value whole and then writes it as one
+// escaped, bounded line, strips control characters from the text, redacts secrets before anything is cut, and
+// defuses marker look-alikes so nothing can close the `<terminal_output>` block or forge a header line. Every line of
+// the range stays one line of output, so the reported numbers match the block. The loop's redaction backstop runs
+// after this.
 
 import { terminalReadAnswerBody } from '@shared/api';
 import { TERMINAL, type TerminalReadAnswer, type TerminalReadResult, type TerminalStatus } from '@shared/terminal';
 import { z } from 'zod';
-import { redactionNote, redactSecrets } from '../security/redact';
+import { redactionNote, redactSecrets, sentinel } from '../security/redact';
 import type { ChatToolContext, Tool, ToolResult } from './types';
 import { abortedResult, fail, parseArgs, succeed, toParameters } from './util';
 
@@ -64,17 +65,21 @@ const TEXT_CONTROL_RE = /[\x00-\x08\x0b-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u
 const HEADER_ESCAPE_RE = /^[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069\u2028\u2029\ud800-\udfff]$/;
 /**
  * `<terminal_output>`, `</terminal_output>` and look-alikes: any case, spaces or zero-width characters around the
- * parts, and a space or hyphen in place of the underscore.
+ * parts, and a space or hyphen in place of the underscore. The gaps never span a line break, so defusing never
+ * changes the number of lines.
  */
-const GAP = '[\\s\\u200b-\\u200d\\u2060\\ufeff]*';
-const MARKER_RE = new RegExp(`<${GAP}(\\/?)${GAP}terminal${GAP}[_\\s-]?${GAP}output${GAP}>`, 'gi');
+const GAP = '(?:[^\\S\\n\\r]|[\\u200b-\\u200d\\u2060\\ufeff])*';
+const MARKER_RE = new RegExp(`<${GAP}(\\/?)${GAP}terminal${GAP}[_ \\t-]?${GAP}output${GAP}>`, 'gi');
 
-/** Plain text for the block: no escape sequences, CRLF and CR as LF, no controls but tab and newline. */
+/**
+ * Plain text for the block, line for line: escape sequences and every control but tab and newline are removed (a CR
+ * included, so it cannot add a line), and no newline is ever added or removed.
+ */
 function plainText(text: string): string {
-  return text.replace(ESCAPE_SEQUENCE_RE, '').replace(/\r\n?/g, '\n').replace(TEXT_CONTROL_RE, '');
+  return text.replace(ESCAPE_SEQUENCE_RE, '').replace(TEXT_CONTROL_RE, '');
 }
 
-/** The text can't close (or reopen) the block it is shown in. */
+/** The text can't close (or reopen) the block it is shown in. Never changes the number of lines. */
 function defuseMarkers(text: string): string {
   return text.replace(MARKER_RE, (_m, slash: string) => `[${slash}terminal_output]`);
 }
@@ -86,13 +91,34 @@ function escapeChar(ch: string): string {
   return `\\u${(ch.codePointAt(0) ?? 0).toString(16).padStart(4, '0')}`;
 }
 
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the point
+const HEADER_CONTROLS_RE = /[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069\u2028\u2029]/g;
+
+/** Shown in place of a metadata value whose control characters may split a secret. */
+const METADATA_SENTINEL = sentinel('terminal-metadata');
+
 /**
- * A metadata value from the answer as one visible line: every control, directional or line-breaking character is
- * escaped (`\n`, `\u001b`, `\u202e`), the result is at most `maxChars` long (keeping the end, after `…`, which for a
- * folder is its most telling part), and marker look-alikes are defused.
+ * Redacts a whole metadata value, before it is escaped or clipped: clipping first could drop a key's prefix and leave
+ * a body no pattern matches. Controls can split a secret so that neither the value as sent nor the value without its
+ * controls holds all of it in one match (`sk-or-v1-abc<NEL>def…`): a value with controls in which either reading finds
+ * a secret is replaced whole.
  */
-export function headerValue(raw: string, maxChars: number): string {
-  const pieces = Array.from(raw, (ch) => (HEADER_ESCAPE_RE.test(ch) ? escapeChar(ch) : ch));
+function redactValue(raw: string, known: readonly string[] | undefined): { value: string; count: number } {
+  const whole = redactSecrets(raw, { known });
+  const withoutControls = raw.replace(HEADER_CONTROLS_RE, '');
+  if (withoutControls === raw) return { value: whole.text, count: whole.count };
+  const joined = redactSecrets(withoutControls, { known });
+  const count = Math.max(whole.count, joined.count);
+  return count > 0 ? { value: METADATA_SENTINEL, count } : { value: raw, count: 0 };
+}
+
+/**
+ * A redacted metadata value as one visible line: every control, directional or line-breaking character is escaped
+ * (`\n`, `\u001b`, `\u202e`), the result is at most `maxChars` long (keeping the end, after `…`, which for a folder is
+ * its most telling part), and marker look-alikes are defused.
+ */
+export function headerValue(redacted: string, maxChars: number): string {
+  const pieces = Array.from(redacted, (ch) => (HEADER_ESCAPE_RE.test(ch) ? escapeChar(ch) : ch));
   let length = pieces.reduce((n, piece) => n + piece.length, 0);
   let value: string;
   if (length <= maxChars) {
@@ -125,26 +151,23 @@ function tailUtf8(text: string, maxBytes: number): string {
   return chars.slice(start).join('');
 }
 
-/** Keeps the last lines that fit in `readMaxLines` and `readMaxBytes` (the tail matters most in a terminal). */
-function capLines(lines: string[]): { lines: string[]; cut: boolean; lineCut: boolean } {
-  let kept = lines.length > TERMINAL.readMaxLines ? lines.slice(-TERMINAL.readMaxLines) : lines;
-  let cut = kept.length < lines.length;
-  let lineCut = false;
+/**
+ * Keeps the last lines whose text, joined by newlines, fits in `budget` bytes (the tail matters most in a
+ * terminal). The lines are already defused, so nothing grows after this.
+ */
+function capLines(lines: string[], budget: number): { lines: string[]; cut: boolean; lineCut: boolean } {
   let bytes = 0;
-  let first = kept.length;
+  let first = lines.length;
   while (first > 0) {
-    const size = Buffer.byteLength(kept[first - 1] as string) + 1;
-    if (bytes + size > TERMINAL.readMaxBytes) break;
+    const size = Buffer.byteLength(lines[first - 1] as string) + (first < lines.length ? 1 : 0);
+    if (bytes + size > budget) break;
     bytes += size;
     first--;
   }
-  if (first > 0) {
-    cut = true;
-    // A single line over the cap (a minified blob, a progress bar): keep its end rather than nothing.
-    lineCut = first === kept.length;
-    kept = lineCut ? [tailUtf8(kept.at(-1) as string, TERMINAL.readMaxBytes)] : kept.slice(first);
-  }
-  return { lines: kept, cut, lineCut };
+  if (first === 0) return { lines, cut: false, lineCut: false };
+  // A single last line over the budget (a minified blob, a progress bar): keep its end rather than nothing.
+  if (first === lines.length) return { lines: [tailUtf8(lines.at(-1) as string, budget)], cut: true, lineCut: true };
+  return { lines: lines.slice(first), cut: true, lineCut: false };
 }
 
 function describeStatus(status: TerminalStatus): string {
@@ -157,64 +180,94 @@ function describeStatus(status: TerminalStatus): string {
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const KB = Math.round(TERMINAL.readMaxBytes / 1024);
 
-/** `result` has passed `terminalReadAnswerBody`, so its numbers and sizes are in range. */
+/**
+ * The whole output (header, range line, block and text) stays within `readMaxBytes`; the notes after the block add at
+ * most this many bytes.
+ */
+export const NOTES_MAX_BYTES = 1024;
+/** Room kept for the `Lines a-b of n.` line, whatever its numbers. */
+const RANGE_LINE_MAX_BYTES = 40;
+
+/** Main's own cut (§4.1), in either of its two forms, and how to read around it. */
+function mainCutNote(startLine: number): string {
+  return startLine === 0
+    ? '[The terminal marked this answer as shortened to fit its size limit but sent no lines. Read again with a smaller count.]'
+    : '[The terminal shortened this answer to fit its size limit: it left out lines from the start of the requested ' +
+        `range (this answer starts at line ${startLine}), or replaced a line too long to send with a placeholder. ` +
+        'Read the earlier lines with start_line and a smaller count.]';
+}
+
+/** `result` has passed `terminalReadAnswerBody`: its numbers and sizes are in range, and its text has one line per line of the range. */
 function formatResult(
   result: TerminalReadResult,
   requestedStart: number | undefined,
   ctx: ChatToolContext,
 ): ToolResult {
   const { info, totalLines, startLine, endLine } = result;
+  const shell = redactValue(info.shell, ctx.knownSecrets);
+  const cwd = redactValue(info.cwd, ctx.knownSecrets);
   const header =
-    `Terminal: ${headerValue(info.shell, HEADER_SHELL_MAX_CHARS)}, ` +
-    `started in ${headerValue(info.cwd, HEADER_CWD_MAX_CHARS)}, ` +
+    `Terminal: ${headerValue(shell.value, HEADER_SHELL_MAX_CHARS)}, ` +
+    `started in ${headerValue(cwd.value, HEADER_CWD_MAX_CHARS)}, ` +
     `${info.cols}x${info.rows}, ${describeStatus(info.status)}.`;
+  const notes: string[] = [];
+  let redactions = shell.count + cwd.count;
 
   // The empty result (an empty buffer, or a start past the end) keeps the shape of any other.
   if (startLine === 0) {
-    const out = [header, `Lines 0-0 of ${totalLines}.`, TERMINAL_OUTPUT_OPEN, TERMINAL_OUTPUT_CLOSE];
     if (requestedStart !== undefined && requestedStart > totalLines) {
-      out.push(`[start_line ${requestedStart} is past the end of the output (${plural(totalLines, 'line')}).]`);
+      notes.push(`[start_line ${requestedStart} is past the end of the output (${plural(totalLines, 'line')}).]`);
     }
+    if (result.truncated) notes.push(mainCutNote(0));
+    if (redactions > 0) notes.push(redactionNote(redactions));
+    const out = [header, `Lines 0-0 of ${totalLines}.`, TERMINAL_OUTPUT_OPEN, TERMINAL_OUTPUT_CLOSE, ...notes];
     return succeed(out.join('\n'), 'Read 0 lines from the terminal');
   }
 
-  // Redact first: cutting first could split a key so that no pattern matches either half.
+  // One line per line of the range, all the way through: sanitising and defusing never touch a newline, and
+  // redaction keeps the line breaks of what it replaces. Redact before any cut: a cut first could split a key so
+  // that no pattern matches either half.
+  const expected = endLine - startLine + 1;
   const redacted = redactSecrets(plainText(result.text), { known: ctx.knownSecrets });
-  const lines = redacted.text.split('\n');
-  if (lines.length > 1 && lines.at(-1) === '') lines.pop();
-  const capped = capLines(lines);
+  const lines = defuseMarkers(redacted.text).split('\n');
+  // Only a stored secret holding a line break could change the count; then the numbers can't be trusted.
+  if (lines.length !== expected) return fail(TERMINAL_INVALID_OUTPUT, 'Terminal answer not valid');
+  redactions += redacted.count;
+
+  const framing =
+    Buffer.byteLength(header) +
+    RANGE_LINE_MAX_BYTES +
+    Buffer.byteLength(TERMINAL_OUTPUT_OPEN) +
+    Buffer.byteLength(TERMINAL_OUTPUT_CLOSE) +
+    4; // the four line breaks around the range line and the block
+  const capped = capLines(lines, TERMINAL.readMaxBytes - framing);
   const shown = capped.lines;
-  // The kept lines are the tail of the range.
-  const firstShown = Math.max(startLine, endLine - shown.length + 1);
+  const firstShown = endLine - shown.length + 1;
+
+  // Anything cut is always said: the tool's own cut, and main's, separately.
+  if (capped.lineCut) {
+    notes.push(
+      `[Line ${endLine} is too long to show in ${KB} KB; only its end is shown.` +
+        (endLine > startLine ? ` Read the lines before ${endLine} with start_line and a smaller count.]` : ']'),
+    );
+  } else if (capped.cut) {
+    notes.push(
+      `[Output cut to fit ${KB} KB; the end was kept. Read the lines before ${firstShown} with start_line and a ` +
+        'smaller count.]',
+    );
+  }
+  if (result.truncated) notes.push(mainCutNote(startLine));
+  if (redactions > 0) notes.push(redactionNote(redactions));
 
   const out = [
     header,
     `Lines ${firstShown}-${endLine} of ${totalLines}.`,
     TERMINAL_OUTPUT_OPEN,
-    defuseMarkers(shown.join('\n')),
+    shown.join('\n'),
     TERMINAL_OUTPUT_CLOSE,
+    ...notes,
   ];
-  // Anything cut is always said, wherever the shown lines start.
-  if (capped.lineCut) {
-    out.push(`[Line ${endLine} is longer than ${KB} KB; only its end is shown.]`);
-  } else if (capped.cut) {
-    out.push(
-      `[Output cut at ${TERMINAL.readMaxLines} lines or ${KB} KB; the end was kept.` +
-        (firstShown > 1
-          ? ` Read the lines before ${firstShown} with start_line and a smaller count.]`
-          : ' Some of the text from these lines is missing.]'),
-    );
-  }
-  // Main's cut (§4.1): whole lines dropped from the start of the requested range, so `startLine` is the first line it
-  // kept. Said whatever `startLine` is, and separately from the tool's own cut above.
-  if (result.truncated) {
-    out.push(
-      `[The terminal left out earlier lines of the requested range to stay under its size limit; its answer starts at ` +
-        `line ${startLine}. Read the earlier lines with start_line and a smaller count.]`,
-    );
-  }
-  if (redacted.count > 0) out.push(redactionNote(redacted.count));
-  return succeed(out.join('\n'), `Read ${plural(endLine - firstShown + 1, 'line')} from the terminal`);
+  return succeed(out.join('\n'), `Read ${plural(shown.length, 'line')} from the terminal`);
 }
 
 /** The answer checked against the same schema the route uses: a caller that skipped the route gets no less. */
