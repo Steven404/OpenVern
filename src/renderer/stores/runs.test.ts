@@ -1,5 +1,6 @@
 import { errorInfo } from '@shared/errors';
 import type { AgentEvent } from '@shared/events';
+import type { TerminalReadAnswer } from '@shared/terminal';
 import type {
   AssistantMessage,
   ChatSummary,
@@ -9,7 +10,8 @@ import type {
   UserMessage,
 } from '@shared/types';
 import { QueryClient } from '@tanstack/react-query';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { FakeTerminalBridge } from '../features/terminal/test-fakes';
 import { ApiError } from '../lib/api-client';
 import { MockApiClient } from '../lib/mock-api-client';
 import { queryKeys } from '../lib/query-keys';
@@ -458,5 +460,167 @@ describe('useRunsStore', () => {
   it('maps ApiErrors to their info and anything else to network_error', () => {
     expect(toErrorInfo(new ApiError(errorInfo('internal'))).code).toBe('internal');
     expect(toErrorInfo(new TypeError('boom'))).toMatchObject({ code: 'network_error', message: 'boom' });
+  });
+});
+
+describe('terminal relay (T3.6)', () => {
+  beforeEach(() => useRunsStore.setState({ runs: {}, chatModels: {}, chatEfforts: {} }));
+  afterEach(() => vi.restoreAllMocks());
+
+  const readRequest: AgentEvent = {
+    type: 'terminal_read_request',
+    requestId: 'req-1',
+    request: { startLine: 3, count: 10 },
+  };
+  const answer: TerminalReadAnswer = {
+    ok: true,
+    result: {
+      info: { chatId: 'c', shell: 'zsh', cwd: '/home/you', cols: 80, rows: 24, status: { state: 'running' } },
+      totalLines: 40,
+      startLine: 3,
+      endLine: 12,
+      text: 'the lines',
+      truncated: false,
+    },
+  };
+  const input = { text: 'what is on screen?', attachments: [], model: 'anthropic/claude-sonnet-5.5' };
+
+  /** A run stream that yields `events`, then `done`, as the server ends a turn. */
+  async function* streamOf(events: AgentEvent[]): AsyncGenerator<AgentEvent> {
+    yield* events;
+    yield { type: 'done' };
+  }
+
+  async function setupChat() {
+    const api = new MockApiClient({ delayMs: 0 });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const chat = await api.createChat({ projectId: null, model: 'anthropic/claude-sonnet-5.5' });
+    queryClient.setQueryData(queryKeys.chat(chat.id), chat);
+    return { api, queryClient, chat };
+  }
+
+  it('a terminal_read_request reads that chat’s terminal and answers under the same request id', async () => {
+    const { api, queryClient, chat } = await setupChat();
+    const bridge = new FakeTerminalBridge();
+    bridge.readAnswer = async () => answer;
+    vi.spyOn(api, 'sendMessage').mockImplementation(() => streamOf([readRequest]));
+    const answerSpy = vi.spyOn(api, 'answerTerminalRead').mockResolvedValue(undefined);
+
+    await useRunsStore.getState().send({ api, queryClient, terminal: bridge }, chat.id, { ...input, attachments: [] });
+
+    await vi.waitFor(() => expect(answerSpy).toHaveBeenCalledWith(chat.id, 'req-1', answer));
+    expect(bridge.reads).toEqual([{ chatId: chat.id, request: { startLine: 3, count: 10 } }]);
+  });
+
+  it('posts the answer only once the read has resolved', async () => {
+    const { api, queryClient, chat } = await setupChat();
+    const bridge = new FakeTerminalBridge();
+    let finishRead: (value: TerminalReadAnswer) => void = () => {};
+    bridge.readAnswer = () =>
+      new Promise<TerminalReadAnswer>((resolve) => {
+        finishRead = resolve;
+      });
+    vi.spyOn(api, 'sendMessage').mockImplementation(() => streamOf([readRequest]));
+    const answerSpy = vi.spyOn(api, 'answerTerminalRead').mockResolvedValue(undefined);
+
+    await useRunsStore.getState().send({ api, queryClient, terminal: bridge }, chat.id, { ...input, attachments: [] });
+    expect(bridge.reads).toHaveLength(1);
+    expect(answerSpy).not.toHaveBeenCalled();
+
+    finishRead(answer);
+    await vi.waitFor(() => expect(answerSpy).toHaveBeenCalledWith(chat.id, 'req-1', answer));
+  });
+
+  it('without a bridge it answers unavailable', async () => {
+    const { api, queryClient, chat } = await setupChat();
+    vi.spyOn(api, 'sendMessage').mockImplementation(() => streamOf([readRequest]));
+    const answerSpy = vi.spyOn(api, 'answerTerminalRead').mockResolvedValue(undefined);
+
+    await useRunsStore.getState().send({ api, queryClient }, chat.id, { ...input, attachments: [] });
+
+    await vi.waitFor(() =>
+      expect(answerSpy).toHaveBeenCalledWith(chat.id, 'req-1', { ok: false, reason: 'unavailable' }),
+    );
+  });
+
+  it('a read that throws is answered unavailable', async () => {
+    const { api, queryClient, chat } = await setupChat();
+    const bridge = new FakeTerminalBridge();
+    bridge.readAnswer = async () => {
+      throw new Error('the shell is gone');
+    };
+    vi.spyOn(api, 'sendMessage').mockImplementation(() => streamOf([readRequest]));
+    const answerSpy = vi.spyOn(api, 'answerTerminalRead').mockResolvedValue(undefined);
+
+    await useRunsStore.getState().send({ api, queryClient, terminal: bridge }, chat.id, { ...input, attachments: [] });
+
+    await vi.waitFor(() =>
+      expect(answerSpy).toHaveBeenCalledWith(chat.id, 'req-1', { ok: false, reason: 'unavailable' }),
+    );
+  });
+
+  it('a failed answer does not break the run: the rest of the reply still streams and settles cleanly', async () => {
+    const { api, queryClient, chat } = await setupChat();
+    const bridge = new FakeTerminalBridge();
+    const persisted: UserMessage = { id: 'u1', role: 'user', createdAt: '', text: input.text, attachments: [] };
+    vi.spyOn(api, 'sendMessage').mockImplementation(() =>
+      streamOf([
+        { type: 'user_message', message: persisted },
+        readRequest,
+        { type: 'assistant_start', messageId: 'a1', model: 'm' },
+        { type: 'text_delta', messageId: 'a1', delta: 'still here' },
+      ]),
+    );
+    const answerSpy = vi.spyOn(api, 'answerTerminalRead').mockRejectedValue(new ApiError(errorInfo('not_found'), 404));
+    const seen: string[] = [];
+    const unsubscribe = useRunsStore.subscribe((s) => {
+      const message = s.runs[chat.id]?.messages.find((m) => m.id === 'a1');
+      if (message?.role === 'assistant') seen.push(message.text);
+    });
+
+    await useRunsStore.getState().send({ api, queryClient, terminal: bridge }, chat.id, { ...input, attachments: [] });
+    unsubscribe();
+
+    expect(answerSpy).toHaveBeenCalled();
+    expect(seen).toContain('still here');
+    expect(useRunsStore.getState().runs[chat.id]).toBeUndefined();
+  });
+
+  it('send says terminal: true only when the client has a bridge', async () => {
+    const { api, queryClient, chat } = await setupChat();
+    const sendSpy = vi.spyOn(api, 'sendMessage').mockImplementation(() => streamOf([]));
+
+    await useRunsStore.getState().send({ api, queryClient }, chat.id, { ...input, attachments: [] });
+    expect(sendSpy.mock.calls[0]?.[1]).not.toHaveProperty('terminal');
+
+    await useRunsStore
+      .getState()
+      .send({ api, queryClient, terminal: new FakeTerminalBridge() }, chat.id, { ...input, attachments: [] });
+    expect(sendSpy.mock.calls[1]?.[1]).toMatchObject({ terminal: true });
+  });
+
+  it('retry says terminal: true only when the client has a bridge', async () => {
+    const { api, queryClient, chat } = await setupChat();
+    const retrySpy = vi.spyOn(api, 'retry').mockImplementation(() => streamOf([]));
+
+    await useRunsStore.getState().retry({ api, queryClient }, chat.id, chat.model);
+    expect(retrySpy.mock.calls[0]?.[1]).not.toHaveProperty('terminal');
+
+    await useRunsStore.getState().retry({ api, queryClient, terminal: new FakeTerminalBridge() }, chat.id, chat.model);
+    expect(retrySpy.mock.calls[1]?.[1]).toMatchObject({ terminal: true });
+  });
+
+  it('retry of an unsent message sends terminal: true too', async () => {
+    const api = new MockApiClient({ delayMs: 0, keyConfigured: false });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const chat = await api.createChat({ projectId: null, model: 'anthropic/claude-sonnet-5.5' });
+    queryClient.setQueryData(queryKeys.chat(chat.id), chat);
+    await useRunsStore.getState().send({ api, queryClient }, chat.id, { ...input, text: 'hello', attachments: [] });
+    expect(useRunsStore.getState().runs[chat.id]?.unsent?.text).toBe('hello');
+
+    await api.setOpenRouterKey('sk-or-v1-abcdefghijklmnop');
+    const sendSpy = vi.spyOn(api, 'sendMessage').mockImplementation(() => streamOf([]));
+    await useRunsStore.getState().retry({ api, queryClient, terminal: new FakeTerminalBridge() }, chat.id, chat.model);
+    expect(sendSpy.mock.calls[0]?.[1]).toMatchObject({ text: 'hello', terminal: true });
   });
 });
