@@ -46,17 +46,11 @@ const argsSchema = z.object({
 });
 
 /**
- * Escape sequences, in their 7-bit (ESC) and 8-bit (C1) forms: CSI, the string commands (OSC, DCS, SOS, PM, APC; an
- * unterminated one ends at the line break), and the two-byte ESC forms. The answer should be plain text already; this
- * makes sure of it, so a sequence's parameters are not left behind as text.
- */
-const ESCAPE_SEQUENCE_RE =
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the point
-  /(?:\x1b\[|\u009b)[0-?]*[ -/]*[@-~]|(?:\x1b[\]PX^_]|[\u0090\u0098\u009d\u009e\u009f])[^\x07\x1b\u009c\n]*(?:\x07|\x1b\\|\u009c)?|\x1b[@-Z\\-_]/g;
-/**
- * Characters that never reach the model as they are: C0 controls and DEL (the text keeps tab and newline), C1
- * controls (U+0080–U+009F), the Unicode directional controls (U+061C, U+200E, U+200F, U+202A–U+202E, U+2066–U+2069)
- * and the line and paragraph separators (U+2028, U+2029), which some readers treat as line breaks.
+ * Characters removed from the text, one at a time: the Unicode directional controls (U+061C, U+200E, U+200F,
+ * U+202A–U+202E, U+2066–U+2069) and the line and paragraph separators (U+2028, U+2029), which some readers treat as
+ * line breaks. C0 controls (other than tab and newline), DEL and C1 controls are listed too, but an answer holding
+ * one never gets here: the shared schema refuses it, because escape sequences can't be removed safely (see
+ * `TERMINAL_TEXT_FORBIDDEN` in `@shared/api`).
  */
 // biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the point
 const TEXT_CONTROL_RE = /[\x00-\x08\x0b-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069\u2028\u2029]/g;
@@ -72,11 +66,12 @@ const GAP = '(?:[^\\S\\n\\r]|[\\u200b-\\u200d\\u2060\\ufeff])*';
 const MARKER_RE = new RegExp(`<${GAP}(\\/?)${GAP}terminal${GAP}[_ \\t-]?${GAP}output${GAP}>`, 'gi');
 
 /**
- * Plain text for the block, line for line: escape sequences and every control but tab and newline are removed (a CR
- * included, so it cannot add a line), and no newline is ever added or removed.
+ * Plain text for the block, line for line. Only single characters are removed, never a run, so cleaning can join the
+ * two halves of a key that a control was hiding but can never take a character of a key away. That is what makes
+ * "clean, then redact" safe. No newline is ever added or removed.
  */
 function plainText(text: string): string {
-  return text.replace(ESCAPE_SEQUENCE_RE, '').replace(TEXT_CONTROL_RE, '');
+  return text.replace(TEXT_CONTROL_RE, '');
 }
 
 /** The text can't close (or reopen) the block it is shown in. Never changes the number of lines. */
@@ -228,12 +223,7 @@ function formatResult(
   // redaction keeps the line breaks of what it replaces. Redact before any cut: a cut first could split a key so
   // that no pattern matches either half.
   const expected = endLine - startLine + 1;
-  // Twice around the cleaning. First on the text as sent: cleaning removes escape sequences, and a sequence that
-  // ends in a key's first character (`ESC[31` + `sk-…`) would take that character with it, leaving a body no pattern
-  // matches. Then again on the cleaned text, for a key that only becomes whole once a control inside it is gone.
-  const raw = redactSecrets(result.text, { known: ctx.knownSecrets });
-  const cleaned = redactSecrets(plainText(raw.text), { known: ctx.knownSecrets });
-  const redacted = { text: cleaned.text, count: raw.count + cleaned.count };
+  const redacted = redactSecrets(plainText(result.text), { known: ctx.knownSecrets });
   const lines = defuseMarkers(redacted.text).split('\n');
   // Only a stored secret holding a line break could change the count; then the numbers can't be trusted.
   if (lines.length !== expected) return fail(TERMINAL_INVALID_OUTPUT, 'Terminal answer not valid');

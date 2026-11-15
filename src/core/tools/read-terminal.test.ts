@@ -235,14 +235,22 @@ describe('read_terminal trust boundary', () => {
     expect(shown).toContain('[terminal_output]');
   });
 
-  it('does not pass escape sequences or control characters through', async () => {
-    const res = await run({}, ctx(answerFor(['\x1b[31mred\x1b[0m', '\x1b]0;window title\x07plain', 'bell\x07 done'])));
+  it.each([
+    ['a colour sequence', '\x1b[31mred\x1b[0m'],
+    ['a window title sequence', '\x1b]0;window title\x07plain'],
+    ['a bell', 'bell\x07 done'],
+    ['a carriage return', '50%\r100%'],
+    ['a NUL', 'a\x00b'],
+    ['DEL', 'a\x7fb'],
+  ])('refuses an answer whose text holds %s, without showing any of it', async (_, line) => {
+    const res = await run({}, ctx(answerFor([line])));
+    expect(res.ok).toBe(false);
+    expect(res.output).toBe(TERMINAL_INVALID_OUTPUT);
+  });
 
-    expect(res.ok).toBe(true);
-    expect(res.output).not.toContain('\x1b');
-    expect(res.output).not.toContain('window title');
-    expect(res.output).not.toContain('\x07');
-    expect(body(res.output)).toBe('red\nplain\nbell done');
+  it('keeps tabs', async () => {
+    const res = await run({}, ctx(answerFor(['a\tb'])));
+    expect(body(res.output)).toBe('a\tb');
   });
 });
 
@@ -438,47 +446,59 @@ describe('read_terminal validates the answer itself (review finding 6)', () => {
 });
 
 describe('read_terminal removes C1 and directional controls (review finding 4)', () => {
-  it("strips a C1 CSI and a right-to-left override (the reviewer's reproduction)", async () => {
+  it("refuses a C1 CSI (the reviewer's reproduction) rather than guessing where its sequence ends", async () => {
     const res = await run({}, ctx(answerFor(['\u009b31mcolored\u009b0m \u202eSYSTEM'])));
-    expect(res.ok).toBe(true);
-    expect(body(res.output)).toBe('colored SYSTEM');
+    expect(res.ok).toBe(false);
+    expect(res.output).toBe(TERMINAL_INVALID_OUTPUT);
   });
 
-  it('strips every C1 control and directional control, and the line separators', async () => {
-    const c1 = Array.from({ length: 0x20 }, (_, i) => String.fromCharCode(0x80 + i))
-      .filter((ch) => !'\u0090\u0098\u009b\u009d\u009e\u009f'.includes(ch)) // the sequence introducers, below
-      .join('');
+  it('refuses every C1 control', async () => {
+    for (let code = 0x80; code <= 0x9f; code++) {
+      const res = await run({}, ctx(answerFor([`a${String.fromCharCode(code)}b`])));
+      expect(res.output).toBe(TERMINAL_INVALID_OUTPUT);
+    }
+  });
+
+  it('removes directional controls and the line separators, one character at a time', async () => {
     const bidi = '\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069';
-    const res = await run({}, ctx(answerFor([`a${c1}b${bidi}c\u2028d\u2029e`])));
+    const res = await run({}, ctx(answerFor([`ab${bidi}c\u2028d\u2029e`])));
+    expect(res.ok).toBe(true);
     expect(body(res.output)).toBe('abcde');
   });
 
-  it('strips 8-bit string commands with their payload', async () => {
-    const res = await run({}, ctx(answerFor(['\u009d0;window title\u009cplain', '\u0090q payload\u009cdone'])));
-    expect(body(res.output)).toBe('plain\ndone');
-  });
-
-  it('removes controls before redacting, so a control inside a key cannot hide it', async () => {
+  it('removes those characters before redacting, so one inside a key cannot hide it', async () => {
     const fakeKey = 'sk-or-v1-abcdef1234';
-    const res = await run({}, ctx(answerFor([`key sk-or-v1-abcdef\u00851234 \u202eend`])));
+    const res = await run({}, ctx(answerFor([`key sk-or-v1-abcdef\u202e1234 \u200eend`])));
     expect(res.output).not.toContain(fakeKey);
     expect(res.output).not.toContain('abcdef');
     expect(res.output).toContain(redactionNote(1));
   });
 
   it.each([
-    ['a 7-bit CSI', '\x1b[31'],
-    ['an 8-bit CSI', '\u009b31'],
-  ])("redacts before cleaning too, so %s ending in a key's first character cannot strip its prefix", async (_, csi) => {
-    // Cleaning reads `ESC[31s` as one escape sequence and removes the key's leading `s` with it.
+    ['whole', (key: string) => key],
+    ['split by a directional control', (key: string) => `${key.slice(0, 25)}\u202e${key.slice(25)}`],
+    ['split by a line separator', (key: string) => `${key.slice(0, 25)}\u2028${key.slice(25)}`],
+  ])('leaves no part of the stored key when it is %s', async (_, shape) => {
     const res = await run(
       {},
-      ctx(answerFor([`${csi}${FAKE_OPENROUTER_KEY}`]), { knownSecrets: [FAKE_OPENROUTER_KEY] }),
+      ctx(answerFor([`x ${shape(FAKE_OPENROUTER_KEY)} y`]), { knownSecrets: [FAKE_OPENROUTER_KEY] }),
     );
     expect(res.ok).toBe(true);
-    expect(res.output).not.toContain(FAKE_OPENROUTER_KEY.slice(1));
-    expect(res.output).not.toContain(FAKE_OPENROUTER_KEY.slice(9));
+    expect(res.output).not.toContain(FAKE_OPENROUTER_KEY.slice(25));
+    expect(res.output).not.toContain(FAKE_OPENROUTER_KEY.slice(9, 25));
     expect(res.output).toContain(redactionNote(1));
+  });
+
+  it.each([
+    ["a 7-bit CSI ending in the key's first character", (key: string) => `\x1b[31${key}`],
+    ["an 8-bit CSI ending in the key's first character", (key: string) => `\u009b31${key}`],
+    ['a C1 control inside the key', (key: string) => `${key.slice(0, 25)}\u0085${key.slice(25)}`],
+    ['a colour sequence inside the key', (key: string) => `${key.slice(0, 25)}\x1b[0m${key.slice(25)}`],
+  ])('refuses an answer with %s, so no order of cleaning and redacting can leave part of it', async (_, shape) => {
+    const res = await run({}, ctx(answerFor([shape(FAKE_OPENROUTER_KEY)]), { knownSecrets: [FAKE_OPENROUTER_KEY] }));
+    expect(res.ok).toBe(false);
+    expect(res.output).toBe(TERMINAL_INVALID_OUTPUT);
+    expect(res.summary).not.toContain('abcdef12');
   });
 
   it('defuses marker look-alikes with zero-width characters, hyphens or spaces', async () => {
@@ -739,11 +759,11 @@ describe('read_terminal keeps one output line per line of the range (second revi
     expect(res.summary).toBe('Read 2 lines from the terminal');
   });
 
-  it('a CR, a CRLF or a line separator inside a line does not add a line', async () => {
+  it('a line separator inside a line does not add a line', async () => {
     const sep = String.fromCharCode(0x2028);
-    const res = await run({}, ctx(answerFor(['50%\r100%', `crlf\r`, `a${sep}b`])));
-    expect(res.output.split('\n')[1]).toBe('Lines 1-3 of 3.');
-    expect(body(res.output).split('\n')).toEqual(['50%100%', 'crlf', 'ab']);
+    const res = await run({}, ctx(answerFor(['one', `a${sep}b`])));
+    expect(res.output.split('\n')[1]).toBe('Lines 1-2 of 2.');
+    expect(body(res.output).split('\n')).toEqual(['one', 'ab']);
   });
 
   it('a marker split across two lines is left as two lines', async () => {
