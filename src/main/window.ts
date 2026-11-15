@@ -48,7 +48,12 @@ function harden(win: BrowserWindow): void {
   win.webContents.on('will-attach-webview', (event) => event.preventDefault());
 }
 
-export function createMainWindow(): BrowserWindow {
+export interface MainWindowOptions {
+  /** Runs once the window has closed (not on a reload). */
+  onClosed?: () => void;
+}
+
+export function createMainWindow(options: MainWindowOptions = {}): BrowserWindow {
   // Dev only: the packaged app gets its icon from electron-builder.
   const devIcon = join(app.getAppPath(), 'build/icon.png');
 
@@ -72,6 +77,7 @@ export function createMainWindow(): BrowserWindow {
   mainWindow = win;
   win.on('closed', () => {
     if (mainWindow === win) mainWindow = null;
+    options.onClosed?.();
   });
   win.once('ready-to-show', () => win.show());
   harden(win);

@@ -9,7 +9,8 @@ import { buildAppMenuTemplate } from './menu';
 import { isDev } from './origin';
 import { handleAppProtocol, registerAppScheme } from './protocol';
 import { noSandboxWarning, resolveUserDataDir } from './startup';
-import { createMainWindow, focusMainWindow } from './window';
+import { createTerminalManager } from './terminal/service';
+import { createMainWindow, focusMainWindow, getMainWindow } from './window';
 
 // Must happen before `ready`. (Harmless in dev: nothing is served on the scheme there.)
 registerAppScheme();
@@ -32,6 +33,24 @@ if (sandboxWarning) console.warn(sandboxWarning);
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
+  // Terminal sessions live as long as the main window: a reload keeps them, closing the window or quitting ends every
+  // shell (docs/terminal-plan.md T1.6).
+  const terminals = createTerminalManager(getMainWindow);
+  const openMainWindow = () => createMainWindow({ onClosed: () => void terminals.disposeAll() });
+
+  // Hold the quit until every shell has exited (SIGHUP, then SIGKILL after 1 s), so none outlives the app.
+  let terminalsEnded = false;
+  app.on('before-quit', (event) => {
+    if (terminalsEnded) return;
+    event.preventDefault();
+    void terminals.disposeAll().finally(() => {
+      terminalsEnded = true;
+      app.quit();
+    });
+  });
+  // Last resort when main exits without a quit (app.exit, a fatal error): SIGKILL whatever is left.
+  process.on('exit', () => terminals.killAllNow());
+
   void app.whenReady().then(async () => {
     if (!isDev()) {
       const template = buildAppMenuTemplate(process.platform);
@@ -48,17 +67,17 @@ if (!app.requestSingleInstanceLock()) {
       console.log(`[openvern] data dir: ${backend.dataDir}`);
       handleAppProtocol({ fetchApi: backend.fetch, rendererDir: join(import.meta.dirname, '../renderer') });
     }
-    registerIpc();
-    createMainWindow();
+    registerIpc({ terminals });
+    openMainWindow();
 
     // Register after startup: a second instance can arrive during createBackend (including a Keychain wait),
     // before the protocol and first window are ready.
     app.on('second-instance', () => {
-      if (!focusMainWindow()) createMainWindow();
+      if (!focusMainWindow()) openMainWindow();
     });
 
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
+      if (BrowserWindow.getAllWindows().length === 0) openMainWindow();
     });
   });
 
