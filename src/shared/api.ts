@@ -3,6 +3,7 @@
 
 import { z } from 'zod';
 import { LIMITS, REASONING_EFFORTS } from './constants';
+import { TERMINAL, type TerminalReadAnswer } from './terminal';
 import type { AppliedBatch, ChatChanges } from './types';
 
 export const API_PREFIX = '/api';
@@ -32,6 +33,9 @@ export const ROUTES = {
   homeFileAttach: '/home/files/attach',
   chatChanges: '/chats/:id/changes',
   chatChangesApply: '/chats/:id/changes/apply',
+  /** POST: the client's answer to a `terminal_read_request`. 204 when a waiting request took it; 404 when unknown,
+   * expired or already answered. */
+  chatTerminalRead: '/chats/:id/terminal-reads/:requestId',
 } as const;
 
 export interface HealthResponse {
@@ -76,12 +80,19 @@ export const sendMessageBody = z
     model: modelId,
     /** F3: omitted = keep the chat's stored effort. */
     effort: reasoningEffort.nullable().optional(),
+    /** The client can answer terminal reads (Electron with the terminal bridge), so offer `read_terminal`. */
+    terminal: z.boolean().optional(),
   })
   .refine((b) => b.text.trim().length > 0 || b.attachmentIds.length > 0, {
     message: 'A message needs text or at least one attachment.',
   });
 /** `POST /chats/:id/retry` → `text/event-stream` of `AgentEvent` */
-export const retryBody = z.object({ model: modelId, effort: reasoningEffort.nullable().optional() });
+export const retryBody = z.object({
+  model: modelId,
+  effort: reasoningEffort.nullable().optional(),
+  /** As in `sendMessageBody`. */
+  terminal: z.boolean().optional(),
+});
 /** `POST /projects/:id/files/attach` → `AttachmentRef` */
 export const attachProjectFileBody = z.object({ path: z.string().min(1) });
 /** `POST /chats/:id/changes/apply` */
@@ -95,6 +106,45 @@ export interface ApplyChangesResponse {
   changes: ChatChanges;
 }
 
+// Terminal reads (docs/terminal-plan.md §4.2). The renderer relays main's answer, so every size is bounded here: the
+// text it carries is bound for the model.
+const lineNumber = z
+  .number()
+  .int()
+  .nonnegative()
+  .max(TERMINAL.scrollbackLines + TERMINAL.maxRows);
+const terminalStatus = z.discriminatedUnion('state', [
+  z.object({ state: z.literal('running') }),
+  z.object({
+    state: z.literal('exited'),
+    exitCode: z.number().int().nullable(),
+    signal: z.number().int().nullable(),
+  }),
+]);
+const terminalInfo = z.object({
+  chatId: id.max(200),
+  shell: z.string().max(255),
+  cwd: z.string().max(4096),
+  cols: z.number().int().min(TERMINAL.minCols).max(TERMINAL.maxCols),
+  rows: z.number().int().min(TERMINAL.minRows).max(TERMINAL.maxRows),
+  status: terminalStatus,
+});
+/** `POST /chats/:id/terminal-reads/:requestId`: the zod form of `TerminalReadAnswer`. */
+export const terminalReadAnswerBody = z.discriminatedUnion('ok', [
+  z.object({
+    ok: z.literal(true),
+    result: z.object({
+      info: terminalInfo,
+      totalLines: lineNumber,
+      startLine: lineNumber,
+      endLine: lineNumber,
+      text: z.string().max(2 * TERMINAL.readMaxBytes),
+      truncated: z.boolean(),
+    }),
+  }),
+  z.object({ ok: z.literal(false), reason: z.enum(['no_terminal', 'unavailable']) }),
+]) satisfies z.ZodType<TerminalReadAnswer>;
+
 export type SetOpenRouterKeyBody = z.infer<typeof setOpenRouterKeyBody>;
 export type UpdateSettingsBody = z.infer<typeof updateSettingsBody>;
 export type CreateProjectBody = z.infer<typeof createProjectBody>;
@@ -105,3 +155,4 @@ export type SendMessageBody = z.infer<typeof sendMessageBody>;
 export type RetryBody = z.infer<typeof retryBody>;
 export type AttachProjectFileBody = z.infer<typeof attachProjectFileBody>;
 export type ApplyChangesBody = z.infer<typeof applyChangesBody>;
+export type TerminalReadAnswerBody = z.infer<typeof terminalReadAnswerBody>;

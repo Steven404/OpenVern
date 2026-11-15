@@ -1,5 +1,6 @@
 // Tool interface (plan §4.7). Implementations live in S3.
 
+import type { TerminalReadAnswer, TerminalReadRequest } from '@shared/terminal';
 import type { ChangeKind, ChangeSummary, FileChange } from '@shared/types';
 import type { ToolSpec } from '../providers/types';
 
@@ -10,6 +11,8 @@ export interface ToolContext {
   knownSecrets?: readonly string[];
   /** Present only when this chat may propose edits. Read tools use it as an overlay. */
   changes?: ToolChanges;
+  /** Present only when the client can answer terminal reads (`RunTurnInput.terminal`). Used by `read_terminal`. */
+  terminal?: { read(request: TerminalReadRequest): Promise<TerminalReadAnswer> };
 }
 
 export interface ToolChanges {

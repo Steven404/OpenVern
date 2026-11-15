@@ -3,6 +3,7 @@ import { CLIENT_HEADER, CLIENT_HEADER_VALUE } from '@shared/constants';
 import { errorInfo, isApiErrorBody } from '@shared/errors';
 import type { AgentEvent } from '@shared/events';
 import { readSSE } from '@shared/sse';
+import type { TerminalReadAnswer } from '@shared/terminal';
 import type {
   AttachmentRef,
   Chat,
@@ -176,6 +177,9 @@ export class HttpApiClient implements ApiClient {
   }
   discardChatChanges(chatId: Id) {
     return this.json<ChatChanges>('DELETE', `/chats/${enc(chatId)}/changes`);
+  }
+  async answerTerminalRead(chatId: Id, requestId: Id, answer: TerminalReadAnswer) {
+    await this.send('POST', `/chats/${enc(chatId)}/terminal-reads/${enc(requestId)}`, answer);
   }
 }
 

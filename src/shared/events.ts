@@ -2,6 +2,7 @@
 // Wire format: one SSE frame per event, `data: <JSON AgentEvent>\n\n` (no `event:` field).
 
 import type { ApiErrorInfo } from './errors';
+import type { TerminalReadRequest } from './terminal';
 import type { AssistantMessage, ChangeSummary, ChatSummary, Id, ToolCall, ToolMessage, UserMessage } from './types';
 
 export type AgentEvent =
@@ -14,6 +15,9 @@ export type AgentEvent =
   | { type: 'assistant_end'; message: AssistantMessage } // final persisted form of that assistant message
   | { type: 'chat_updated'; chat: ChatSummary } // title, model or updatedAt changed
   | { type: 'error'; error: ApiErrorInfo } // run-level error; the run then ends
+  // The `read_terminal` tool asks the client for the chat's terminal text; the client answers with
+  // POST /chats/:id/terminal-reads/:requestId. Sent only when the request said `terminal: true`.
+  | { type: 'terminal_read_request'; requestId: Id; request: TerminalReadRequest }
   | { type: 'done' }; // always the last event
 
 export type AgentEventType = AgentEvent['type'];

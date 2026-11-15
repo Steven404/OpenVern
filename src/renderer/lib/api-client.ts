@@ -3,6 +3,7 @@
 import type { ApplyChangesBody, ApplyChangesResponse, HealthResponse } from '@shared/api';
 import type { ApiErrorInfo } from '@shared/errors';
 import type { AgentEvent } from '@shared/events';
+import type { TerminalBridge, TerminalReadAnswer } from '@shared/terminal';
 import type {
   AttachmentRef,
   Chat,
@@ -36,14 +37,15 @@ export interface ApiClient {
   getChat(id: Id): Promise<Chat>;
   updateChat(id: Id, patch: { title?: string; projectId?: Id | null; archived?: boolean }): Promise<ChatSummary>;
   deleteChat(id: Id): Promise<void>;
+  /** `terminal`: this client answers terminal reads (set when the bridge has a terminal), so `read_terminal` is offered. */
   sendMessage(
     chatId: Id,
-    input: { text: string; attachmentIds: Id[]; model: string; effort?: ReasoningEffort | null },
+    input: { text: string; attachmentIds: Id[]; model: string; effort?: ReasoningEffort | null; terminal?: boolean },
     signal: AbortSignal,
   ): AsyncIterable<AgentEvent>;
   retry(
     chatId: Id,
-    input: { model: string; effort?: ReasoningEffort | null },
+    input: { model: string; effort?: ReasoningEffort | null; terminal?: boolean },
     signal: AbortSignal,
   ): AsyncIterable<AgentEvent>;
   uploadAttachment(file: File): Promise<AttachmentRef>;
@@ -64,6 +66,9 @@ export interface ApiClient {
   getChatChanges(chatId: Id): Promise<ChatChanges>;
   applyChatChanges(chatId: Id, body: ApplyChangesBody): Promise<ApplyChangesResponse>;
   discardChatChanges(chatId: Id): Promise<ChatChanges>;
+  // Terminal (terminal plan §4.2)
+  /** Answers a `terminal_read_request`. Rejects with a 404 `ApiError` when the request is unknown or already answered. */
+  answerTerminalRead(chatId: Id, requestId: Id, answer: TerminalReadAnswer): Promise<void>;
 }
 
 /** Thrown by every method on a non-2xx response or a network failure. */
@@ -81,6 +86,8 @@ export class ApiError extends Error {
 export interface OpenVernBridge {
   isElectron: true;
   pickDirectory(): Promise<string | null>;
+  /** The PTY in main (terminal plan §4.1). Absent until the preload exposes it. */
+  terminal?: TerminalBridge;
 }
 
 declare global {

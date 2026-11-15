@@ -585,6 +585,11 @@ export class MockApiClient implements ApiClient {
     return this.chatChanges(chatId);
   }
 
+  async answerTerminalRead(): Promise<void> {
+    // The mock never sends `terminal_read_request`, so no request is ever waiting (the server's 404).
+    fail('not_found', 404, 'No terminal read is waiting under that id.');
+  }
+
   private project(id: Id): Project {
     return this.projects.find((p) => p.id === id) ?? fail('not_found', 404);
   }

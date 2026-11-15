@@ -89,6 +89,11 @@ export async function createCore(deps: CoreDeps): Promise<Core> {
       deniedFiles,
       homeDir: deps.homeDir ?? os.homedir(),
     }),
+    // T0 stub (terminal plan §4.3): nothing asks yet. T2 replaces it with the real broker.
+    terminalReads: {
+      request: async () => ({ ok: false, reason: 'unavailable' }),
+      answer: () => false,
+    },
     version: deps.version,
   };
 }

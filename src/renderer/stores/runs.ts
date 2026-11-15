@@ -133,6 +133,9 @@ export function reduceRun(run: RunState, ev: RunEvent): RunState {
     case 'changes_updated':
       // The card reads the `chatChanges` query; `consume` invalidates it when this event arrives.
       return run;
+    case 'terminal_read_request':
+      // T0 stub (terminal plan §4.2): no state change. T3 relays the read from `consume`.
+      return run;
     case 'tool_call':
       return run.runningToolIds.includes(ev.toolCall.id)
         ? run

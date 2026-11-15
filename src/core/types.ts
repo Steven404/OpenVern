@@ -4,6 +4,7 @@
 
 import type { ApplyChangesResponse } from '@shared/api';
 import type { AgentEvent } from '@shared/events';
+import type { TerminalReadAnswer, TerminalReadRequest } from '@shared/terminal';
 import type {
   AttachmentRef,
   Chat,
@@ -144,6 +145,20 @@ export interface RunTurnInput {
   signal: AbortSignal;
   /** Awaited by the agent (back-pressure for SSE writes). Must not throw. */
   emit: (event: AgentEvent) => void | Promise<void>;
+  /** The client can answer terminal reads (Electron), so `read_terminal` is offered (terminal plan §2). */
+  terminal?: boolean;
+}
+
+/** Relays `read_terminal` to the client: a stream event out, an HTTP answer back (terminal plan §3, §4.3). */
+export interface TerminalReadBroker {
+  /** Emits `terminal_read_request` and waits. Timeout and abort resolve to `{ ok: false, reason: 'unavailable' }`. */
+  request(
+    chatId: Id,
+    request: TerminalReadRequest,
+    opts: { emit: RunTurnInput['emit']; signal: AbortSignal },
+  ): Promise<TerminalReadAnswer>;
+  /** False when nothing is waiting under that id. One answer per request. */
+  answer(chatId: Id, requestId: Id, answer: TerminalReadAnswer): boolean;
 }
 
 export interface AgentService {
@@ -167,6 +182,7 @@ export interface Core {
   provider: Provider; // S5 (needed by PUT /settings/openrouter-key → validateKey)
   changes: ChangesService; // v0.2 G1
   projectFiles: ProjectFilesService; // v0.2 G3
+  terminalReads: TerminalReadBroker; // terminal plan T2
   version: string;
 }
 
