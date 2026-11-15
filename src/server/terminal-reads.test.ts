@@ -165,17 +165,108 @@ describe('POST /api/chats/:id/terminal-reads/:requestId', () => {
     expect((await postAnswer(chat.id, waiting.requestId, answer())).status).toBe(204);
   });
 
-  it('400 for oversized text', async () => {
+  it('400 for text over readWireMaxChars, and the limit itself passes', async () => {
     const chat = await newChat();
     const waiting = await waitForAnswer(chat.id);
 
-    const res = await postAnswer(chat.id, waiting.requestId, answer('x'.repeat(2 * TERMINAL.readMaxBytes + 1)));
+    const res = await postAnswer(chat.id, waiting.requestId, answer('x'.repeat(TERMINAL.readWireMaxChars + 1)));
     expect(res.status).toBe(400);
     expect((await json<{ error: { code: string } }>(res)).error.code).toBe('invalid_request');
     // The size the contract allows still passes.
-    expect((await postAnswer(chat.id, waiting.requestId, answer('x'.repeat(2 * TERMINAL.readMaxBytes)))).status).toBe(
-      204,
-    );
+    const atLimit = answer('x'.repeat(TERMINAL.readWireMaxChars));
+    expect((await postAnswer(chat.id, waiting.requestId, atLimit)).status).toBe(204);
+    await expect(waiting.settled).resolves.toEqual(atLimit);
+  });
+
+  it("400 for a 2 MiB extra property, and the waiter is untouched (the reviewer's reproduction)", async () => {
+    const chat = await newChat();
+    const waiting = await waitForAnswer(chat.id);
+
+    const res = await postAnswer(chat.id, waiting.requestId, { ...answer(), padding: 'p'.repeat(2 * 1024 * 1024) });
+    expect(res.status).toBe(400);
+    const error = (await json<{ error: { code: string; message: string } }>(res)).error;
+    expect(error.code).toBe('invalid_request');
+    expect(error.message).toContain('padding');
+    expect((await postAnswer(chat.id, waiting.requestId, answer())).status).toBe(204);
+    await expect(waiting.settled).resolves.toEqual(answer());
+  });
+
+  it.each([
+    ['in the result', (r: ReturnType<typeof successResult>) => ({ ...r, note: 'x' }), 'result.note'],
+    [
+      'in the info',
+      (r: ReturnType<typeof successResult>) => ({ ...r, info: { ...r.info, env: {} } }),
+      'result.info.env',
+    ],
+    [
+      'in the status',
+      (r: ReturnType<typeof successResult>) => ({ ...r, info: { ...r.info, status: { state: 'running', pid: 1 } } }),
+      'result.info.status.pid',
+    ],
+  ])('400 for an unknown property %s', async (_name, change, where) => {
+    const chat = await newChat();
+    const waiting = await waitForAnswer(chat.id);
+
+    const res = await postAnswer(chat.id, waiting.requestId, { ok: true, result: change(successResult()) });
+    expect(res.status).toBe(400);
+    expect((await json<{ error: { message: string } }>(res)).error.message).toContain(where);
+    expect((await postAnswer(chat.id, waiting.requestId, answer())).status).toBe(204);
+  });
+
+  it('400 for an unknown property on a failure answer', async () => {
+    const chat = await newChat();
+    const waiting = await waitForAnswer(chat.id);
+    const res = await postAnswer(chat.id, waiting.requestId, { ok: false, reason: 'no_terminal', extra: 1 });
+    expect(res.status).toBe(400);
+    expect((await postAnswer(chat.id, waiting.requestId, answer())).status).toBe(204);
+  });
+
+  const oversized = () => `{"ok":true,"pad":"${'p'.repeat(TERMINAL.readWireMaxBytes)}"}`;
+
+  it('413 for a body over readWireMaxBytes, refused on its Content-Length', async () => {
+    const chat = await newChat();
+    const waiting = await waitForAnswer(chat.id);
+    const raw = oversized();
+
+    const res = await h.app.request(answerUrl(chat.id, waiting.requestId), {
+      method: 'POST',
+      headers: {
+        [CLIENT_HEADER]: CLIENT_HEADER_VALUE,
+        'Content-Type': 'application/json',
+        'Content-Length': String(Buffer.byteLength(raw)),
+      },
+      body: raw,
+    });
+    expect(res.status).toBe(413);
+    expect((await json<{ error: { code: string } }>(res)).error.code).toBe('invalid_request');
+    expect((await postAnswer(chat.id, waiting.requestId, answer())).status).toBe(204);
+  });
+
+  it('413 for a streamed body over readWireMaxBytes without a Content-Length', async () => {
+    const chat = await newChat();
+    const waiting = await waitForAnswer(chat.id);
+    const chunk = new TextEncoder().encode('p'.repeat(1024 * 1024));
+    let sent = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        // Never ends on its own past the limit: the route must stop reading, not buffer it all.
+        if (sent > 4 * TERMINAL.readWireMaxBytes) controller.close();
+        else {
+          sent += chunk.byteLength;
+          controller.enqueue(chunk);
+        }
+      },
+    });
+
+    const res = await h.app.request(answerUrl(chat.id, waiting.requestId), {
+      method: 'POST',
+      headers: { [CLIENT_HEADER]: CLIENT_HEADER_VALUE, 'Content-Type': 'application/json' },
+      body: stream,
+      duplex: 'half',
+    } as RequestInit);
+    expect(res.status).toBe(413);
+    expect(sent).toBeLessThan(4 * TERMINAL.readWireMaxBytes);
+    expect((await postAnswer(chat.id, waiting.requestId, answer())).status).toBe(204);
   });
 
   it('403 without the client header', async () => {
