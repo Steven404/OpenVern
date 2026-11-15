@@ -211,6 +211,15 @@ describe('terminal (T0)', () => {
     ).toBe(true);
   });
 
+  it('terminalReadAnswerBody rejects text with control characters, and keeps tabs and other scripts', () => {
+    for (const bad of ['a\x1b[31mb', 'a\u009b31mb', 'a\rb', 'a\x00b', 'a\x7fb', 'a\u0085b']) {
+      expect(terminalReadAnswerBody.safeParse(withResult({ endLine: 1, text: bad })).success).toBe(false);
+    }
+    for (const ok of ['a\tb', 'γειά 你好 مرحبا', 'e\u0301 👩‍💻', 'right \u202e to left']) {
+      expect(terminalReadAnswerBody.safeParse(withResult({ endLine: 1, text: ok })).success).toBe(true);
+    }
+  });
+
   it('terminalReadAnswerBody rejects inconsistent line numbers', () => {
     const bad = [
       { startLine: 10, endLine: 5 }, // reversed range
