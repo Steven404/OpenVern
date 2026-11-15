@@ -21,13 +21,14 @@ function describeZodError(err: z.ZodError): string {
 
 /**
  * The path of the first property in `raw` that the schema dropped from `parsed` (zod strips unknown keys), or
- * undefined when there is none. Walks the raw value's keys, so it is bounded by the body size.
+ * undefined when there is none. Walks the raw value's keys, so it is bounded by the body size. The path is '' for a
+ * top-level key named "", so callers must compare with undefined, never test truthiness.
  */
 function unknownProperty(raw: unknown, parsed: unknown, path: string[] = []): string | undefined {
   if (Array.isArray(raw) && Array.isArray(parsed)) {
     for (let i = 0; i < parsed.length; i++) {
       const found = unknownProperty(raw[i], parsed[i], [...path, String(i)]);
-      if (found) return found;
+      if (found !== undefined) return found;
     }
     return undefined;
   }
@@ -38,7 +39,7 @@ function unknownProperty(raw: unknown, parsed: unknown, path: string[] = []): st
       ...path,
       key,
     ]);
-    if (found) return found;
+    if (found !== undefined) return found;
   }
   return undefined;
 }
@@ -65,7 +66,7 @@ export async function readJson<S extends z.ZodType>(
   if (!parsed.success) throw new CoreError('invalid_request', describeZodError(parsed.error));
   if (opts.strict) {
     const unknown = unknownProperty(raw, parsed.data);
-    if (unknown) throw new CoreError('invalid_request', `Unknown property "${unknown}".`);
+    if (unknown !== undefined) throw new CoreError('invalid_request', `Unknown property "${unknown}".`);
   }
   return parsed.data;
 }

@@ -30,9 +30,10 @@ function answer(text = 'hello from the terminal\n'): TerminalReadAnswer {
     ok: true,
     result: {
       info: { chatId: 'chat-1', shell: 'zsh', cwd: '/home/me/demo', cols: 120, rows: 30, status: { state: 'running' } },
-      totalLines: 2,
+      // One line of text per line of the range (§4.1).
+      totalLines: Math.max(2, text.split('\n').length),
       startLine: 1,
-      endLine: 2,
+      endLine: text.split('\n').length,
       text,
       truncated: false,
     },
@@ -218,6 +219,44 @@ describe('POST /api/chats/:id/terminal-reads/:requestId', () => {
     const waiting = await waitForAnswer(chat.id);
     const res = await postAnswer(chat.id, waiting.requestId, { ok: false, reason: 'no_terminal', extra: 1 });
     expect(res.status).toBe(400);
+    expect((await postAnswer(chat.id, waiting.requestId, answer())).status).toBe(204);
+  });
+
+  it("400 for an empty unknown key before a 2 MiB one, and the waiter is untouched (the reviewer's reproduction)", async () => {
+    const chat = await newChat();
+    const waiting = await waitForAnswer(chat.id);
+
+    const res = await postAnswer(chat.id, waiting.requestId, {
+      '': '',
+      ok: false,
+      reason: 'no_terminal',
+      padding: 'p'.repeat(2 * 1024 * 1024),
+    });
+    expect(res.status).toBe(400);
+    expect((await json<{ error: { code: string; message: string } }>(res)).error.message).toBe('Unknown property "".');
+    expect((await postAnswer(chat.id, waiting.requestId, answer())).status).toBe(204);
+    await expect(waiting.settled).resolves.toEqual(answer());
+  });
+
+  const failureAnswer = (): Record<string, unknown> => ({ ok: false, reason: 'no_terminal' });
+  const successAnswer = (): Record<string, unknown> => ({ ...answer() });
+  it.each([
+    ['alone on a failure answer', () => ({ '': 'x', ...failureAnswer() })],
+    ['before another unknown key on a failure answer', () => ({ '': 'x', ...failureAnswer(), extra: 1 })],
+    ['alone on a success answer', () => ({ '': 'x', ...successAnswer() })],
+    ['before another unknown key on a success answer', () => ({ '': 'x', ...successAnswer(), extra: 1 })],
+    ['nested in the result', () => ({ ok: true, result: { ...successResult(), '': 'x' } })],
+    [
+      'nested in the info',
+      () => ({ ok: true, result: { ...successResult(), info: { ...successResult().info, '': 1 } } }),
+    ],
+  ])('400 for an empty unknown key %s', async (_name, body) => {
+    const chat = await newChat();
+    const waiting = await waitForAnswer(chat.id);
+
+    const res = await postAnswer(chat.id, waiting.requestId, body());
+    expect(res.status).toBe(400);
+    expect((await json<{ error: { code: string } }>(res)).error.code).toBe('invalid_request');
     expect((await postAnswer(chat.id, waiting.requestId, answer())).status).toBe(204);
   });
 
