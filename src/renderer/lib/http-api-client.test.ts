@@ -1,4 +1,5 @@
 import type { AgentEvent } from '@shared/events';
+import { TERMINAL, type TerminalReadAnswer } from '@shared/terminal';
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError } from './api-client';
 import { HttpApiClient } from './http-api-client';
@@ -69,6 +70,41 @@ describe('HttpApiClient', () => {
   it('returns nothing for 204', async () => {
     const api = new HttpApiClient('/api', (async () => new Response(null, { status: 204 })) as typeof fetch);
     await expect(api.deleteChat('c1')).resolves.toBeUndefined();
+  });
+
+  it('answerTerminalRead posts the answer to the terminal-read route', async () => {
+    const answers: TerminalReadAnswer[] = [
+      { ok: false, reason: 'no_terminal' },
+      {
+        ok: true,
+        result: {
+          info: {
+            chatId: 'c1',
+            shell: 'zsh',
+            cwd: '/tmp',
+            cols: TERMINAL.defaultCols,
+            rows: TERMINAL.defaultRows,
+            status: { state: 'running' },
+          },
+          totalLines: 0,
+          startLine: 0,
+          endLine: 0,
+          text: '',
+          truncated: false,
+        },
+      },
+    ];
+    for (const answer of answers) {
+      const fetchMock = vi.fn(
+        async (_url: string | URL | Request, _init?: RequestInit) => new Response(null, { status: 204 }),
+      );
+      const api = new HttpApiClient('/api', fetchMock as typeof fetch);
+      await expect(api.answerTerminalRead('c1', 'r1', answer)).resolves.toBeUndefined();
+      const [url, init] = fetchMock.mock.calls[0] ?? [];
+      expect(url).toBe('/api/chats/c1/terminal-reads/r1');
+      expect(init?.method).toBe('POST');
+      expect(init?.body).toBe(JSON.stringify(answer));
+    }
   });
 
   it('streams AgentEvents from SSE', async () => {

@@ -8,9 +8,10 @@
 //   preview:  npx electron-vite build --config scripts/spikes/terminal-pty/electron.vite.config.ts \
 //               && npx electron-vite preview --skipBuild --config scripts/spikes/terminal-pty/electron.vite.config.ts
 //   packaged: npx electron-vite build --config scripts/spikes/terminal-pty/electron.vite.config.ts \
-//               && npx electron-builder --mac --arm64 \
-//               && release/mac-arm64/OpenVern.app/Contents/MacOS/openvern
-// Each mode builds into out/, and the packaged one into release/: rebuild the real app afterwards (`npm run build`).
+//               && npx electron-builder --mac --arm64 --dir -c.directories.output="$TMPDIR/openvern-pty-spike" \
+//               && "$TMPDIR/openvern-pty-spike/mac-arm64/OpenVern.app/Contents/MacOS/openvern"
+// Each mode builds the spike into out/, so rebuild the real app afterwards (`npm run build`). The packaged run goes
+// to a temp folder and never into release/, where a spike build could be mistaken for the app and shipped.
 // The result is one `SPIKE_RESULT {json}` line on stdout. The Chromium profile goes to a temp dir that is removed on
 // exit, so the real OpenVern profile is never touched.
 //
@@ -119,7 +120,8 @@ void app.whenReady().then(() => {
     const timer = setTimeout(() => {
       pty.kill();
       finish(
-        { ...base, files, shell, error: `timed out after ${TIMEOUT_MS} ms`, tail: stripAnsi(output).slice(-400) },
+        // No output tail here: a login script can print credentials, and this line ends up in shared logs.
+        { ...base, files, shell, error: `timed out after ${TIMEOUT_MS} ms`, outputChars: output.length },
         false,
       );
     }, TIMEOUT_MS);
