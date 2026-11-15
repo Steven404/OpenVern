@@ -8,10 +8,11 @@ export default defineConfig({
   main: {
     resolve: { alias: aliases },
     build: {
-      // Bundle hono, zod, ignore, eventsource-parser… into out/main/index.js so the AppImage needs no node_modules
-      // (`electron` and Node built-ins stay external).
+      // Bundle hono, zod, ignore, eventsource-parser… into out/main/index.js (`electron` and Node built-ins stay
+      // external). The one exception is `node-pty`: a native module whose `.node` binary and macOS `spawn-helper` must
+      // be real files, so it is loaded from node_modules and electron-builder.yml packages and unpacks it.
       externalizeDeps: false,
-      rolldownOptions: { input: { index: fromRoot('./src/main/index.ts') } },
+      rolldownOptions: { input: { index: fromRoot('./src/main/index.ts') }, external: ['node-pty'] },
     },
   },
   preload: {

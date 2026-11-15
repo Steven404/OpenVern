@@ -3,19 +3,43 @@ appId: dev.stefanos.openvern
 productName: OpenVern
 executableName: openvern
 copyright: Copyright (c) Stefanos Michelakis
-asar: true
+# smartUnpack off: by default electron-builder unpacks every file of a package that holds a `.node`, JS included. Only
+# the native files listed under asarUnpack leave the asar; the rest stays covered by the asar integrity fuse.
+asar:
+  smartUnpack: false
 
 directories:
   output: release
   buildResources: build
 
 # Only the built app ships. The main bundle inlines hono, zod, ignore, eventsource-parser… (electron.vite.config.ts)
-# and the renderer bundle inlines React etc., so no `node_modules` is packaged at all.
+# and the renderer bundle inlines React etc. The one package taken from node_modules is `node-pty`, which the main
+# bundle keeps external because it is native, and only its runtime files: JS, and the binaries for this platform
+# (`prebuilds/` on macOS; `build/Release` after a from-source build, which is how Linux gets it: no Linux prebuilds).
+# Later patterns win, so the exclusions come after the includes.
 files:
   - out/**
   - package.json
+  - "!node_modules/**"
+  - node_modules/node-pty/package.json
+  - node_modules/node-pty/LICENSE
+  - node_modules/node-pty/lib/**
+  - node_modules/node-pty/prebuilds/${platform}-${arch}/**
+  - node_modules/node-pty/build/Release/pty.node
+  - node_modules/node-pty/build/Release/spawn-helper
   - "!**/*.map"
-  - "!node_modules"
+  - "!node_modules/node-pty/lib/**/*.test.js"
+
+# `pty.node` and macOS `spawn-helper` must be real files: Electron can't dlopen or exec from inside the asar.
+# node-pty rewrites its helper path from `app.asar` to `app.asar.unpacked` itself.
+asarUnpack:
+  - node_modules/node-pty/prebuilds/**
+  - node_modules/node-pty/build/Release/**
+
+# node-pty is N-API, so the binary npm installed loads in Electron as is. Without this, electron-builder runs
+# @electron/rebuild, which compiles node-pty from source into node_modules (needs a C++ toolchain) and node-pty then
+# prefers that build over its prebuilt binary.
+npmRebuild: false
 
 electronLanguages:
   - en-US
