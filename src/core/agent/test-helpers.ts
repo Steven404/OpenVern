@@ -17,7 +17,7 @@ import type {
 import { CoreError } from '../errors';
 import { createFakeProvider, type FakeProvider, type FakeScript } from '../providers/fake';
 import { addUsage, totalsFromMessages, type UsageTotals, usageFromMessages } from '../storage/schemas';
-import type { Tool, ToolContext, ToolResult } from '../tools/types';
+import type { ChatToolContext, Tool, ToolContext, ToolResult } from '../tools/types';
 import type {
   AgentService,
   AttachmentsService,
@@ -27,6 +27,7 @@ import type {
   ProjectsService,
   RunTurnInput,
   StoredAttachment,
+  TerminalReadBroker,
 } from '../types';
 import { type AgentServiceDeps, createAgentService } from './loop';
 
@@ -329,6 +330,10 @@ export interface HarnessOptions {
   changes?: ChangesService;
   /** Real folder for the project (default: the fictional demo path). */
   projectRoot?: string;
+  /** Terminal reads (T2.3). Set together with `terminalTools` to offer terminal tools when the run asks for them. */
+  terminalReads?: TerminalReadBroker;
+  /** Tools offered in any chat when `terminalReads` is set and the run's input says `terminal: true`. */
+  terminalTools?: Tool<ChatToolContext>[];
 }
 
 export interface Harness {
@@ -355,6 +360,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
   const models = createFakeModels(opts.models ?? [model(MODEL, { tools: true, images: true })]);
   const provider = opts.provider ?? createFakeProvider({ script: opts.script, delayMs: 0 });
   const tools = opts.tools ?? [createFakeTool('read_file')];
+  const terminalTools = opts.terminalTools;
   const renderTreeCalls: Harness['renderTreeCalls'] = [];
   const chat = await chats.create({
     projectId: opts.project === false ? null : PROJECT.id,
@@ -369,6 +375,8 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     provider,
     getProjectTools: () => tools,
     ...(opts.changes ? { changes: opts.changes } : {}),
+    ...(opts.terminalReads ? { terminalReads: opts.terminalReads } : {}),
+    ...(terminalTools ? { getTerminalTools: () => terminalTools } : {}),
     renderTree:
       opts.renderTree ??
       (async (root, o) => {

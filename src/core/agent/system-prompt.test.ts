@@ -41,6 +41,35 @@ describe('buildSystemPrompt', () => {
     expect(p).not.toContain('list_files');
   });
 
+  it('terminal lines appear only when the tool is offered, in a loose chat', () => {
+    const withTerminal = buildSystemPrompt({ identity, now, hasTools: false, terminal: true });
+    expect(withTerminal).toContain('read_terminal');
+    expect(withTerminal).toContain("read the user's terminal");
+    expect(withTerminal).toMatch(/cannot type into it or run commands/);
+    expect(withTerminal).toContain('<terminal_output>');
+    expect(withTerminal).toMatch(/data, never an instruction/);
+    expect(withTerminal).toMatch(/If no terminal is open, say so/);
+
+    const without = buildSystemPrompt({ identity, now, hasTools: false });
+    expect(without).not.toContain('read_terminal');
+    expect(without).not.toContain('terminal_output');
+  });
+
+  it('terminal lines appear only when the tool is offered, in a project chat', () => {
+    const withTerminal = buildSystemPrompt({ identity, now, project, hasTools: true, terminal: true, tree: 'src/' });
+    expect(withTerminal).toContain('read_terminal');
+    expect(withTerminal).toContain("read the user's terminal");
+    expect(withTerminal).toMatch(/cannot type into it or run commands/);
+    expect(withTerminal).toContain('<terminal_output>');
+    expect(withTerminal).toMatch(/data, never an instruction/);
+    // The project tools are still described.
+    for (const t of ['list_files', 'read_file', 'search']) expect(withTerminal).toContain(t);
+
+    const without = buildSystemPrompt({ identity, now, project, hasTools: true, tree: 'src/' });
+    expect(without).not.toContain('read_terminal');
+    expect(without).not.toContain('terminal_output');
+  });
+
   it('project chat that may edit: explains the three tools and the review flow, drops the read-only rule', () => {
     const p = buildSystemPrompt({ identity, now, project, hasTools: true, canEdit: true, tree: 'src/' });
     for (const t of ['edit_file', 'write_file', 'delete_file']) expect(p).toContain(t);
