@@ -135,7 +135,7 @@ describe('terminal (T0)', () => {
       },
       totalLines: 42,
       startLine: 1,
-      endLine: 42,
+      endLine: 2,
       text: 'line 1\nline 2',
       truncated: false,
     },
@@ -183,14 +183,15 @@ describe('terminal (T0)', () => {
   });
 
   it('terminalReadAnswerBody accepts text up to readWireMaxChars', () => {
-    expect(terminalReadAnswerBody.safeParse(withResult({ text: 'x'.repeat(TERMINAL.readWireMaxChars) })).success).toBe(
-      true,
-    );
+    expect(
+      terminalReadAnswerBody.safeParse(withResult({ endLine: 1, text: 'x'.repeat(TERMINAL.readWireMaxChars) })).success,
+    ).toBe(true);
   });
 
   it('terminalReadAnswerBody rejects text over readWireMaxChars', () => {
     expect(
-      terminalReadAnswerBody.safeParse(withResult({ text: 'x'.repeat(TERMINAL.readWireMaxChars + 1) })).success,
+      terminalReadAnswerBody.safeParse(withResult({ endLine: 1, text: 'x'.repeat(TERMINAL.readWireMaxChars + 1) }))
+        .success,
     ).toBe(false);
   });
 
@@ -204,7 +205,7 @@ describe('terminal (T0)', () => {
           totalLines: TERMINAL.readMaxLines,
           startLine: 1,
           endLine: TERMINAL.readMaxLines,
-          text: 'x',
+          text: Array.from({ length: TERMINAL.readMaxLines }, () => 'x').join('\n'),
         }),
       ).success,
     ).toBe(true);
@@ -217,6 +218,9 @@ describe('terminal (T0)', () => {
       { totalLines: 2_000, startLine: 1, endLine: TERMINAL.readMaxLines + 1 }, // more than readMaxLines lines
       { startLine: 0, endLine: 5, text: '' }, // startLine 0 with a non-zero endLine
       { startLine: 0, endLine: 0, text: 'x' }, // non-empty text with the 0/0 range
+      { startLine: 1, endLine: 1, text: 'a\nb\nc\nd' }, // more lines of text than the range
+      { startLine: 1, endLine: 3, text: 'a\nb' }, // fewer lines of text than the range
+      { startLine: 1, endLine: 2, text: 'a\nb\n' }, // a trailing line break is an extra line
     ];
     for (const patch of bad) {
       expect(terminalReadAnswerBody.safeParse(withResult(patch)).success).toBe(false);
@@ -231,8 +235,9 @@ describe('terminal (T0)', () => {
     }
     expect(terminalReadAnswerBody.safeParse(withResult({ totalLines: maxLine })).success).toBe(true);
     expect(
-      terminalReadAnswerBody.safeParse(withResult({ totalLines: maxLine, startLine: maxLine, endLine: maxLine }))
-        .success,
+      terminalReadAnswerBody.safeParse(
+        withResult({ totalLines: maxLine, startLine: maxLine, endLine: maxLine, text: 'x' }),
+      ).success,
     ).toBe(true);
     for (const [field, bad] of [
       ['cols', TERMINAL.minCols - 1],
