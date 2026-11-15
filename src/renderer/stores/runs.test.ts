@@ -125,6 +125,20 @@ describe('reduceRun', () => {
     expect(state.messages.filter((m) => m.id === 'a9')).toHaveLength(1);
     expect(state.messages.filter((m) => m.id === 't1')).toHaveLength(1);
   });
+
+  it('tolerates a terminal_read_request without changing the run', () => {
+    const start = run([
+      { type: 'assistant_start', messageId: 'a1', model: 'm' },
+      { type: 'text_delta', messageId: 'a1', delta: 'par' },
+    ]);
+    const next = reduceRun(start, {
+      type: 'terminal_read_request',
+      requestId: 'r1',
+      request: { startLine: 1, count: 10 },
+    });
+    expect(next).toEqual(start);
+    expect(next.streamingId).toBe('a1');
+  });
 });
 
 describe('useRunsStore', () => {

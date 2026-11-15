@@ -29,12 +29,14 @@ files:
   - node_modules/node-pty/build/Release/spawn-helper
   - "!**/*.map"
   - "!node_modules/node-pty/lib/**/*.test.js"
+  # Windows-only code paths; `index.js` loads them only on win32.
+  - "!node_modules/node-pty/lib/windows*.js"
+  - "!node_modules/node-pty/lib/conpty*.js"
+  - "!node_modules/node-pty/lib/shared/**"
+  - "!node_modules/node-pty/lib/worker/**"
 
-# `pty.node` and macOS `spawn-helper` must be real files: Electron can't dlopen or exec from inside the asar.
-# node-pty rewrites its helper path from `app.asar` to `app.asar.unpacked` itself.
-asarUnpack:
-  - node_modules/node-pty/prebuilds/**
-  - node_modules/node-pty/build/Release/**
+# What leaves the asar is set per platform below (`mac.asarUnpack`, `linux.asarUnpack`), and kept to the minimum:
+# files outside the asar are not covered by the asar integrity fuse.
 
 # node-pty is N-API, so the binary npm installed loads in Electron as is. Without this, electron-builder runs
 # @electron/rebuild, which compiles node-pty from source into node_modules (needs a C++ toolchain) and node-pty then
@@ -60,6 +62,11 @@ mac:
       arch: arm64
     - target: dmg
       arch: arm64
+  # Only `spawn-helper` must be a real file, because it is exec'd (node-pty rewrites its path from `app.asar` to
+  # `app.asar.unpacked` itself). `pty.node` stays inside the asar, covered by the integrity check; Electron extracts
+  # it to a temp file to load it.
+  asarUnpack:
+    - node_modules/node-pty/prebuilds/*/spawn-helper
   identity: "-"
   hardenedRuntime: false
   category: public.app-category.developer-tools
@@ -71,6 +78,10 @@ mac:
     NSDownloadsFolderUsageDescription: OpenVern accesses Downloads when you choose projects there.
 
 linux:
+  # Linux has no asar integrity check to keep, and loading `pty.node` from inside the asar would extract it to the
+  # temp dir, which fails where /tmp is mounted noexec. So the compiled binary is unpacked here.
+  asarUnpack:
+    - node_modules/node-pty/build/Release/**
   artifactName: OpenVern-${version}-x86_64.${ext}
   target:
     - target: AppImage
