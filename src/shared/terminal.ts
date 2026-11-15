@@ -19,8 +19,15 @@ export const TERMINAL = {
   readMaxLines: 1_000,
   /** Cap on the `read_terminal` tool's output, applied by the tool after redaction. Main never applies it. */
   readMaxBytes: 50 * 1024,
-  /** Largest text main can send: the whole buffer, (scrollbackLines + maxRows) * maxCols characters. */
+  /**
+   * Largest text main sends in one answer. Main enforces it after redacting, by dropping whole lines from the start
+   * of the range (see `TerminalReadResult.truncated`).
+   */
   readWireMaxChars: 2_600_000,
+  /** Shells one app run may start. node-pty 1.1.0 leaks descriptors per spawn on macOS, so the total is capped. */
+  maxSpawnsPerRun: 100,
+  /** Input waiting to be read by the shell, per session. Writes beyond it are dropped. */
+  pendingInputMaxBytes: 1024 * 1024,
   /** Largest accepted body of a read answer (the text as JSON, at most 3 bytes per character, plus the rest). */
   readWireMaxBytes: 8 * 1024 * 1024,
   /** How long the backend waits for the renderer's answer. */
@@ -49,6 +56,11 @@ export interface TerminalOpenRequest {
   cwd: string | null;
   cols: number;
   rows: number;
+  /**
+   * True = replace an exited session with a fresh shell (the Restart button). Without it, opening a chat whose shell
+   * has exited attaches to it, so the exit code and the scrollback stay visible. Ignored while the shell is running.
+   */
+  restart?: boolean;
 }
 export interface TerminalOpenResult {
   info: TerminalInfo;
@@ -88,13 +100,17 @@ export interface TerminalReadResult {
   startLine: number;
   endLine: number;
   /**
-   * Plain text, no escape codes; whole lines only; trailing spaces trimmed. Never cut by size: a cut before
-   * redaction can strip a key's prefix and leave its body unmatched. Main runs the pattern passes of
+   * Plain text, no escape codes; whole lines only; trailing spaces trimmed. Main runs the pattern passes of
    * `redactSecrets` over the whole buffer before it selects the lines, so a secret that starts above the range
-   * (a private-key block) is still caught. The tool redacts again with the stored key.
+   * (a private-key block) is still caught, and nothing is ever cut before that redaction: a cut first can strip a
+   * key's prefix and leave its body unmatched. The tool redacts again with the stored key.
    */
   text: string;
-  /** Always false from main. Kept so the answer's shape is stable. */
+  /**
+   * True when the redacted range was longer than `readWireMaxChars` and main dropped whole lines from its start
+   * (`startLine` then names the first line kept). A single line longer than the limit is replaced by a one-line
+   * placeholder. Never a cut inside a line.
+   */
   truncated: boolean;
 }
 export type TerminalReadAnswer =
@@ -102,8 +118,13 @@ export type TerminalReadAnswer =
   | { ok: false; reason: 'no_terminal' | 'unavailable' };
 
 export interface TerminalBridge {
-  /** Creates the chat's session, or attaches to the existing one. Rejects when `maxSessions` is reached. */
+  /**
+   * Creates the chat's session, or attaches to the existing one (running or exited; see `restart`). Rejects when
+   * `maxSessions` is reached. Subscribe to `onData` before calling it: events above the result's `seq` can arrive
+   * before it resolves.
+   */
   open(req: TerminalOpenRequest): Promise<TerminalOpenResult>;
+  /** At most `writeMaxBytes` UTF-8 bytes per call; a larger write is dropped, so split a big paste. */
   write(chatId: Id, data: string): void;
   resize(chatId: Id, cols: number, rows: number): void;
   read(chatId: Id, req: TerminalReadRequest): Promise<TerminalReadAnswer>;
