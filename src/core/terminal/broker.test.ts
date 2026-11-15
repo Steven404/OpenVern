@@ -185,3 +185,121 @@ describe('TerminalReadBroker', () => {
     expect(broker.pendingCount()).toBe(0);
   });
 });
+
+describe('TerminalReadBroker with an emit that never settles (review finding 2)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  /** A stalled stream: the write is accepted but its promise never settles. */
+  const stalled = (events: AgentEvent[]) => (event: AgentEvent) => {
+    events.push(event);
+    return new Promise<void>(() => {});
+  };
+  const idOf = (events: AgentEvent[]) => {
+    const event = events[0];
+    if (event?.type !== 'terminal_read_request') throw new Error('no terminal_read_request was emitted');
+    return event.requestId;
+  };
+
+  it('the timeout still resolves to unavailable', async () => {
+    vi.useFakeTimers();
+    const broker = createTerminalReadBroker();
+    const events: AgentEvent[] = [];
+    const promise = broker.request(CHAT, {}, { emit: stalled(events), signal: new AbortController().signal });
+
+    await vi.advanceTimersByTimeAsync(TERMINAL.readTimeoutMs);
+    await expect(promise).resolves.toEqual(UNAVAILABLE);
+    expect(broker.pendingCount()).toBe(0);
+  });
+
+  it('the abort still resolves to unavailable', async () => {
+    const broker = createTerminalReadBroker();
+    const controller = new AbortController();
+    const events: AgentEvent[] = [];
+    const promise = broker.request(CHAT, {}, { emit: stalled(events), signal: controller.signal });
+
+    controller.abort();
+    await expect(promise).resolves.toEqual(UNAVAILABLE);
+    expect(broker.pendingCount()).toBe(0);
+  });
+
+  it('an accepted answer still resolves the request', async () => {
+    const broker = createTerminalReadBroker();
+    const events: AgentEvent[] = [];
+    const promise = broker.request(CHAT, {}, { emit: stalled(events), signal: new AbortController().signal });
+
+    expect(broker.answer(CHAT, idOf(events), ANSWER)).toBe(true);
+    await expect(promise).resolves.toEqual(ANSWER);
+    expect(broker.pendingCount()).toBe(0);
+  });
+
+  it('an emit that rejects later still settles the request as unavailable', async () => {
+    const broker = createTerminalReadBroker();
+    let reject!: (err: Error) => void;
+    const promise = broker.request(
+      CHAT,
+      {},
+      {
+        emit: () =>
+          new Promise<void>((_resolve, r) => {
+            reject = r;
+          }),
+        signal: new AbortController().signal,
+      },
+    );
+    expect(broker.pendingCount()).toBe(1);
+    reject(new Error('stream closed'));
+    await expect(promise).resolves.toEqual(UNAVAILABLE);
+    expect(broker.pendingCount()).toBe(0);
+  });
+
+  it('a rejection after the answer changes nothing', async () => {
+    const broker = createTerminalReadBroker();
+    let reject!: (err: Error) => void;
+    const events: AgentEvent[] = [];
+    const promise = broker.request(
+      CHAT,
+      {},
+      {
+        emit: (event) => {
+          events.push(event);
+          return new Promise<void>((_resolve, r) => {
+            reject = r;
+          });
+        },
+        signal: new AbortController().signal,
+      },
+    );
+    expect(broker.answer(CHAT, idOf(events), ANSWER)).toBe(true);
+    reject(new Error('late'));
+    await expect(promise).resolves.toEqual(ANSWER);
+  });
+
+  it('the timeout timer does not keep the process alive', async () => {
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const real = globalThis.setTimeout;
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation(((...args: Parameters<typeof setTimeout>) => {
+      const timer = real(...args);
+      timers.push(timer);
+      return timer;
+    }) as typeof setTimeout);
+    const broker = createTerminalReadBroker();
+    const events: AgentEvent[] = [];
+    const promise = broker.request(CHAT, {}, { emit: stalled(events), signal: new AbortController().signal });
+
+    expect(timers).toHaveLength(1);
+    expect(timers[0]?.hasRef()).toBe(false);
+    broker.answer(CHAT, idOf(events), ANSWER);
+    await promise;
+  });
+
+  it('an unref-ed timeout still fires while the run waits on it', async () => {
+    const broker = createTerminalReadBroker({ timeoutMs: 20 });
+    const events: AgentEvent[] = [];
+    const promise = broker.request(CHAT, {}, { emit: stalled(events), signal: new AbortController().signal });
+    await expect(promise).resolves.toEqual(UNAVAILABLE);
+    expect(broker.pendingCount()).toBe(0);
+  });
+});

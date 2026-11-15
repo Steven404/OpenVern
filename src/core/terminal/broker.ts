@@ -32,12 +32,14 @@ export function createTerminalReadBroker(opts: TerminalReadBrokerOptions = {}): 
   /** By request id. The chat id is checked on answer. */
   const pending = new Map<Id, Pending>();
 
-  async function request(
+  // Not `async`, and the emit is never awaited: the answer, the abort and the timeout must settle the request even
+  // when the emit's promise never does (a stalled stream). An emit that throws or rejects settles it as unavailable.
+  function request(
     chatId: Id,
     req: TerminalReadRequest,
     { emit, signal }: Parameters<TerminalReadBroker['request']>[2],
   ): Promise<TerminalReadAnswer> {
-    if (signal.aborted) return UNAVAILABLE;
+    if (signal.aborted) return Promise.resolve(UNAVAILABLE);
     const requestId = crypto.randomUUID();
 
     let resolve!: (answer: TerminalReadAnswer) => void;
@@ -55,22 +57,27 @@ export function createTerminalReadBroker(opts: TerminalReadBrokerOptions = {}): 
     };
     const onAbort = () => settle(UNAVAILABLE);
     const timer = setTimeout(() => settle(UNAVAILABLE), timeoutMs);
+    // A waiting read alone must not keep the process alive. While a run waits, its stream (and in the app, the
+    // Electron main loop) does, so the timeout still fires.
+    if (typeof timer === 'object' && typeof timer?.unref === 'function') timer.unref();
     signal.addEventListener('abort', onAbort, { once: true });
 
-    // Registered before the event goes out: `emit` awaits the stream write, and the renderer may answer before it
-    // returns.
+    // Registered before the event goes out: the renderer may answer before the stream write finishes.
     pending.set(requestId, { chatId, settle });
+    const event = {
+      type: 'terminal_read_request',
+      requestId,
+      request: {
+        ...(req.startLine !== undefined ? { startLine: req.startLine } : {}),
+        ...(req.count !== undefined ? { count: req.count } : {}),
+      },
+    } as const;
     try {
-      await emit({
-        type: 'terminal_read_request',
-        requestId,
-        request: {
-          ...(req.startLine !== undefined ? { startLine: req.startLine } : {}),
-          ...(req.count !== undefined ? { count: req.count } : {}),
-        },
-      });
+      const sent = emit(event);
+      // `emit` must not fail; if it does, nobody will see the request.
+      if (sent && typeof sent.then === 'function') sent.then(undefined, () => settle(UNAVAILABLE));
     } catch {
-      settle(UNAVAILABLE); // `emit` must not throw; if it does, nobody will see the request
+      settle(UNAVAILABLE);
     }
     return answered;
   }
