@@ -30,7 +30,10 @@ export function parseSize(cols: unknown, rows: unknown): { cols: number; rows: n
   return c === null || r === null ? null : { cols: c, rows: r };
 }
 
-/** `{ chatId, cwd: string | null, cols, rows }`. A relative or missing `cwd` is the manager's to replace with home. */
+/**
+ * `{ chatId, cwd: string | null, cols, rows, restart?: boolean }`. A relative `cwd` is the manager's to replace with
+ * home. `restart` is passed on only when true.
+ */
 export function parseOpenRequest(value: unknown): OpenParams | null {
   if (!isRecord(value)) return null;
   const chatId = parseChatId(value.chatId);
@@ -39,7 +42,9 @@ export function parseOpenRequest(value: unknown): OpenParams | null {
   if (cwd !== null && (typeof cwd !== 'string' || cwd.length > MAX_PATH_LENGTH || cwd.includes('\0'))) return null;
   const size = parseSize(value.cols, value.rows);
   if (!size) return null;
-  return { chatId, cwd, ...size };
+  const { restart } = value;
+  if (restart !== undefined && typeof restart !== 'boolean') return null;
+  return restart ? { chatId, cwd, ...size, restart: true } : { chatId, cwd, ...size };
 }
 
 /** A string of at most `writeMaxBytes` UTF-8 bytes. Larger writes are refused whole, never cut. */

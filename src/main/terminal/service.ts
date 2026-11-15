@@ -8,10 +8,27 @@ import type { BrowserWindow } from 'electron';
 import { spawn } from 'node-pty';
 import { isAppUrl } from '../origin';
 import { TerminalManager } from './manager';
+import { pendingWriteBytes } from './node-pty-internals';
+import { createProcessTable, signalProcess } from './processes';
 import type { SpawnPty } from './pty';
 import { buildShellEnv, chooseShell, SHELL_ARGS } from './shell';
 
-const spawnNodePty: SpawnPty = (file, args, options) => spawn(file, [...args], options);
+const spawnNodePty: SpawnPty = (file, args, options) => {
+  const pty = spawn(file, [...args], options);
+  return {
+    get pid() {
+      return pty.pid;
+    },
+    onData: (listener) => pty.onData(listener),
+    onExit: (listener) => pty.onExit(listener),
+    write: (data) => pty.write(data),
+    resize: (cols, rows) => pty.resize(cols, rows),
+    kill: (signal) => pty.kill(signal),
+    pause: () => pty.pause(),
+    resume: () => pty.resume(),
+    pendingInputBytes: () => pendingWriteBytes(pty),
+  };
+};
 
 function isDirectory(path: string): boolean {
   try {
@@ -34,6 +51,8 @@ export function createTerminalManager(getWindow: () => BrowserWindow | null): Te
     shell: () => ({ file: chooseShell(process.env.SHELL), args: SHELL_ARGS, env: buildShellEnv(process.env) }),
     homeDir: homedir,
     isDirectory,
+    processTable: createProcessTable(),
+    signal: signalProcess,
     events: {
       data: (event) => send(TERMINAL_IPC.data, event),
       exit: (event) => send(TERMINAL_IPC.exit, event),

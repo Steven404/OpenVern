@@ -1,10 +1,13 @@
-// The read contract (docs/terminal-plan.md §4.1, T1.4): logical lines, whole lines, no byte cap, nothing cut.
+// The read contract (docs/terminal-plan.md §4.1, T1.4): logical lines, whole lines, redacted over the whole buffer
+// before anything is selected, and bounded by `readWireMaxChars` by dropping whole lines, never by a cut inside one.
 // Reads go through a real TerminalSession and a real headless xterm, driven by a fake PTY.
 
+import { sentinel } from '@shared/redact';
 import { TERMINAL } from '@shared/terminal';
 import { describe, expect, it } from 'vitest';
 import { createFakePty, type FakePty } from './fake-pty';
-import { TerminalScreen } from './screen';
+import { COMBINING_RUN_MAX } from './output-filter';
+import { omittedLinePlaceholder, readLines, TerminalScreen } from './screen';
 import { TerminalSession } from './session';
 
 function makeSession(): { session: TerminalSession; pty: FakePty } {
@@ -150,6 +153,83 @@ describe('read: logical lines', () => {
   });
 });
 
+describe('read: redaction comes first, over the whole buffer', () => {
+  const KEY = `sk-or-v1-${'0123456789abcdef'.repeat(4)}`;
+
+  it('redacts a vendor key in the range', async () => {
+    const { session, pty } = makeSession();
+    pty.emitData(`export OPENROUTER_API_KEY=${KEY}\r\nok\r\n`);
+    const result = await session.read({});
+    expect(result.text).not.toContain(KEY);
+    expect(result.text).toBe(`export OPENROUTER_API_KEY=${sentinel('sk-or-v1-…')}\nok`);
+    expect(result).toMatchObject({ totalLines: 2, startLine: 1, endLine: 2 });
+  });
+
+  it('redacts the body of a private key whose BEGIN line is above the requested range', () => {
+    const lines = [
+      'cat id_rsa',
+      '-----BEGIN RSA PRIVATE KEY-----',
+      'MIIEowIBAAKCAQEAsecretbodyline1',
+      'secretbodyline2xxxxxxxxxxxxxxxx',
+      '-----END RSA PRIVATE KEY-----',
+      'after',
+    ];
+    const result = readLines(lines, { startLine: 3, count: 4 });
+    expect(result).toMatchObject({ totalLines: 6, startLine: 3, endLine: 6, truncated: false });
+    expect(result.text).not.toContain('secretbody');
+    // Line numbers are unchanged: the block's lines become empty, the line after it stays line 6.
+    expect(result.text.split('\n')).toStrictEqual(['', '', '', 'after']);
+  });
+
+  it('redacts a key that a size cut would have split, because the cut comes after', () => {
+    const lines = ['a'.repeat(30), `${KEY} tail`];
+    const result = readLines(lines, {}, 40);
+    expect(result.text).not.toContain(KEY.slice(9));
+    expect(result).toMatchObject({ startLine: 2, endLine: 2, truncated: true });
+  });
+});
+
+describe('read: bounded by readWireMaxChars, whole lines only', () => {
+  it('drops whole lines from the start of the range and names the first line kept', () => {
+    const lines = ['one', 'two', 'three', 'four'];
+    // 'three\nfour' is 10 characters.
+    const result = readLines(lines, { startLine: 1, count: 4 }, 10);
+    expect(result).toMatchObject({ totalLines: 4, startLine: 3, endLine: 4, text: 'three\nfour', truncated: true });
+  });
+
+  it('keeps everything and reports no truncation when it fits exactly', () => {
+    const result = readLines(['one', 'two'], {}, 7);
+    expect(result).toMatchObject({ startLine: 1, endLine: 2, text: 'one\ntwo', truncated: false });
+  });
+
+  it('replaces a single line longer than the limit with a placeholder', () => {
+    const lines = ['before', 'x'.repeat(50), 'after'];
+    const result = readLines(lines, { startLine: 2, count: 1 }, 40);
+    expect(result).toMatchObject({ startLine: 2, endLine: 2, truncated: true });
+    expect(result.text).toBe(omittedLinePlaceholder(2, 50));
+    expect(result.text).not.toContain('xxxxx');
+  });
+
+  it('the reviewer’s 2,600,011-character line: a placeholder, within the wire limit', () => {
+    const huge = `a${'\u0301'.repeat(2_600_010)}`;
+    const result = readLines(['$ cat zalgo.txt', huge, '$'], {});
+    expect(result.text.length).toBeLessThanOrEqual(TERMINAL.readWireMaxChars);
+    expect(result).toMatchObject({ totalLines: 3, startLine: 1, endLine: 3, truncated: true });
+    expect(result.text).toBe(`$ cat zalgo.txt\n${omittedLinePlaceholder(2, 2_600_011)}\n$`);
+  });
+
+  it('the reviewer’s stream through a session: marks are capped before the screen, so the line is short', async () => {
+    const { session, pty } = makeSession();
+    pty.emitData('a');
+    const chunk = '\u0301'.repeat(65_536);
+    for (let sent = 0; sent < 2_600_010; sent += chunk.length) pty.emitData(chunk);
+    pty.emitData('\r\n');
+    const result = await session.read({});
+    expect(result.text).toBe(`a${'\u0301'.repeat(COMBINING_RUN_MAX)}`);
+    expect(result.truncated).toBe(false);
+  });
+});
+
 describe('read: whole lines, never cut by bytes', () => {
   it('returns a very long line whole', async () => {
     const { session, pty } = makeSession();
@@ -161,7 +241,7 @@ describe('read: whole lines, never cut by bytes', () => {
     expect(result.text).toHaveLength(200_000);
   });
 
-  it('never reports truncated from main, even past readMaxBytes', async () => {
+  it('does not apply the tool’s readMaxBytes: main only bounds by readWireMaxChars', async () => {
     const { session, pty } = makeSession();
     // 1,000 lines of ~100 characters: well past the 50 KB the tool cuts at, not main's concern.
     const long = Array.from({ length: 1_000 }, (_, index) => `line ${index + 1} ${'x'.repeat(100)}`).join('\r\n');

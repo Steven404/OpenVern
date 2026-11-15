@@ -92,6 +92,14 @@ describe('parseOpenRequest', () => {
     ).toStrictEqual({ chatId: 'chat-1', cwd: null, cols: 80, rows: 24 });
   });
 
+  it('passes restart on only when it is true, and refuses a restart that is not a boolean', () => {
+    const base = { chatId: 'chat-1', cwd: null, cols: 80, rows: 24 };
+    expect(parseOpenRequest({ ...base, restart: true })).toStrictEqual({ ...base, restart: true });
+    expect(parseOpenRequest({ ...base, restart: false })).toStrictEqual(base);
+    expect(parseOpenRequest({ ...base, restart: undefined })).toStrictEqual(base);
+    for (const restart of ['true', 1, null, {}, []]) expect(parseOpenRequest({ ...base, restart })).toBeNull();
+  });
+
   it('clamps the size in an open request', () => {
     expect(parseOpenRequest({ chatId: 'chat-1', cwd: null, cols: 0, rows: 0 })).toMatchObject({
       cols: TERMINAL.minCols,

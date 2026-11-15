@@ -1,6 +1,6 @@
 // One session: sequence numbers, exit handling and the kill escalation (docs/terminal-plan.md T1.2, T1.6).
 
-import type { TerminalDataEvent, TerminalExitEvent } from '@shared/terminal';
+import { TERMINAL, type TerminalDataEvent, type TerminalExitEvent } from '@shared/terminal';
 import { describe, expect, it, vi } from 'vitest';
 import { createFakePty, type FakePty } from './fake-pty';
 import { TerminalScreen } from './screen';
@@ -13,8 +13,15 @@ interface Harness {
   readonly exits: TerminalExitEvent[];
 }
 
-function makeSession(options: { killGraceMs?: number } = {}): Harness {
-  const pty = createFakePty();
+interface SessionOverrides {
+  killGraceMs?: number;
+  pty?: FakePty;
+  pendingInputMaxBytes?: number;
+  log?: (message: string) => void;
+}
+
+function makeSession(options: SessionOverrides = {}): Harness {
+  const pty = options.pty ?? createFakePty();
   const data: TerminalDataEvent[] = [];
   const exits: TerminalExitEvent[] = [];
   const session = new TerminalSession({
@@ -25,6 +32,8 @@ function makeSession(options: { killGraceMs?: number } = {}): Harness {
     cwd: '/home/me',
     events: { data: (event) => data.push(event), exit: (event) => exits.push(event) },
     killGraceMs: options.killGraceMs,
+    pendingInputMaxBytes: options.pendingInputMaxBytes,
+    log: options.log ?? (() => {}),
   });
   return { pty, session, data, exits };
 }
@@ -85,6 +94,90 @@ describe('TerminalSession data events', () => {
   });
 });
 
+describe('TerminalSession output boundaries', () => {
+  it('ends an event before an incomplete escape sequence and sends it with the rest', () => {
+    const { pty, data } = makeSession();
+    pty.emitData('x \u001b[31');
+    pty.emitData('mR');
+    expect(data).toStrictEqual([
+      { chatId: 'terminal-1', seq: 1, data: 'x ' },
+      { chatId: 'terminal-1', seq: 2, data: '\u001b[31mR' },
+    ]);
+  });
+
+  it('sends no event, and uses no seq, for a chunk that is all incomplete sequence', async () => {
+    const { pty, session, data } = makeSession();
+    pty.emitData('\u001b]0;tit');
+    expect(data).toStrictEqual([]);
+    expect(session.lastSeq).toBe(0);
+    // The snapshot is at rest: it holds nothing of the open sequence.
+    const snapshot = await session.snapshot();
+    expect(snapshot.seq).toBe(0);
+    expect(snapshot.snapshot).not.toContain('tit');
+  });
+
+  it('flushes what is held when the shell exits, before the exit event', () => {
+    const { pty, data, exits } = makeSession();
+    pty.emitData('done\u001b[');
+    pty.emitExit(0);
+    expect(data.map((event) => event.data)).toStrictEqual(['done', '\u001b[']);
+    expect(exits).toHaveLength(1);
+  });
+});
+
+describe('TerminalSession queued input', () => {
+  it('defaults to the plan’s 1 MiB bound', () => {
+    expect(TERMINAL.pendingInputMaxBytes).toBe(1024 * 1024);
+  });
+
+  it('drops writes that would queue more than the bound, with one warning per stretch of drops', () => {
+    const logs: string[] = [];
+    const { pty, session } = makeSession({ pendingInputMaxBytes: 10, log: (line) => logs.push(line) });
+    session.write('12345');
+    session.write('67890');
+    // The shell is not reading: 10 bytes wait.
+    for (let i = 0; i < 128; i++) session.write('more');
+    expect(pty.writes).toStrictEqual(['12345', '67890']);
+    expect(pty.pendingBytes).toBe(10);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatch(/not reading its input/);
+
+    // It reads again: input flows, and a later stretch of drops warns once more.
+    pty.drainInput();
+    session.write('ok');
+    expect(pty.writes.at(-1)).toBe('ok');
+    session.write('x'.repeat(9));
+    session.write('y'.repeat(9));
+    expect(logs).toHaveLength(2);
+  });
+
+  it('measures in UTF-8 bytes', () => {
+    const { pty, session } = makeSession({ pendingInputMaxBytes: 6 });
+    session.write('éé'); // 4 bytes
+    session.write('éé'); // would be 8
+    expect(pty.writes).toStrictEqual(['éé']);
+  });
+
+  it('the reviewer’s case: 128 writes of 64 KiB to a shell that does not read queue at most 1 MiB', () => {
+    const { pty, session } = makeSession();
+    const chunk = 'x'.repeat(TERMINAL.writeMaxBytes);
+    for (let i = 0; i < 128; i++) session.write(chunk);
+    expect(pty.pendingBytes).toBeLessThanOrEqual(TERMINAL.pendingInputMaxBytes);
+    expect(pty.writes).toHaveLength(16);
+  });
+
+  it('warns once and passes input through when node-pty’s queue cannot be measured', () => {
+    const logs: string[] = [];
+    const pty = createFakePty(4_242, { pendingInput: 'unknown' });
+    const { session } = makeSession({ pty, pendingInputMaxBytes: 1, log: (line) => logs.push(line) });
+    session.write('abc');
+    session.write('def');
+    expect(pty.writes).toStrictEqual(['abc', 'def']);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatch(/cannot measure/);
+  });
+});
+
 describe('TerminalSession input and size', () => {
   it('passes writes and resizes to the PTY while running', () => {
     const { pty, session } = makeSession();
@@ -108,14 +201,14 @@ describe('TerminalSession input and size', () => {
 });
 
 describe('TerminalSession exit', () => {
-  it('records the code, emits exit and kills the PTY to release its descriptor', () => {
+  it('records the code and emits exit, and never signals the reaped shell', () => {
     const { pty, session, exits } = makeSession();
     pty.emitExit(3);
     expect(exits).toStrictEqual([{ chatId: 'terminal-1', status: { state: 'exited', exitCode: 3, signal: null } }]);
     expect(session.running).toBe(false);
     expect(session.info().status).toStrictEqual({ state: 'exited', exitCode: 3, signal: null });
-    // Bare `kill()` is node-pty's SIGHUP.
-    expect(pty.killSignals).toStrictEqual([undefined]);
+    // node-pty has reaped the shell; its pid may already belong to another process (T1 review).
+    expect(pty.killSignals).toStrictEqual([]);
   });
 
   it('records a signal death without a code', () => {
@@ -129,7 +222,7 @@ describe('TerminalSession exit', () => {
     pty.emitExit(0);
     pty.emitExit(1, 9);
     expect(exits).toStrictEqual([{ chatId: 'terminal-1', status: { state: 'exited', exitCode: 0, signal: null } }]);
-    expect(pty.killSignals).toHaveLength(1);
+    expect(pty.killSignals).toStrictEqual([]);
   });
 });
 
@@ -142,6 +235,8 @@ describe('TerminalSession kill', () => {
       const killed = session.kill().then(() => {
         settled = true;
       });
+      // The session's processes are looked up first (none here), then signalled.
+      await vi.advanceTimersByTimeAsync(0);
       expect(pty.killSignals).toStrictEqual(['SIGHUP']);
 
       await vi.advanceTimersByTimeAsync(499);

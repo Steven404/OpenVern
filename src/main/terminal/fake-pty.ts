@@ -19,9 +19,18 @@ export interface FakePty extends PtyProcess {
   emitData(data: string): void;
   /** Delivers an exit to every current `onExit` listener; `signal` follows node-pty's `IExitEvent`. */
   emitExit(exitCode: number, signal?: number): void;
+  /** UTF-8 bytes written and not yet "read by the shell". Every write adds to it until `drainInput`. */
+  readonly pendingBytes: number;
+  /** The shell reads `bytes` of queued input (all of it when omitted). */
+  drainInput(bytes?: number): void;
 }
 
-export function createFakePty(pid = 4_242): FakePty {
+export interface FakePtyOptions {
+  /** `unknown`: `pendingInputBytes()` returns null, as when node-pty's internals have changed. */
+  pendingInput?: 'tracked' | 'unknown';
+}
+
+export function createFakePty(pid = 4_242, options: FakePtyOptions = {}): FakePty {
   const dataListeners = new Set<(data: string) => void>();
   const exitListeners = new Set<(exit: PtyExit) => void>();
   const writes: string[] = [];
@@ -29,6 +38,7 @@ export function createFakePty(pid = 4_242): FakePty {
   const killSignals: Array<string | undefined> = [];
   let pauseCount = 0;
   let resumeCount = 0;
+  let pendingBytes = 0;
 
   const disposable = (remove: () => void): PtyDisposable => ({ dispose: remove });
 
@@ -65,6 +75,7 @@ export function createFakePty(pid = 4_242): FakePty {
     },
     write(data) {
       writes.push(data);
+      pendingBytes += Buffer.byteLength(data, 'utf8');
     },
     resize(cols, rows) {
       resizes.push({ cols, rows });
@@ -83,6 +94,15 @@ export function createFakePty(pid = 4_242): FakePty {
     },
     emitExit(exitCode, signal) {
       for (const listener of [...exitListeners]) listener({ exitCode, signal });
+    },
+    get pendingBytes() {
+      return pendingBytes;
+    },
+    drainInput(bytes) {
+      pendingBytes = bytes === undefined ? 0 : Math.max(0, pendingBytes - bytes);
+    },
+    pendingInputBytes() {
+      return options.pendingInput === 'unknown' ? null : pendingBytes;
     },
   };
 }

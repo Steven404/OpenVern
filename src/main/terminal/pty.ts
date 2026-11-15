@@ -21,6 +21,11 @@ export interface PtyProcess {
   /** Stops reading output until `resume()`; used for flow control. */
   pause(): void;
   resume(): void;
+  /**
+   * Bytes written but not yet read by the shell (node-pty queues them without limit). Null when it cannot be told;
+   * absent when the PTY does not support it. Used to bound queued input (`TERMINAL.pendingInputMaxBytes`).
+   */
+  pendingInputBytes?(): number | null;
 }
 
 export interface PtySpawnOptions {

@@ -188,6 +188,16 @@ describe('registerTerminalIpc valid calls', () => {
     expect(manager.resize).toHaveBeenCalledWith('chat-1', 120, 40);
   });
 
+  it('passes restart: true through to the manager, and refuses a restart that is not a boolean', async () => {
+    const { fake, manager, trusted } = setup();
+    await fake.invoke(TERMINAL_IPC.open, trusted, { ...GOOD_OPEN, restart: true });
+    expect(manager.open).toHaveBeenLastCalledWith({ ...GOOD_OPEN, restart: true });
+    await expect(fake.invoke(TERMINAL_IPC.open, trusted, { ...GOOD_OPEN, restart: 'yes' })).rejects.toThrow(
+      INVALID_REQUEST,
+    );
+    expect(manager.open).toHaveBeenCalledTimes(1);
+  });
+
   it('accepts a read with no request as the default range', async () => {
     const { fake, manager, trusted } = setup();
     await fake.invoke(TERMINAL_IPC.read, trusted, 'chat-1');

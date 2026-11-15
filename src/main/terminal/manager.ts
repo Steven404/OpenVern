@@ -4,6 +4,7 @@
 import { basename, isAbsolute, resolve } from 'node:path';
 import { TERMINAL, type TerminalOpenResult, type TerminalReadAnswer, type TerminalReadRequest } from '@shared/terminal';
 import type { Id } from '@shared/types';
+import { type ProcessTable, SessionProcesses, type SignalProcess } from './processes';
 import type { PtyProcess, SpawnPty } from './pty';
 import { TerminalScreen } from './screen';
 import { type SessionEvents, TerminalSession } from './session';
@@ -23,9 +24,16 @@ export interface TerminalManagerDeps {
   /** Whether the path is an existing directory. Must not throw. */
   isDirectory: (path: string) => boolean;
   events: SessionEvents;
+  /** Finds the processes in each shell's session. Null or omitted: only the shells themselves are signalled. */
+  processTable?: ProcessTable | null;
+  /** How those processes are signalled. Default: `process.kill`. */
+  signal?: SignalProcess;
   killGraceMs?: number;
   maxSessions?: number;
+  maxSpawnsPerRun?: number;
+  pendingInputMaxBytes?: number;
   scrollbackLines?: number;
+  log?: (message: string) => void;
 }
 
 export interface OpenParams {
@@ -34,27 +42,77 @@ export interface OpenParams {
   cwd: string | null;
   cols: number;
   rows: number;
+  /** Replace an exited session with a fresh shell (Restart). Ignored while the shell is running. */
+  restart?: boolean;
 }
 
 export class TerminalLimitError extends Error {
   constructor(max: number) {
-    super(`At most ${max} terminals can run at once. End one to open another.`);
+    super(`At most ${max} terminals can run at once, counting any that are still closing. End one to open another.`);
     this.name = 'TerminalLimitError';
+  }
+}
+
+/** node-pty 1.1.0 leaks descriptors on every spawn on macOS, freed only when the app exits (plan §2, "Limits"). */
+export class TerminalSpawnLimitError extends Error {
+  constructor(max: number) {
+    super(
+      `OpenVern has started ${max} terminals since it was opened, the most it can start in one run. Restart OpenVern to open more terminals.`,
+    );
+    this.name = 'TerminalSpawnLimitError';
+  }
+}
+
+export class TerminalShutdownError extends Error {
+  constructor() {
+    super('OpenVern is closing its terminals, so a new one cannot be opened now.');
+    this.name = 'TerminalShutdownError';
   }
 }
 
 export class TerminalManager {
   private readonly sessions = new Map<Id, TerminalSession>();
-  /** Forgotten sessions whose shells may still be shutting down. */
+  /** Forgotten sessions whose kill has not finished or whose shell has not yet reported its exit. */
   private readonly dying = new Set<TerminalSession>();
   private readonly maxSessions: number;
+  private readonly maxSpawns: number;
+  /** Shells started in this app run (see `TerminalSpawnLimitError`). */
+  private spawned = 0;
+  private shuttingDown = false;
 
   constructor(private readonly deps: TerminalManagerDeps) {
     this.maxSessions = deps.maxSessions ?? TERMINAL.maxSessions;
+    this.maxSpawns = deps.maxSpawnsPerRun ?? TERMINAL.maxSpawnsPerRun;
   }
 
+  /** Sessions by chat id, running or exited. */
   get size(): number {
     return this.sessions.size;
+  }
+
+  /** What counts against `maxSessions`: every session by chat id, plus forgotten ones whose shell is still running. */
+  get liveCount(): number {
+    let count = this.sessions.size;
+    for (const session of this.dying) if (session.running) count += 1;
+    return count;
+  }
+
+  /** Shells started so far in this app run. */
+  get spawnCount(): number {
+    return this.spawned;
+  }
+
+  /** Quit or window close has begun: `open` refuses until `endShutdown` (a quit that was cancelled). */
+  beginShutdown(): void {
+    this.shuttingDown = true;
+  }
+
+  endShutdown(): void {
+    this.shuttingDown = false;
+  }
+
+  get isShuttingDown(): boolean {
+    return this.shuttingDown;
   }
 
   has(chatId: Id): boolean {
@@ -62,19 +120,23 @@ export class TerminalManager {
   }
 
   /**
-   * Attaches to the chat's running session (its snapshot and `seq`; the requested size is ignored, `info` carries the
-   * session's), or starts a new one. An exited session is replaced. Throws `TerminalLimitError` at `maxSessions`, and
-   * whatever the spawn throws.
+   * Attaches to the chat's session, running or exited (its snapshot and `seq`; the requested size is ignored, `info`
+   * carries the session's), or starts a new one. With `restart`, an exited session is replaced by a fresh shell.
+   * Throws `TerminalShutdownError` during shutdown, `TerminalSpawnLimitError` once `maxSpawnsPerRun` shells have been
+   * started, `TerminalLimitError` at `maxSessions`, and whatever the spawn throws.
    */
   async open(params: OpenParams): Promise<TerminalOpenResult> {
+    if (this.shuttingDown) throw new TerminalShutdownError();
     const existing = this.sessions.get(params.chatId);
-    if (existing?.running) {
+    if (existing && (existing.running || params.restart !== true)) {
       const { snapshot, seq, info } = await existing.snapshot();
       return { info, snapshot, seq, created: false };
     }
-    if (existing) this.forget(existing);
     // Synchronous from here to the map insert, so two opens for one chat can't both create.
-    this.makeRoom();
+    if (this.spawned >= this.maxSpawns) throw new TerminalSpawnLimitError(this.maxSpawns);
+    // Room first: a refused restart keeps the exited session (and its scrollback).
+    this.makeRoom(existing);
+    if (existing) this.forget(existing);
     const session = this.create(params);
     this.sessions.set(params.chatId, session);
     return { info: session.info(), snapshot: '', seq: 0, created: true };
@@ -99,19 +161,22 @@ export class TerminalManager {
     }
   }
 
-  /** Kills the shell and forgets the session. Resolves at once; the shell finishes dying in the background. */
+  /**
+   * Ends the session's processes and forgets it. Resolves at once; they finish dying in the background, and a shell
+   * still running counts against `maxSessions` until it has exited.
+   */
   async close(chatId: Id): Promise<void> {
     const session = this.sessions.get(chatId);
     if (session) this.forget(session);
   }
 
-  /** Forgets every session and resolves once all their shells have exited (SIGKILL after the grace period). */
+  /** Forgets every session and resolves once all their kills have finished (SIGKILL after the grace period). */
   async disposeAll(): Promise<void> {
     for (const session of [...this.sessions.values()]) this.forget(session);
     await Promise.all([...this.dying].map((session) => session.kill()));
   }
 
-  /** SIGKILL to every shell that may still be running. Synchronous, for `process.on('exit')`. */
+  /** SIGKILL to every session's processes. Synchronous, for `process.on('exit')`. */
   killAllNow(): void {
     for (const session of this.sessions.values()) session.killNow();
     for (const session of this.dying) session.killNow();
@@ -119,24 +184,25 @@ export class TerminalManager {
 
   private forget(session: TerminalSession): void {
     if (this.sessions.get(session.chatId) === session) this.sessions.delete(session.chatId);
-    if (!session.running) {
-      void session.dispose();
-      return;
-    }
     this.dying.add(session);
-    void session.dispose().finally(() => this.dying.delete(session));
+    void session.dispose();
+    void session.whenGone().then(() => this.dying.delete(session));
   }
 
-  /** At the limit, drops the oldest exited session (kept only for reads); refuses when all of them are running. */
-  private makeRoom(): void {
-    if (this.sessions.size < this.maxSessions) return;
+  /**
+   * At the limit, drops the oldest exited session (kept only for reads); refuses when that does not make room.
+   * `replacing` is an exited session the caller is about to forget, so its slot counts as free.
+   */
+  private makeRoom(replacing?: TerminalSession): void {
+    const used = () => this.liveCount - (replacing ? 1 : 0);
+    if (used() < this.maxSessions) return;
     for (const session of this.sessions.values()) {
-      if (!session.running) {
+      if (!session.running && session !== replacing) {
         this.forget(session);
-        return;
+        break;
       }
     }
-    throw new TerminalLimitError(this.maxSessions);
+    if (used() >= this.maxSessions) throw new TerminalLimitError(this.maxSessions);
   }
 
   private create(params: OpenParams): TerminalSession {
@@ -144,6 +210,8 @@ export class TerminalManager {
     const shell = this.deps.shell();
     const screen = new TerminalScreen(params.cols, params.rows, this.deps.scrollbackLines ?? TERMINAL.scrollbackLines);
     let pty: PtyProcess;
+    // Counted before the call: a spawn that fails in native code may leak as well.
+    this.spawned += 1;
     try {
       pty = this.deps.spawn(shell.file, shell.args, {
         name: 'xterm-256color',
@@ -164,6 +232,10 @@ export class TerminalManager {
       cwd,
       events: this.deps.events,
       killGraceMs: this.deps.killGraceMs,
+      processes: new SessionProcesses(pty.pid, this.deps.processTable ?? null),
+      signal: this.deps.signal,
+      pendingInputMaxBytes: this.deps.pendingInputMaxBytes,
+      log: this.deps.log,
     });
   }
 
