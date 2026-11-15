@@ -12,6 +12,7 @@ import {
 import { isAppUrl } from './origin';
 import { registerTerminalIpc } from './terminal/ipc';
 import type { TerminalManager } from './terminal/manager';
+import { isTopFrameAppSender } from './terminal/sender';
 import { getMainWindow } from './window';
 
 export const IPC_PICK_DIRECTORY = 'openvern:pick-directory';
@@ -21,10 +22,12 @@ function fromAppPage(event: IpcMainEvent | IpcMainInvokeEvent): boolean {
   return !!event.senderFrame && isAppUrl(event.senderFrame.url);
 }
 
-/** An app page in the main window: the only place terminal events are sent, so the only one that may drive a PTY. */
+/**
+ * The app page in the main window's top frame: the only place terminal events are sent, so the only one that may
+ * drive a PTY. A subframe of that page, even a same-origin one, is refused.
+ */
 function fromMainWindowAppPage(event: IpcMainEvent | IpcMainInvokeEvent): boolean {
-  const win = getMainWindow();
-  return !!win && event.sender === win.webContents && fromAppPage(event);
+  return isTopFrameAppSender(event, getMainWindow()?.webContents ?? null, isAppUrl);
 }
 
 export function registerIpc(deps: { terminals: TerminalManager }): void {
