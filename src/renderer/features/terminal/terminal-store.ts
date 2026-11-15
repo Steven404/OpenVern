@@ -95,6 +95,8 @@ export interface TerminalUiState {
   toggleDock(chatId: Id): void;
   /** True once per `openDock` / `toggleDock`-while-closed, so the dock knows to focus the terminal. */
   consumeFocusRequest(chatId: Id): boolean;
+  /** Drops focus requests that belong to another chat (a switch makes them stale; a later mount must not steal focus). */
+  clearFocusRequestsExcept(chatId: Id | undefined): void;
   /** Clamps. Writes storage unless `persist: false` (mid-drag); then call `commitDockHeight` once. */
   setDockHeight(px: number, options?: { persist?: boolean }): void;
   /** Writes the current height to storage. */
@@ -119,7 +121,9 @@ export const useTerminalUiStore = create<TerminalUiState>()((set, get) => ({
   closeDock: (chatId) => {
     if (!get().openDocks[chatId]) return;
     const { [chatId]: _closed, ...openDocks } = get().openDocks;
-    set({ openDocks });
+    // A request for a dock that is closing must not linger and grab focus when the chat is shown again.
+    const { [chatId]: _stale, ...focusRequests } = get().focusRequests;
+    set({ openDocks, focusRequests });
     persistOpenDocks(openDocks);
   },
   toggleDock: (chatId) => (get().openDocks[chatId] ? get().closeDock(chatId) : get().openDock(chatId)),
@@ -128,6 +132,12 @@ export const useTerminalUiStore = create<TerminalUiState>()((set, get) => ({
     const { [chatId]: _taken, ...focusRequests } = get().focusRequests;
     set({ focusRequests });
     return true;
+  },
+  clearFocusRequestsExcept: (chatId) => {
+    const next: Record<Id, true> = {};
+    if (chatId !== undefined && get().focusRequests[chatId]) next[chatId] = true;
+    if (Object.keys(next).length === Object.keys(get().focusRequests).length) return;
+    set({ focusRequests: next });
   },
   setDockHeight: (px, options) => {
     const dockHeight = clampDockHeight(px);

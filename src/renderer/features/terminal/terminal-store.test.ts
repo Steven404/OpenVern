@@ -165,4 +165,26 @@ describe('focus requests', () => {
     expect(openNow('a')).toBe(false);
     expect(consumeFocusRequest('a')).toBe(false);
   });
+
+  it('closing a dock drops an unconsumed request, so it cannot grab focus later', () => {
+    const { openDock, closeDock, consumeFocusRequest } = useTerminalUiStore.getState();
+    openDock('a');
+    closeDock('a');
+    expect(consumeFocusRequest('a')).toBe(false);
+    expect(useTerminalUiStore.getState().focusRequests).toEqual({});
+  });
+
+  it('a chat switch drops requests for other chats but keeps the current one', () => {
+    const { openDock, clearFocusRequestsExcept, consumeFocusRequest } = useTerminalUiStore.getState();
+    openDock('a');
+    openDock('b');
+
+    clearFocusRequestsExcept('b');
+    expect(consumeFocusRequest('a')).toBe(false);
+    expect(consumeFocusRequest('b')).toBe(true);
+
+    openDock('a');
+    clearFocusRequestsExcept(undefined);
+    expect(useTerminalUiStore.getState().focusRequests).toEqual({});
+  });
 });

@@ -11,6 +11,7 @@ import { useRunsStore } from '../../stores/runs';
 import { useUiStore } from '../../stores/ui';
 import { Conversation } from '../conversation';
 import { IMAGE_UNSUPPORTED_MESSAGE } from './attachments';
+import { composerMaxHeight } from './Composer';
 import { ReplyComposer } from './ReplyComposer';
 import { installDomStubs, renderWithProviders, resetStores } from './test-utils';
 
@@ -46,6 +47,19 @@ function upload(file: File) {
 }
 const png = () => new File([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])], 'pic.png', { type: 'image/png' });
 const txt = () => new File(['hello'], 'notes.txt', { type: 'text/plain' });
+
+describe('draft height around the terminal dock', () => {
+  it('caps the draft at 40% of the window, and less while a dock takes space', () => {
+    expect(composerMaxHeight(720, 0)).toBe(288);
+    expect(composerMaxHeight(720, 160)).toBe(224);
+    expect(composerMaxHeight(720, 280)).toBe(176);
+  });
+
+  it('keeps a usable draft even when the dock wants almost everything', () => {
+    expect(composerMaxHeight(720, 700)).toBe(96);
+    expect(composerMaxHeight(300, 280)).toBe(96);
+  });
+});
 
 describe('send keys', () => {
   it('Enter sends, Shift+Enter does not, empty input does not', async () => {

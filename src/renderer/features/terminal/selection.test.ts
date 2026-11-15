@@ -26,6 +26,22 @@ describe('terminalSelectionBlock', () => {
     expect(block).not.toContain('abcdef1234');
   });
 
+  it('redacts before it caps, so a key that straddles the cut does not leak its body', () => {
+    const cap = TERMINAL.selectionMaxChars;
+    // The prefix ends 7 characters before the cap: cutting first would leave `sk-or-v` and lose the match.
+    const block = terminalSelectionBlock(`${'z'.repeat(cap - 7)}sk-or-v1-abcdef1234`);
+    expect(block).not.toBeNull();
+    expect(block).not.toContain('abcdef1234');
+    expect(block).not.toContain('sk-or-v1-abcdef');
+  });
+
+  it('redacts a key that ends before the cut and then caps the redacted text', () => {
+    const block = terminalSelectionBlock(`export KEY=sk-or-v1-abcdef1234\n${'z'.repeat(TERMINAL.selectionMaxChars)}`);
+    expect(block).toContain('«redacted:sk-or-v1-…»');
+    expect(block).not.toContain('abcdef1234');
+    expect(block).toContain('[The selection was cut at');
+  });
+
   it('cuts a selection longer than selectionMaxChars and says so after the block', () => {
     const cap = TERMINAL.selectionMaxChars;
     const block = terminalSelectionBlock('z'.repeat(cap + 500));

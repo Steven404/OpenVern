@@ -217,10 +217,11 @@ export class FakeTerminalBridge implements TerminalBridge {
 
   private attach(req: TerminalOpenRequest): TerminalOpenResult {
     const existing = this.sessions.get(req.chatId);
-    if (existing && existing.info.status.state === 'running') {
+    // Main attaches to a running session always, and to an exited one unless `restart` asks for a fresh shell.
+    if (existing && (existing.info.status.state === 'running' || req.restart !== true)) {
       return { info: existing.info, snapshot: existing.snapshot, seq: existing.seq, created: false };
     }
-    // No session, or an exited one: main starts a new shell (Restart).
+    // No session, or an exited one with `restart`: main starts a new shell.
     const session: FakeSession = {
       info: {
         chatId: req.chatId,

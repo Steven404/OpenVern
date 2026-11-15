@@ -10,15 +10,27 @@ import { RightPanel } from '@renderer/features/right-panel';
 import { SettingsModal } from '@renderer/features/settings';
 import { SIDEBAR_COLLAPSE_BUTTON_ID, Sidebar } from '@renderer/features/sidebar';
 import { PanelIcon } from '@renderer/features/sidebar/icons';
-import { TerminalDock, useCloseDeletedTerminals, useTerminalDock } from '@renderer/features/terminal';
+import {
+  clampDockHeight,
+  useCloseDeletedTerminals,
+  useTerminalDock,
+  useTerminalUiStore,
+} from '@renderer/features/terminal';
 import { useUiStore } from '@renderer/stores/ui';
 import { APP_NAME, LAYOUT } from '@shared/constants';
-import { useCallback, useEffect, useRef } from 'react';
+import { TERMINAL } from '@shared/terminal';
+import { lazy, Suspense, useCallback, useEffect, useRef } from 'react';
 import { Outlet } from 'react-router';
 import { useCurrentChatId, useRightPanelTarget } from './queries';
 import { useGlobalShortcuts } from './shortcuts';
 
 const OPEN_SIDEBAR_BUTTON_ID = 'sidebar-open';
+
+// xterm and its stylesheet live in this chunk. The web build has no bridge, so the dock (and xterm) never load there;
+// the chat still starts without paying for a terminal the user may not open.
+const TerminalDock = lazy(() =>
+  import('@renderer/features/terminal/TerminalDock').then((module) => ({ default: module.TerminalDock })),
+);
 
 export function AppShell() {
   const collapsed = useUiStore((s) => s.sidebarCollapsed);
@@ -29,6 +41,7 @@ export function AppShell() {
   const panelTarget = useRightPanelTarget();
   // The terminal dock is the chat column's bottom strip (a chat's terminal; the new-chat screen has none).
   const terminal = useTerminalDock(currentChatId);
+  const storedDockHeight = useTerminalUiStore((s) => s.dockHeight);
   useCloseDeletedTerminals();
 
   // `ChatHeader` titles the window after its chat; everywhere else it is just the app name.
@@ -89,7 +102,23 @@ export function AppShell() {
           </IconButton>
         )}
         <Outlet />
-        {currentChatId && terminal.open ? <TerminalDock key={currentChatId} chatId={currentChatId} /> : null}
+        {currentChatId && terminal.open ? (
+          // The fallback is the dock's own height, so loading the chunk does not jump the conversation.
+          <Suspense
+            fallback={
+              <div
+                aria-hidden="true"
+                className="border-t border-border bg-sidebar"
+                style={{
+                  flex: `0 1 ${clampDockHeight(storedDockHeight)}px`,
+                  minHeight: TERMINAL.dockMinHeight,
+                }}
+              />
+            }
+          >
+            <TerminalDock key={currentChatId} chatId={currentChatId} />
+          </Suspense>
+        ) : null}
       </main>
 
       {panelTarget && panelOpen ? <RightPanel chatId={panelTarget.chatId} projectId={panelTarget.projectId} /> : null}

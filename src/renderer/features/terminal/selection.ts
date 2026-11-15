@@ -1,6 +1,7 @@
 // "Add selection to chat" (terminal plan T3.5): the selected terminal text as a fenced `text` block for the composer.
-// The selection is capped at `selectionMaxChars` and every secret-looking value is redacted with the same pattern
-// passes the tool path uses, because whatever lands in the composer goes to the model.
+// Every secret-looking value is redacted with the same pattern passes the tool path uses, because whatever lands in the
+// composer goes to the model. The cap is applied only after redaction: cutting first can strip a key's prefix and leave
+// its body unmatched, so the body would reach the model unredacted.
 
 import { redactSecrets } from '@shared/redact';
 import { TERMINAL } from '@shared/terminal';
@@ -14,7 +15,8 @@ function fenceFor(text: string): string {
 
 /**
  * The block the dock inserts into the chat's composer, or `null` when the selection is blank. Line endings are
- * normalised, trailing spaces dropped, and a cut selection comes with a line saying so after the fence.
+ * normalised, trailing spaces dropped, secrets redacted, and only then is the text capped; a cut selection comes with a
+ * line saying so after the fence.
  */
 export function terminalSelectionBlock(selection: string): string | null {
   const lines = selection
@@ -24,11 +26,13 @@ export function terminalSelectionBlock(selection: string): string | null {
   const trimmed = lines.join('\n').trim();
   if (trimmed === '') return null;
 
-  const truncated = trimmed.length > TERMINAL.selectionMaxChars;
-  const capped = truncated ? trimmed.slice(0, TERMINAL.selectionMaxChars) : trimmed;
-  const { text } = redactSecrets(capped);
+  const { text: redacted } = redactSecrets(trimmed);
+  // Cut by code point, so a surrogate pair at the boundary is kept whole.
+  const points = Array.from(redacted);
+  const truncated = points.length > TERMINAL.selectionMaxChars;
+  const capped = truncated ? points.slice(0, TERMINAL.selectionMaxChars).join('') : redacted;
 
-  const fence = fenceFor(text);
-  const block = [`${fence}text`, text, fence].join('\n');
+  const fence = fenceFor(capped);
+  const block = [`${fence}text`, capped, fence].join('\n');
   return truncated ? `${block}\n[The selection was cut at ${TERMINAL.selectionMaxChars} characters.]` : block;
 }

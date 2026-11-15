@@ -116,25 +116,33 @@ describe('Ctrl+backtick toggles the terminal dock', () => {
   });
 });
 
-describe('while the terminal has focus, only Ctrl+backtick is handled', () => {
-  it.each([
-    { label: 'Ctrl+B', key: 'b', init: { ctrlKey: true } },
-    { label: 'Cmd+B', key: 'b', init: { metaKey: true } },
-  ])('$label reaches the shell and does not toggle the sidebar', async ({ key, init }) => {
+describe('while the terminal has focus, Ctrl stays out of the app and Cmd still works', () => {
+  it('Ctrl+B reaches the shell and does not toggle the sidebar', async () => {
     await renderChat();
     await openDockWithFocus();
-    press(key, init, Terminal.last().textarea ?? window);
+    press('b', { ctrlKey: true }, Terminal.last().textarea ?? window);
     expect(sidebar()).not.toBeNull();
   });
 
-  it.each([
-    { label: 'Ctrl+N', init: { ctrlKey: true } },
-    { label: 'Cmd+N', init: { metaKey: true } },
-  ])('$label reaches the shell and does not start a new chat', async ({ init }) => {
+  it('Cmd+B still toggles the sidebar, because Cmd never reaches the shell', async () => {
+    await renderChat();
+    await openDockWithFocus();
+    press('b', { metaKey: true }, Terminal.last().textarea ?? window);
+    expect(sidebar()).toBeNull();
+  });
+
+  it('Ctrl+N reaches the shell and does not start a new chat', async () => {
     const { chat } = await renderChat();
     await openDockWithFocus();
-    press('n', init, Terminal.last().textarea ?? window);
+    press('n', { ctrlKey: true }, Terminal.last().textarea ?? window);
     expect(location()).toBe(`/chat/${chat.id}`);
+  });
+
+  it('Cmd+N still starts a new chat', async () => {
+    const { project } = await renderChat();
+    await openDockWithFocus();
+    press('n', { metaKey: true }, Terminal.last().textarea ?? window);
+    await waitFor(() => expect(location()).toBe(`/new?project=${project.id}`));
   });
 
   it('Ctrl+backtick still hides the dock from inside the terminal', async () => {

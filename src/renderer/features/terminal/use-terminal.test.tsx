@@ -5,10 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('@xterm/xterm', () => import('./test-fakes'));
 vi.mock('@xterm/addon-fit', () => import('./test-fakes'));
 
+import { TERMINAL } from '@shared/terminal';
 import { FakeTerminalBridge, FitAddon, resetTerminalFakes, Terminal } from './test-fakes';
-import { type TerminalHandle, useTerminal } from './use-terminal';
+import { splitTerminalWrite, type TerminalHandle, terminalErrorMessage, useTerminal } from './use-terminal';
 
 const CHAT = 'chat-1';
+const bytes = (text: string) => new TextEncoder().encode(text).length;
 
 /** `ResizeObserver` that the test fires by hand, so a host resize is something the test does on purpose. */
 class FakeResizeObserver {
@@ -124,6 +126,83 @@ describe('useTerminal: attaching and writing output', () => {
     await waitFor(() => expect(into.current?.phase).toBe('error'));
     expect(into.current?.error).toBe('Too many terminals are open.');
   });
+
+  it('attaches to an exited session: its snapshot and status show, and input never reaches it', async () => {
+    const bridge = new FakeTerminalBridge();
+    bridge.seed(CHAT, { snapshot: 'RESTORED OUTPUT', seq: 3 });
+    bridge.emitExit(CHAT, { state: 'exited', exitCode: 1, signal: null });
+
+    const { into } = mount(bridge);
+    await waitFor(() => expect(into.current?.phase).toBe('exited'));
+    expect(bridge.opens[0]).not.toHaveProperty('restart', true);
+    expect(Terminal.last().writes).toEqual(['RESTORED OUTPUT']);
+    expect(into.current?.info?.status).toEqual({ state: 'exited', exitCode: 1, signal: null });
+
+    Terminal.last().type('echo late\r');
+    expect(bridge.writes).toEqual([]);
+  });
+
+  it('an exit seen while open is in flight wins over the reply, and the session is never ready for input', async () => {
+    const bridge = new FakeTerminalBridge();
+    const release = bridge.holdOpens();
+    const { into } = mount(bridge);
+
+    act(() => bridge.emitExit(CHAT, { state: 'exited', exitCode: 2, signal: null }));
+    expect(into.current?.phase).toBe('exited');
+
+    release();
+    await waitFor(() => expect(bridge.opens).toHaveLength(1));
+    await waitFor(() => expect(into.current?.info?.status).toEqual({ state: 'exited', exitCode: 2, signal: null }));
+    expect(into.current?.phase).toBe('exited');
+
+    Terminal.last().type('echo late\r');
+    expect(bridge.writes).toEqual([]);
+  });
+
+  it('strips the Electron IPC wrapper from an open failure', async () => {
+    const bridge = new FakeTerminalBridge();
+    bridge.open = async () => {
+      throw new Error(
+        "Error invoking remote method 'openvern:terminal:open': Error: At most 8 terminals can run at once. End one to open another.",
+      );
+    };
+    const { into } = mount(bridge);
+    await waitFor(() => expect(into.current?.phase).toBe('error'));
+    expect(into.current?.error).toBe('At most 8 terminals can run at once. End one to open another.');
+  });
+
+  it('reads the per-run shell limit naturally too', async () => {
+    const bridge = new FakeTerminalBridge();
+    bridge.open = async () => {
+      throw new Error(
+        "Error invoking remote method 'openvern:terminal:open': Error: OpenVern has started its limit of 100 shells in this run. Reopen the app to start another.",
+      );
+    };
+    const { into } = mount(bridge);
+    await waitFor(() => expect(into.current?.phase).toBe('error'));
+    expect(into.current?.error).toBe(
+      'OpenVern has started its limit of 100 shells in this run. Reopen the app to start another.',
+    );
+  });
+});
+
+describe('terminalErrorMessage', () => {
+  it('keeps a plain message as it is', () => {
+    expect(terminalErrorMessage(new Error('The folder is not available.'))).toBe('The folder is not available.');
+  });
+
+  it('falls back for an empty error or a non-Error value', () => {
+    expect(terminalErrorMessage(new Error('   '))).toBe("Couldn't open the terminal.");
+    expect(terminalErrorMessage('nope')).toBe("Couldn't open the terminal.");
+  });
+
+  it('removes repeated wrappers', () => {
+    expect(
+      terminalErrorMessage(
+        new Error("Error invoking remote method 'openvern:terminal:open': Error: Error: One message."),
+      ),
+    ).toBe('One message.');
+  });
 });
 
 describe('useTerminal: input, resize and unmount', () => {
@@ -132,6 +211,32 @@ describe('useTerminal: input, resize and unmount', () => {
     await running();
     Terminal.last().type('ls\r');
     expect(bridge.writes).toEqual([{ chatId: CHAT, data: 'ls\r' }]);
+  });
+
+  it('a large paste is split into ordered pieces of at most writeMaxBytes, without cutting a character', async () => {
+    const { bridge, running } = mount();
+    await running();
+    const paste = `${'a'.repeat(TERMINAL.writeMaxBytes - 1)}é${'🙂'.repeat(20)}${'b'.repeat(TERMINAL.writeMaxBytes)}`;
+    Terminal.last().type(paste);
+
+    expect(bridge.writes.length).toBeGreaterThan(1);
+    expect(bridge.writes.map((write) => write.data).join('')).toBe(paste);
+    for (const write of bridge.writes) expect(bytes(write.data)).toBeLessThanOrEqual(TERMINAL.writeMaxBytes);
+    // The character that straddled the first boundary survived whole, at the start of the next piece.
+    expect(bridge.writes[1]?.data.startsWith('é')).toBe(true);
+    for (const write of bridge.writes) expect(write.data).not.toMatch(/[\uD800-\uDBFF]$/);
+  });
+
+  it('splitTerminalWrite keeps surrogate pairs and multi-byte characters whole', () => {
+    expect(splitTerminalWrite('', 4)).toEqual([]);
+    expect(splitTerminalWrite('abcdef', 4)).toEqual(['abcd', 'ef']);
+    expect(splitTerminalWrite('😀😀', 4)).toEqual(['😀', '😀']);
+    // é is 2 bytes: a 3-byte budget leaves no room for a second one.
+    expect(splitTerminalWrite('aéé', 3)).toEqual(['aé', 'é']);
+    for (const piece of splitTerminalWrite(`${'x'.repeat(50)}🙂`, 7)) {
+      expect(bytes(piece)).toBeLessThanOrEqual(7);
+      expect(piece).not.toMatch(/[\uD800-\uDBFF]$/);
+    }
   });
 
   it('a resize reaches bridge.resize, after the fit is debounced', async () => {
@@ -146,6 +251,32 @@ describe('useTerminal: input, resize and unmount', () => {
     expect(Terminal.last()).toMatchObject({ cols: 100, rows: 30 });
   });
 
+  it('fits again once the mono font has loaded, and tells main the new size', async () => {
+    const original = Object.getOwnPropertyDescriptor(document, 'fonts');
+    let resolveFont: () => void = () => {};
+    const load = vi.fn(
+      () =>
+        new Promise<unknown>((resolve) => {
+          resolveFont = () => resolve([]);
+        }),
+    );
+    Object.defineProperty(document, 'fonts', { configurable: true, value: { load } });
+    try {
+      const { bridge, running } = mount();
+      await running();
+      expect(load).toHaveBeenCalled();
+
+      FitAddon.size = { cols: 90, rows: 30 };
+      const fitsBefore = FitAddon.fits;
+      resolveFont();
+      await waitFor(() => expect(FitAddon.fits).toBeGreaterThan(fitsBefore));
+      await waitFor(() => expect(bridge.resizes.at(-1)).toEqual({ chatId: CHAT, cols: 90, rows: 30 }));
+    } finally {
+      if (original) Object.defineProperty(document, 'fonts', original);
+      else Reflect.deleteProperty(document, 'fonts');
+    }
+  });
+
   it('after the shell exits, input and resizes are not sent until a restart', async () => {
     const { bridge, into, running } = mount();
     await running();
@@ -158,6 +289,38 @@ describe('useTerminal: input, resize and unmount', () => {
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(bridge.writes).toEqual([]);
     expect(bridge.resizes.some((r) => r.cols === 120)).toBe(false);
+  });
+
+  it('restart asks main to replace the exited shell and focuses the new terminal', async () => {
+    const { bridge, into, running } = mount();
+    await running();
+    act(() => bridge.emitExit(CHAT, { state: 'exited', exitCode: 0, signal: null }));
+
+    act(() => into.current?.restart());
+    await waitFor(() => expect(bridge.opens).toHaveLength(2));
+    expect(bridge.opens[1]).toMatchObject({ chatId: CHAT, restart: true });
+    await running();
+    expect(document.activeElement).toBe(Terminal.last().textarea);
+    expect(bridge.closes).toEqual([]);
+  });
+
+  it('retry opens again without asking main to replace a session', async () => {
+    const bridge = new FakeTerminalBridge();
+    const open = bridge.open.bind(bridge);
+    let fail = true;
+    bridge.open = async (request) => {
+      if (fail) {
+        fail = false;
+        throw new Error('Temporarily unavailable.');
+      }
+      return open(request);
+    };
+    const { into } = mount(bridge);
+    await waitFor(() => expect(into.current?.phase).toBe('error'));
+
+    act(() => into.current?.retry());
+    await waitFor(() => expect(into.current?.phase).toBe('running'));
+    expect(bridge.opens[0]).not.toHaveProperty('restart', true);
   });
 
   it('unmounting disposes xterm and does not close the session', async () => {

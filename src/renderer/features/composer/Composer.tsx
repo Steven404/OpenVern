@@ -18,6 +18,7 @@ import { ApiError } from '../../lib/api-client';
 import { useApiClient } from '../../lib/api-context';
 import { queryKeys } from '../../lib/query-keys';
 import { useUiStore } from '../../stores/ui';
+import { useTerminalUiStore } from '../terminal/terminal-store';
 import { AttachMenu } from './AttachMenu';
 import { ComposerAttachmentChips } from './AttachmentChips';
 import { IMAGE_UNSUPPORTED_MESSAGE, registerAttachmentSink, useDraftAttachments } from './attachments';
@@ -60,6 +61,13 @@ export interface ComposerProps {
 const HINT = 'Enter to send · Shift + Enter for a new line';
 const TOOLS_NOTICE = "This model can't use tools, so it won't read your project files.";
 const NO_KEY_NOTICE = 'Add your OpenRouter API key to start chatting.';
+/** The draft keeps a usable height even when the window is short and the terminal dock takes most of it. */
+const COMPOSER_MIN_MAX_HEIGHT = 96;
+
+/** How tall the growing draft may become: 40% of what the window has left after the terminal dock. */
+export function composerMaxHeight(viewportHeight: number, dockHeight: number): number {
+  return Math.max(COMPOSER_MIN_MAX_HEIGHT, Math.round((viewportHeight - dockHeight) * 0.4));
+}
 
 /** Shared reply / new-chat composer (D15, D16, D18): textarea, attach, model picker, send / stop, notices and hint. */
 export function Composer({
@@ -107,6 +115,11 @@ export function Composer({
 
   useEffect(() => (sinkKey ? registerAttachmentSink(sinkKey, addRef) : undefined), [sinkKey, addRef]);
 
+  // An open terminal dock is fixed space under the composer: the draft grows into what is left of the column instead
+  // of pushing the dock (and its prompt) below the window. `sinkKey` is the chat id for a reply composer.
+  const dockHeight = useTerminalUiStore((s) =>
+    sinkKey !== undefined && s.openDocks[sinkKey] === true ? s.dockHeight : 0,
+  );
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const inputId = useId();
@@ -123,16 +136,16 @@ export function Composer({
     if (autoFocus) textareaRef.current?.focus();
   }, [autoFocus]);
 
-  // Auto-grow up to 40% of the viewport.
+  // Auto-grow up to 40% of the viewport, less the dock when it is open.
   // biome-ignore lint/correctness/useExhaustiveDependencies: `text` is the trigger; the height is read from the DOM
   useLayoutEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = 'auto';
-    const max = Math.round(window.innerHeight * 0.4);
+    const max = composerMaxHeight(window.innerHeight, dockHeight);
     el.style.height = `${Math.min(el.scrollHeight, max)}px`;
     el.style.overflowY = el.scrollHeight > max ? 'auto' : 'hidden';
-  }, [text]);
+  }, [text, dockHeight]);
 
   const hasContent = text.trim().length > 0 || ready.length > 0;
   const canSend = hasContent && !uploading && !noKey && !running && !busy && !sending;

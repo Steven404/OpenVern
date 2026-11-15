@@ -1,7 +1,6 @@
 export { getTerminalBridge, hasTerminalBridge } from './bridge';
 export { isTerminalFocused, TERMINAL_DOCK_SELECTOR } from './dom';
 export { terminalSelectionBlock } from './selection';
-export { TerminalDock } from './TerminalDock';
 export {
   clampDockHeight,
   DOCK_MAX_FRACTION,
@@ -13,5 +12,6 @@ export {
   type TerminalUiState,
   useTerminalUiStore,
 } from './terminal-store';
-export { type TerminalHandle, type TerminalPhase, type UseTerminalOptions, useTerminal } from './use-terminal';
 export { type TerminalDockState, useCloseDeletedTerminals, useTerminalDock } from './use-terminal-dock';
+// `TerminalDock` and `useTerminal` are deliberately not re-exported: they pull in xterm and its stylesheet, and the
+// app loads the dock with `React.lazy` so the web build never pays for it.

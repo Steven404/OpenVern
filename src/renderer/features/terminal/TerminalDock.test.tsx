@@ -1,14 +1,19 @@
+import { AppProviders, AppRoutes } from '@renderer/app/App';
 import { location, renderApp, resetUi, seededClient } from '@renderer/app/test-utils';
 import { queryKeys } from '@renderer/lib/query-keys';
 import { TERMINAL } from '@shared/terminal';
 import type { ChatSummary } from '@shared/types';
-import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
+import { QueryClient } from '@tanstack/react-query';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { StrictMode } from 'react';
+import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // xterm cannot draw in jsdom: the terminal and its fit addon are recording fakes (see `test-fakes.ts`).
 vi.mock('@xterm/xterm', () => import('./test-fakes'));
 vi.mock('@xterm/addon-fit', () => import('./test-fakes'));
 
+import { availableDockHeight } from './TerminalDock';
 import { useTerminalUiStore } from './terminal-store';
 import { FakeTerminalBridge, installTerminalBridge, resetTerminalFakes, Terminal } from './test-fakes';
 
@@ -44,6 +49,23 @@ async function renderChat() {
   return { ...seed, ...view };
 }
 
+/** The same chat under `StrictMode`, which mounts, unmounts and remounts every effect (the app's own mode). */
+async function renderStrictChat() {
+  const seed = await seededClient();
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <StrictMode>
+      <AppProviders client={seed.client} queryClient={queryClient}>
+        <MemoryRouter initialEntries={[`/chat/${seed.chat.id}`]}>
+          <AppRoutes />
+        </MemoryRouter>
+      </AppProviders>
+    </StrictMode>,
+  );
+  await screen.findByRole('heading', { level: 1, name: seed.chat.title });
+  return seed;
+}
+
 /** `Ctrl`+backtick, the shortcut that opens the dock. */
 async function openDock() {
   fireEvent.keyDown(window, { key: '`', ctrlKey: true });
@@ -63,6 +85,17 @@ describe('terminal dock: opening and the header', () => {
     await openDock();
     expect(bridge.opens[0]).toMatchObject({ chatId: chat.id, cwd: project.rootPath });
     expect(await screen.findByText(`zsh · ${project.rootPath}`)).toBeTruthy();
+  });
+
+  it('lays out with a shrinkable basis and the dock floor, so a long draft cannot clip the prompt', async () => {
+    useTerminalUiStore.getState().setDockHeight(TERMINAL.dockDefaultHeight);
+    await renderChat();
+    await openDock();
+    const section = dock() as HTMLElement;
+    expect(section.style.flex).toBe(`0 1 ${TERMINAL.dockDefaultHeight}px`);
+    expect(section.style.minHeight).toBe(`${TERMINAL.dockMinHeight}px`);
+    // `shrink-0` was the bug: the dock must yield to the composer, never overflow its own column.
+    expect(section.className).not.toContain('shrink-0');
   });
 
   it('puts the cursor in the terminal when it opens', async () => {
@@ -111,7 +144,7 @@ describe('terminal dock: Hide, End and the session', () => {
     await waitFor(() => expect(bridge.hasSession(chat.id)).toBe(false));
   });
 
-  it('the exit code and Restart show when the shell exits, and Restart starts a new session', async () => {
+  it('the exit code and Restart show when the shell exits, and Restart replaces the shell and focuses it', async () => {
     const { chat } = await renderChat();
     await openDock();
     act(() => bridge.emitExit(chat.id, { state: 'exited', exitCode: 1, signal: null }));
@@ -120,11 +153,55 @@ describe('terminal dock: Hide, End and the session', () => {
     fireEvent.click(button('Restart'));
 
     await waitFor(() => expect(bridge.opens).toHaveLength(2));
-    expect(bridge.opens[1]).toMatchObject({ chatId: chat.id });
+    expect(bridge.opens[1]).toMatchObject({ chatId: chat.id, restart: true });
     await waitFor(() => expect(screen.queryByText('Shell exited with code 1.')).toBeNull());
     expect(Terminal.instances[0]?.disposed).toBe(true);
     expect(bridge.closes).toEqual([]);
     expect(button('End terminal')).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(Terminal.last().textarea));
+  });
+
+  it('hiding and reopening an exited chat attaches to it: the snapshot, exit line and Restart stay', async () => {
+    const { chat } = await renderChat();
+    await openDock();
+    bridge.emitData(chat.id, 'the last words\r\n', 1);
+    act(() => bridge.emitExit(chat.id, { state: 'exited', exitCode: 2, signal: null }));
+    await screen.findByText('Shell exited with code 2.');
+
+    fireEvent.click(button('Hide terminal'));
+    fireEvent.keyDown(window, { key: '`', ctrlKey: true });
+    await waitFor(() => expect(bridge.opens).toHaveLength(2));
+    // A plain open attaches to the exited session; only Restart may replace it.
+    expect(bridge.opens[1]).toMatchObject({ chatId: chat.id });
+    expect(bridge.opens[1]).not.toHaveProperty('restart', true);
+
+    await waitFor(() => expect(Terminal.last().writes).toEqual(['the last words\r\n']));
+    expect(await screen.findByText('Shell exited with code 2.')).toBeTruthy();
+    expect(button('Restart')).toBeTruthy();
+  });
+
+  it('a failed open shows a readable message and a Retry that opens again', async () => {
+    const seed = await seededClient();
+    const open = bridge.open.bind(bridge);
+    bridge.open = async () => {
+      throw new Error(
+        "Error invoking remote method 'openvern:terminal:open': Error: At most 8 terminals can run at once. End one to open another.",
+      );
+    };
+    renderApp({ client: seed.client, route: `/chat/${seed.chat.id}` });
+    await screen.findByRole('heading', { level: 1, name: seed.chat.title });
+    fireEvent.keyDown(window, { key: '`', ctrlKey: true });
+    await screen.findByRole('region', { name: 'Terminal' });
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toBe('At most 8 terminals can run at once. End one to open another.');
+    expect(alert.textContent).not.toContain('Error invoking remote method');
+
+    bridge.open = open;
+    fireEvent.click(button('Retry'));
+    await waitFor(() => expect(bridge.opens).toHaveLength(1));
+    expect(await screen.findByText(`zsh · ${seed.project.rootPath}`)).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it('an exit by signal names the signal instead of a code', async () => {
@@ -207,5 +284,151 @@ describe('terminal dock: chat lifecycle', () => {
     expect(dock()).not.toBeNull();
     expect(bridge.hasSession(chat.id)).toBe(true);
     expect(location()).toBe(`/chat/${chat.id}`);
+  });
+
+  it('a list that is still loading does not close a shell for a chat it omits', async () => {
+    const { client, chat, chats, queryClient } = await renderChat();
+    await openDock();
+    const other = chats.find((c) => c.id !== chat.id);
+    if (!other) throw new Error('seed has only one chat');
+
+    let release: (value: ChatSummary[]) => void = () => {};
+    const hanging = new Promise<ChatSummary[]>((resolve) => {
+      release = resolve;
+    });
+    vi.spyOn(client, 'listChats').mockReturnValue(hanging);
+    void queryClient.refetchQueries({ queryKey: queryKeys.chats });
+    await waitFor(() => expect(queryClient.isFetching({ queryKey: queryKeys.chats })).toBe(1));
+
+    // A refetch that has only part of the list (or a stale answer) must not look like a deletion.
+    act(() => queryClient.setQueryData(queryKeys.chats, [other]));
+    await waitFor(() => expect(queryClient.getQueryData(queryKeys.chats)).toEqual([other]));
+    expect(bridge.closes).toEqual([]);
+
+    release(chats);
+    await waitFor(() => expect(queryClient.isFetching({ queryKey: queryKeys.chats })).toBe(0));
+    expect(bridge.closes).toEqual([]);
+  });
+});
+
+describe('terminal dock: chats and projects that are not there', () => {
+  it("does not open a shell for a chat id that isn't in the loaded list", async () => {
+    const seed = await seededClient();
+    renderApp({ client: seed.client, route: '/chat/deleted-chat' });
+    await screen.findByText("This chat doesn't exist or was deleted.");
+
+    fireEvent.keyDown(window, { key: '`', ctrlKey: true });
+    expect(await screen.findByRole('region', { name: 'Terminal' })).toBeTruthy();
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain("This chat doesn't exist or was deleted");
+    expect(alert.textContent).toContain('no terminal to open');
+    expect(bridge.opens).toEqual([]);
+    expect(bridge.closes).toEqual([]);
+  });
+
+  it('a failed projects query shows a clear error with a way to retry', async () => {
+    const seed = await seededClient();
+    const listProjects = seed.client.listProjects.bind(seed.client);
+    seed.client.listProjects = async () => {
+      throw new Error('The project service is down.');
+    };
+
+    renderApp({ client: seed.client, route: `/chat/${seed.chat.id}` });
+    await screen.findByRole('heading', { level: 1, name: seed.chat.title });
+    fireEvent.keyDown(window, { key: '`', ctrlKey: true });
+    await screen.findByRole('region', { name: 'Terminal' });
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain("Couldn't load the project folder.");
+    expect(alert.textContent).toContain('The project service is down.');
+    expect(bridge.opens).toEqual([]);
+
+    seed.client.listProjects = listProjects;
+    fireEvent.click(within(dock() as HTMLElement).getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(bridge.opens).toHaveLength(1));
+    expect(bridge.opens[0]).toMatchObject({ chatId: seed.chat.id, cwd: seed.project.rootPath });
+    expect(await screen.findByText(`zsh · ${seed.project.rootPath}`)).toBeTruthy();
+  });
+});
+
+describe('terminal dock: focus', () => {
+  it('does not let a focus request linger and steal focus when switching chats', async () => {
+    const { chat, chats } = await renderChat();
+    await openDock();
+    expect(document.activeElement).toBe(Terminal.last().textarea);
+
+    const other = chats.find((c) => c.id !== chat.id);
+    if (!other) throw new Error('seed has only one chat');
+    fireEvent.click(screen.getAllByRole('link', { name: other.title })[0] as HTMLElement);
+    await screen.findByRole('heading', { level: 1, name: other.title });
+    composer().focus();
+
+    fireEvent.click(screen.getAllByRole('link', { name: chat.title })[0] as HTMLElement);
+    await screen.findByRole('heading', { level: 1, name: chat.title });
+    await waitFor(() => expect(dock()).not.toBeNull());
+    expect(document.activeElement).toBe(composer());
+    expect(document.activeElement).not.toBe(Terminal.last().textarea);
+  });
+
+  it('opening the dock under StrictMode still focuses the terminal', async () => {
+    await renderStrictChat();
+    fireEvent.keyDown(window, { key: '`', ctrlKey: true });
+    await screen.findByRole('region', { name: 'Terminal' });
+    await waitFor(() => expect(Terminal.instances.length).toBeGreaterThan(0));
+    await waitFor(() => expect(document.activeElement).toBe(Terminal.last().textarea));
+  });
+});
+
+describe('terminal dock: measured height limit', () => {
+  /** A fake chat column: jsdom has no layout, so every box is given its height by hand. */
+  function column(child: { height: number; flexGrow?: string; position?: string }[]): {
+    parent: HTMLElement;
+    dock: HTMLElement;
+  } {
+    const parent = document.createElement('div');
+    Object.defineProperty(parent, 'clientHeight', { configurable: true, value: 720 });
+    for (const spec of child) {
+      const el = document.createElement('div');
+      el.style.flexGrow = spec.flexGrow ?? '0';
+      el.style.position = spec.position ?? 'static';
+      el.getBoundingClientRect = () => ({ height: spec.height }) as DOMRect;
+      parent.append(el);
+    }
+    const dock = document.createElement('section');
+    parent.append(dock);
+    return { parent, dock };
+  }
+
+  it('leaves the conversation its floor and ignores the flexible child and absolute buttons', () => {
+    const { dock } = column([
+      { height: 64 },
+      { height: 300, flexGrow: '1' },
+      { height: 276 },
+      { height: 36, position: 'absolute' },
+    ]);
+    // 720 − header 64 − composer 276 − conversation floor 96.
+    expect(availableDockHeight(dock)).toBe(284);
+  });
+
+  it('never goes below the dock floor', () => {
+    const { dock } = column([{ height: 64 }, { height: 0, flexGrow: '1' }, { height: 700 }]);
+    expect(availableDockHeight(dock)).toBe(TERMINAL.dockMinHeight);
+  });
+
+  it('is null when there is no layout to measure', () => {
+    expect(availableDockHeight(null)).toBeNull();
+    const parent = document.createElement('div');
+    Object.defineProperty(parent, 'clientHeight', { configurable: true, value: 0 });
+    const dock = document.createElement('section');
+    parent.append(dock);
+    expect(availableDockHeight(dock)).toBeNull();
+  });
+});
+
+describe('terminal dock: module boundaries', () => {
+  it('the barrel does not pull xterm in: the dock and the hook are loaded lazily', async () => {
+    const barrel = await import('./index');
+    expect('TerminalDock' in barrel).toBe(false);
+    expect('useTerminal' in barrel).toBe(false);
   });
 });

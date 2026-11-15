@@ -329,10 +329,7 @@ describe('Terminal row in the desktop app', () => {
     expect(within(panel()).queryByRole('tab', { name: 'Terminal' })).toBeNull();
   });
 
-  // KNOWN GAP (terminal plan §5, "Focus: opening the dock focuses the terminal"): the dock only asks for focus when it
-  // mounts, so choosing the row while the dock is already open leaves the cursor in the composer. Marked `it.fails` so
-  // the suite stays green; once the code focuses the terminal here, this fails and the marker should be removed.
-  it.fails('choosing the row while the dock is already open puts the cursor in the terminal', async () => {
+  it('choosing the row while the dock is already open puts the cursor in the terminal', async () => {
     await renderChat();
     await openLauncher();
     fireEvent.click(terminalRow());
