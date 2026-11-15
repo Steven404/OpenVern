@@ -132,14 +132,14 @@ describe('right panel shell', () => {
 });
 
 describe('launcher rules', () => {
-  it('Terminal is always disabled; Diff is disabled until the chat has edits', async () => {
+  it('Terminal is disabled in the web build; Diff is disabled until the chat has edits', async () => {
     await renderChat();
     openPanel();
     fireEvent.click(within(panel()).getByRole('button', { name: 'Open a panel' }));
     const terminal = within(panel()).getByRole('button', { name: /Terminal/ }) as HTMLButtonElement;
     const diff = within(panel()).getByRole('button', { name: /Diff/ }) as HTMLButtonElement;
     expect(terminal.disabled).toBe(true);
-    expect(terminal.textContent).toContain('Not available yet');
+    expect(terminal.textContent).toContain('Available in the desktop app');
     expect(diff.disabled).toBe(true);
     expect(diff.textContent).toContain('Available after the current chat has made edits');
     expect((within(panel()).getByRole('button', { name: /^Files/ }) as HTMLButtonElement).disabled).toBe(false);

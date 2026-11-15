@@ -1,5 +1,5 @@
-// Layout of the design: sidebar (272px) + chat column (+ right panel, v0.2). Also owns sidebar collapse (D2),
-// global shortcuts, and the two app-level modals (Settings, New project).
+// Layout of the design: sidebar (272px) + chat column (+ right panel, v0.2) + the terminal dock at the bottom of the
+// chat column. Also owns sidebar collapse (D2), global shortcuts, and the two app-level modals (Settings, New project).
 //
 // The row never wraps: the chat column keeps `LAYOUT.conversationMin`, the panel `LAYOUT.panelMin`, and the root has
 // the window's minimum size, so a smaller browser window scrolls instead of reflowing (the narrow overlay is gone).
@@ -10,6 +10,7 @@ import { RightPanel } from '@renderer/features/right-panel';
 import { SettingsModal } from '@renderer/features/settings';
 import { SIDEBAR_COLLAPSE_BUTTON_ID, Sidebar } from '@renderer/features/sidebar';
 import { PanelIcon } from '@renderer/features/sidebar/icons';
+import { TerminalDock, useCloseDeletedTerminals, useTerminalDock } from '@renderer/features/terminal';
 import { useUiStore } from '@renderer/stores/ui';
 import { APP_NAME, LAYOUT } from '@shared/constants';
 import { useCallback, useEffect, useRef } from 'react';
@@ -26,6 +27,9 @@ export function AppShell() {
   const panelOpen = useUiStore((s) => s.rightPanelOpen);
   const currentChatId = useCurrentChatId();
   const panelTarget = useRightPanelTarget();
+  // The terminal dock is the chat column's bottom strip (a chat's terminal; the new-chat screen has none).
+  const terminal = useTerminalDock(currentChatId);
+  useCloseDeletedTerminals();
 
   // `ChatHeader` titles the window after its chat; everywhere else it is just the app name.
   useEffect(() => {
@@ -46,7 +50,11 @@ export function AppShell() {
   const setVisible = useCallback((next: boolean) => setCollapsed(!next), [setCollapsed]);
   const toggleSidebar = useCallback(() => setVisible(!visible), [setVisible, visible]);
 
-  useGlobalShortcuts({ toggleSidebar, toggleRightPanel: panelTarget ? toggleRightPanel : undefined });
+  useGlobalShortcuts({
+    toggleSidebar,
+    toggleRightPanel: panelTarget ? toggleRightPanel : undefined,
+    toggleTerminal: terminal.shortcut,
+  });
 
   return (
     <div
@@ -81,6 +89,7 @@ export function AppShell() {
           </IconButton>
         )}
         <Outlet />
+        {currentChatId && terminal.open ? <TerminalDock key={currentChatId} chatId={currentChatId} /> : null}
       </main>
 
       {panelTarget && panelOpen ? <RightPanel chatId={panelTarget.chatId} projectId={panelTarget.projectId} /> : null}

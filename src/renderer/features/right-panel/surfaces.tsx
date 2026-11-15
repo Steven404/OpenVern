@@ -1,11 +1,14 @@
 // Surface slot API. A "surface" is a full-height view in the right panel (Files, Terminal, Diff). The launcher and
 // tab strip are driven by this registry. G5 plugs the Diff surface in by replacing the `diff` entry's `Component`
-// (G5: `DiffSurface`).
+// (G5: `DiffSurface`). The terminal is the exception: it is a dock under the composer, so its row opens that instead
+// of a panel tab (terminal plan §2, "Placement"; §5 "Launcher row").
 
 import type { Id } from '@shared/types';
 import type { ComponentType, ReactNode } from 'react';
 import { DiffSurface } from '../changes/DiffSurface';
 import { FilesSurface } from '../files/FilesSurface';
+import { hasTerminalBridge } from '../terminal/bridge';
+import { openTerminalDock } from '../terminal/terminal-store';
 import { DiffIcon, FilesIcon, TerminalIcon } from './icons';
 
 export type SurfaceId = 'files' | 'terminal' | 'diff';
@@ -16,6 +19,8 @@ export interface SurfaceContext {
   projectId: Id | null;
   /** The chat has pending or applied edits (`chatChanges` query). */
   hasChanges: boolean;
+  /** The new-chat screen, which has no chat (and so no terminal) yet. */
+  draft: boolean;
 }
 
 export interface SurfaceProps {
@@ -39,8 +44,10 @@ export interface SurfaceDefinition {
   availability(ctx: SurfaceContext): { enabled: boolean; hint: string };
   /** `pinned` surfaces always have the first tab (Files); others get a closable tab once opened. */
   tab: 'pinned' | 'opened';
-  /** Absent = cannot be opened (Terminal). */
+  /** Absent = no panel body (the terminal opens the dock instead). */
   Component?: ComponentType<SurfaceProps>;
+  /** Opens something outside the panel instead of a tab: the launcher calls this before `onOpen`. */
+  onSelect?(ctx: SurfaceContext): void;
 }
 
 const registry: SurfaceDefinition[] = [
@@ -61,8 +68,17 @@ const registry: SurfaceDefinition[] = [
     label: 'Terminal',
     key: 'T',
     icon: <TerminalIcon />,
-    availability: () => ({ enabled: false, hint: 'Not available yet' }),
+    availability: ({ draft, projectId }) => {
+      if (!hasTerminalBridge()) return { enabled: false, hint: 'Available in the desktop app' };
+      if (draft) return { enabled: false, hint: 'Available once the chat has started' };
+      return {
+        enabled: true,
+        hint: projectId ? 'Open a shell in the project folder' : 'Open a shell in your home folder',
+      };
+    },
     tab: 'opened',
+    // Not a panel tab: the row opens the dock under the composer (terminal plan §2, "Opening").
+    onSelect: ({ chatId }) => openTerminalDock(chatId),
   },
   {
     id: 'diff',

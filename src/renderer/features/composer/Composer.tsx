@@ -24,6 +24,7 @@ import { IMAGE_UNSUPPORTED_MESSAGE, registerAttachmentSink, useDraftAttachments 
 import { EffortPicker } from './EffortPicker';
 import { ModelPicker } from './ModelPicker';
 import { useModels, useSettings } from './queries';
+import { registerTextSink } from './text-sink';
 
 export type ComposerVariant = 'reply' | 'new';
 
@@ -109,6 +110,14 @@ export function Composer({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const inputId = useId();
+
+  // The text sink (terminal plan T3.5): "Add selection to chat" inserts a fenced block after whatever is typed, and the
+  // caret goes to the composer so the user can ask about it.
+  const insertText = useCallback((block: string) => {
+    setText((previous) => (previous.trim() === '' ? block : `${previous.replace(/\s+$/, '')}\n\n${block}`));
+    textareaRef.current?.focus();
+  }, []);
+  useEffect(() => (sinkKey ? registerTextSink(sinkKey, insertText) : undefined), [sinkKey, insertText]);
 
   useEffect(() => {
     if (autoFocus) textareaRef.current?.focus();
@@ -222,6 +231,7 @@ export function Composer({
         <textarea
           id={inputId}
           ref={textareaRef}
+          data-composer-input=""
           value={text}
           rows={isNew ? 3 : 2}
           onChange={(e) => setText(e.target.value)}

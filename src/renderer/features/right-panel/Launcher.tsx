@@ -1,8 +1,11 @@
 import { cx } from '@renderer/components/ui';
 import { type KeyboardEvent, useEffect, useRef } from 'react';
-import { getSurfaces, type SurfaceContext, type SurfaceId } from './surfaces';
+import { getSurfaces, type SurfaceContext, type SurfaceDefinition, type SurfaceId } from './surfaces';
 
-/** "Open a panel": one row per surface. F / T / D open a row while the launcher has focus. */
+/**
+ * "Open a panel": one row per surface. F / T / D open a row while the launcher has focus. A definition with
+ * `onSelect` (Terminal) opens its own thing (the dock) instead of a panel tab.
+ */
 export function Launcher({ ctx, onOpen }: { ctx: SurfaceContext; onOpen: (id: SurfaceId) => void }) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -12,13 +15,19 @@ export function Launcher({ ctx, onOpen }: { ctx: SurfaceContext; onOpen: (id: Su
     if (el && document.activeElement && el.closest('#right-panel')?.contains(document.activeElement)) el.focus();
   }, []);
 
+  const activate = (def: SurfaceDefinition) => {
+    if (!def.availability(ctx).enabled) return;
+    if (def.onSelect) def.onSelect(ctx);
+    else if (def.Component) onOpen(def.id);
+  };
+
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.ctrlKey || event.metaKey || event.altKey) return;
     const key = event.key.toUpperCase();
     const def = getSurfaces().find((d) => d.key === key);
     if (!def) return;
     event.preventDefault();
-    if (def.availability(ctx).enabled && def.Component) onOpen(def.id);
+    activate(def);
   };
 
   return (
@@ -33,7 +42,7 @@ export function Launcher({ ctx, onOpen }: { ctx: SurfaceContext; onOpen: (id: Su
       <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
         {getSurfaces().map((def) => {
           const { enabled, hint } = def.availability(ctx);
-          const disabled = !enabled || !def.Component;
+          const disabled = !enabled || (!def.Component && !def.onSelect);
           return (
             <li key={def.id}>
               <button
@@ -41,7 +50,7 @@ export function Launcher({ ctx, onOpen }: { ctx: SurfaceContext; onOpen: (id: Su
                 disabled={disabled}
                 aria-keyshortcuts={def.key}
                 title={hint}
-                onClick={() => onOpen(def.id)}
+                onClick={() => activate(def)}
                 className={cx(
                   'flex min-h-[52px] w-full items-center gap-3 rounded-[8px] px-2.5 py-1.5 text-left text-[14.5px]',
                   disabled

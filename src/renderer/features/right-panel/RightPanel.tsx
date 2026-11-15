@@ -19,6 +19,7 @@ import { FileIcon, PlusIcon, XIcon } from './icons';
 import { Launcher } from './Launcher';
 import { availablePanelWidth } from './layout';
 import {
+  DRAFT_PANEL_CHAT_ID,
   type PanelTab,
   type PanelTarget,
   resetFileState,
@@ -60,7 +61,12 @@ export function RightPanel({ chatId, projectId }: { chatId: Id; projectId: Id | 
   const openSurface = usePanelStore((s) => s.openSurface);
   useRefreshProjectFiles(chatId, projectId);
 
-  const ctx: SurfaceContext = { chatId, projectId: projectId ?? null, hasChanges };
+  const ctx: SurfaceContext = {
+    chatId,
+    projectId: projectId ?? null,
+    hasChanges,
+    draft: chatId === DRAFT_PANEL_CHAT_ID,
+  };
   const filesEnabled = getSurface('files')?.availability(ctx).enabled ?? false;
 
   const defaultTarget: PanelTarget = filesEnabled ? { type: 'surface', id: 'files' } : { type: 'launcher' };
