@@ -2,11 +2,16 @@
 // at a fraction (the "list ratio") of the body below the "Review changes" header, so a long proposal scrolls its list
 // instead of pushing the diff out of view. No React or DOM here: the component measures, these decide.
 
-export const LIST_RATIO_DEFAULT = 0.35;
+import { LIST_RATIO_DEFAULT } from '@shared/constants';
+
 /** The list never gets shorter than this, even when the body is small. */
 export const LIST_MIN_PX = 96;
 /** The diff never gets shorter than this; if both minimums cannot fit, the list minimum wins. */
 export const DIFF_MIN_PX = 160;
+/** The resize handle's height (`h-1.5`), which sits between the list and the diff. */
+export const HANDLE_PX = 6;
+/** A pointer drag changes the ratio only after it has moved this far, so a click or a jiggle leaves it alone. */
+export const DRAG_START_PX = 3;
 /** Keyboard step on the resize handle, as a fraction of the body. Shift steps by `KEY_STEP_BIG`. */
 export const KEY_STEP = 0.02;
 export const KEY_STEP_BIG = 0.1;
@@ -22,7 +27,7 @@ const CARD_PREVIEW_ROWS = 6;
 export function listRatioBounds(bodyPx: number): { min: number; max: number } {
   if (bodyPx <= 0) return { min: 0.1, max: 0.8 };
   const min = LIST_MIN_PX / bodyPx;
-  let max = 1 - DIFF_MIN_PX / bodyPx;
+  let max = 1 - (DIFF_MIN_PX + HANDLE_PX) / bodyPx;
   if (min > max) max = min;
   return { min, max };
 }
@@ -59,9 +64,11 @@ export function ratioFromKey(ratio: number, key: string, shift: boolean, bodyPx:
 
 /**
  * How many rows a card shows. Up to `CARD_THRESHOLD` files, everything; above it, a preview of
- * `CARD_PREVIEW_ROWS` until `expanded`. `hidden` is what the "Show all" button reveals.
+ * `CARD_PREVIEW_ROWS` until `expanded`. `hidden` is what the "Show all" button reveals. `collapsible` is whether the
+ * card has a toggle at all: it depends only on the count, so an expanded card that shrinks loses its "Show fewer".
  */
-export function cardRows(total: number, expanded: boolean): { shown: number; hidden: number } {
-  const shown = expanded || total <= CARD_THRESHOLD ? total : CARD_PREVIEW_ROWS;
-  return { shown, hidden: total - shown };
+export function cardRows(total: number, expanded: boolean): { shown: number; hidden: number; collapsible: boolean } {
+  const collapsible = total > CARD_THRESHOLD;
+  const shown = expanded || !collapsible ? total : CARD_PREVIEW_ROWS;
+  return { shown, hidden: total - shown, collapsible };
 }

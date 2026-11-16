@@ -1,8 +1,7 @@
 // Global UI state (owned by S6; seeded by the orchestrator so S7 can open modals without depending on S6 code).
 // S6 added the sidebar / expansion fields below but kept the original names.
 
-import { clampListRatio, LIST_RATIO_DEFAULT } from '@renderer/features/changes/list-split';
-import { LAYOUT } from '@shared/constants';
+import { LAYOUT, LIST_RATIO_DEFAULT } from '@shared/constants';
 import type { Id } from '@shared/types';
 import { create } from 'zustand';
 
@@ -29,13 +28,19 @@ function readPanelWidth(): number {
 }
 
 /**
- * Stored as a fraction. The store cannot know the body height, so it clamps to the unmeasured range; the Diff
- * surface clamps again against the real body when it drags or steps the handle.
+ * The store only sanitizes a list ratio: a non-finite value becomes the default, anything else is kept within [0, 1].
+ * It never clamps to the body height, which it cannot know. The Diff surface clamps to the measured body when it
+ * renders, so a small window never rewrites the stored preference.
  */
+function sanitizeListRatio(ratio: number): number {
+  if (!Number.isFinite(ratio)) return LIST_RATIO_DEFAULT;
+  return Math.min(1, Math.max(0, ratio));
+}
+
 function readListRatio(): number {
   const raw = readStorage(STORAGE_KEYS.diffListRatio);
   if (raw === null) return LIST_RATIO_DEFAULT;
-  return clampListRatio(Number(raw), 0);
+  return sanitizeListRatio(Number(raw));
 }
 
 function readStorage(key: string): string | null {
@@ -137,10 +142,10 @@ export interface UiState {
 
   /**
    * Diff surface: the file list's height as a fraction of the body below its header. Global, not per chat. Persisted
-   * (`openvern.diffListRatio`). Clamped to the unmeasured range here; see `clampListRatio` for the measured one.
+   * (`openvern.diffListRatio`). Kept raw (only sanitized to [0, 1]); the Diff surface clamps it to the measured body.
    */
   diffListRatio: number;
-  /** Clamps. Writes storage unless `persist: false` (mid-drag); then call `commitDiffListRatio` once. */
+  /** Sanitizes to [0, 1]. Writes storage unless `persist: false` (mid-drag); then call `commitDiffListRatio` once. */
   setDiffListRatio(ratio: number, options?: { persist?: boolean }): void;
   /** Writes the current ratio to storage. */
   commitDiffListRatio(): void;
@@ -188,7 +193,7 @@ export const useUiStore = create<UiState>()((set, get) => ({
   },
   commitRightPanelWidth: () => writeStorage(STORAGE_KEYS.rightPanelWidth, String(get().rightPanelWidth)),
   setDiffListRatio: (ratio, options) => {
-    const diffListRatio = clampListRatio(ratio, 0);
+    const diffListRatio = sanitizeListRatio(ratio);
     if (options?.persist !== false) writeStorage(STORAGE_KEYS.diffListRatio, String(diffListRatio));
     set({ diffListRatio });
   },

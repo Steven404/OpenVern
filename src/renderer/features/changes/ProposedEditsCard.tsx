@@ -36,11 +36,11 @@ function CardShell({
   rows: ReactNode[];
   footer: ReactNode;
 }) {
-  // Long lists show a preview; the toggle is local to this card and not persisted.
+  // Long lists show a preview; the toggle is local to this card and not persisted. The toggle follows the count, so
+  // a card that expanded and then shrank does not keep a stale "Show fewer".
   const [expanded, setExpanded] = useState(false);
   const listId = useId();
-  const { shown } = cardRows(rows.length, expanded);
-  const showToggle = rows.length > shown || expanded;
+  const { shown, collapsible } = cardRows(rows.length, expanded);
   return (
     <section
       aria-label={title}
@@ -54,10 +54,10 @@ function CardShell({
         <span className="flex-1" />
         <Totals add={add} del={del} />
       </div>
-      <ul id={listId} className={cx('m-0 flex list-none flex-col gap-px px-2', !showToggle && 'pb-2')}>
+      <ul id={listId} className={cx('m-0 flex list-none flex-col gap-px px-2', !collapsible && 'pb-2')}>
         {rows.slice(0, shown)}
       </ul>
-      {showToggle ? (
+      {collapsible ? (
         <div className="px-2 pt-0.5 pb-2">
           <button
             type="button"

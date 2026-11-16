@@ -7,7 +7,7 @@ import { useApiClient } from '@renderer/lib/api-context';
 import { queryKeys } from '@renderer/lib/query-keys';
 import { useRunsStore } from '@renderer/stores/runs';
 import { useUiStore } from '@renderer/stores/ui';
-import { LAYOUT } from '@shared/constants';
+import { LAYOUT, LIST_RATIO_DEFAULT } from '@shared/constants';
 import type { DiffHunk, FileChange, PendingChanges } from '@shared/types';
 import { useQueryClient } from '@tanstack/react-query';
 import { ArrowRight, Check, ChevronsUpDown, Columns2, Rows3, X } from 'lucide-react';
@@ -37,11 +37,24 @@ import {
   progressLabel,
   progressOf,
 } from './diff';
-import { LIST_RATIO_DEFAULT, listRatioBounds, ratioFromDrag, ratioFromKey } from './list-split';
+import { clampListRatio, DRAG_START_PX, listRatioBounds, ratioFromDrag, ratioFromKey } from './list-split';
 import { HunkLines, PathLabel, StatusBadge, Totals } from './parts';
 import { type DiffMode, useDecisions, useReviewStore, useReviewView } from './review-store';
 
 const STALE_MESSAGE = 'The proposed edits changed while you were reviewing. Review them again.';
+
+/**
+ * Scrolls `nav` the least it takes to bring `row` inside its visible box. Only `nav` moves: `scrollIntoView` would
+ * also scroll the ancestors (the header and the panel). Rects are viewport-relative, so the current scroll is included.
+ */
+function revealInList(nav: HTMLElement, row: HTMLElement): void {
+  const navRect = nav.getBoundingClientRect();
+  const top = navRect.top + nav.clientTop;
+  const bottom = top + nav.clientHeight;
+  const rowRect = row.getBoundingClientRect();
+  if (rowRect.top < top) nav.scrollTop -= top - rowRect.top;
+  else if (rowRect.bottom > bottom) nav.scrollTop += rowRect.bottom - bottom;
+}
 
 function useWindowWidth(): number {
   const [w, setW] = useState(() => (typeof window === 'undefined' ? 0 : window.innerWidth));
@@ -166,13 +179,15 @@ export function DiffSurface({ chatId, params }: SurfaceProps) {
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // The file list's height is a ceiling: `diffListRatio` of the body below the header (see list-split.ts). The body
+  // The file list's height is a ceiling: the list ratio of the body below the header (see list-split.ts). The body
   // element is a state so the observer attaches when the body mounts (it is absent while there are no edits).
   const diffListRatio = useUiStore((s) => s.diffListRatio);
   const setDiffListRatio = useUiStore((s) => s.setDiffListRatio);
   const commitDiffListRatio = useUiStore((s) => s.commitDiffListRatio);
   const [bodyEl, setBodyEl] = useState<HTMLDivElement | null>(null);
   const [bodyPx, setBodyPx] = useState(0);
+  // A drag reads the height through this ref, so it always uses the latest measure rather than the one at drag start.
+  const bodyPxRef = useRef(0);
   const navRef = useRef<HTMLElement>(null);
   const [dragging, setDragging] = useState(false);
   const stopDrag = useRef<(() => void) | null>(null);
@@ -180,7 +195,11 @@ export function DiffSurface({ chatId, params }: SurfaceProps) {
   // Layout effect: the first paint already uses the measured ceiling, not the percentage fallback.
   useLayoutEffect(() => {
     if (!bodyEl) return;
-    const update = () => setBodyPx(bodyEl.getBoundingClientRect().height);
+    const update = () => {
+      const px = bodyEl.getBoundingClientRect().height;
+      bodyPxRef.current = px;
+      setBodyPx(px);
+    };
     update();
     if (typeof ResizeObserver === 'undefined') return;
     const observer = new ResizeObserver(update);
@@ -197,38 +216,53 @@ export function DiffSurface({ chatId, params }: SurfaceProps) {
       document.body.style.userSelect = userSelect;
     };
   }, [dragging]);
+  // The rendered ratio is the stored preference clamped to the measured body. The store keeps the raw value, so a
+  // small window narrows what is shown without rewriting the preference.
+  const ratio = clampListRatio(diffListRatio, bodyPx);
+  const listBounds = listRatioBounds(bodyPx);
+  const ceilingPx = Math.round(ratio * bodyPx);
+  const listMaxHeight = bodyPx > 0 ? `${ceilingPx}px` : `${ratio * 100}%`;
   const onListResizeStart = (event: ReactPointerEvent) => {
     // Without a measured body there is nothing to take a fraction of; the keyboard still works.
     if (event.button !== 0 || bodyPx <= 0) return;
     event.preventDefault();
     stopDrag.current?.();
     const startY = event.clientY;
-    // Drag from what is on screen: the list may be shorter than its ceiling when it has few files.
-    const startListPx = navRef.current?.getBoundingClientRect().height ?? 0;
+    // Start from the ceiling the user sees. A short list is shorter than its ceiling, and starting from its natural
+    // height would lower the ceiling on any small drag.
+    const naturalPx = navRef.current?.getBoundingClientRect().height ?? 0;
+    const startListPx = Math.max(naturalPx, ceilingPx);
+    let moved = false;
     setDragging(true);
     const move = (ev: PointerEvent) => {
-      setDiffListRatio(ratioFromDrag(startListPx, ev.clientY - startY, bodyPx), { persist: false });
+      const deltaY = ev.clientY - startY;
+      // A click or a jiggle is not a resize: the ratio changes only once the pointer has really moved.
+      if (!moved && Math.abs(deltaY) < DRAG_START_PX) return;
+      moved = true;
+      const body = bodyPxRef.current;
+      if (body <= 0) return;
+      setDiffListRatio(ratioFromDrag(startListPx, deltaY, body), { persist: false });
     };
     const up = () => {
-      commitDiffListRatio();
+      if (moved) commitDiffListRatio();
       setDragging(false);
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
       stopDrag.current = null;
     };
     stopDrag.current = up;
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
   };
   const onListResizeKey = (event: ReactKeyboardEvent) => {
-    const next = ratioFromKey(diffListRatio, event.key, event.shiftKey, bodyPx);
+    const next = ratioFromKey(ratio, event.key, event.shiftKey, bodyPx);
     if (next === null) return;
     event.preventDefault();
     setDiffListRatio(next);
   };
-  const resetListRatio = () => setDiffListRatio(LIST_RATIO_DEFAULT);
-  const listBounds = listRatioBounds(bodyPx);
-  const listMaxHeight = bodyPx > 0 ? `${Math.round(diffListRatio * bodyPx)}px` : `${diffListRatio * 100}%`;
+  const resetListRatio = () => setDiffListRatio(clampListRatio(LIST_RATIO_DEFAULT, bodyPx));
 
   // Split needs a panel at least `splitMin` wide. The panel only widens on an explicit Split click (never on its
   // own), and only when the window has room; otherwise Split is disabled. `windowWidth` is 0 only before it is known.
@@ -263,9 +297,11 @@ export function DiffSurface({ chatId, params }: SurfaceProps) {
   }, [cur?.path]);
 
   // Keep the current file's row visible in a list that now scrolls on its own.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: scroll the current row into view when the file changes
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reveal the current row when the file changes
   useEffect(() => {
-    navRef.current?.querySelector<HTMLElement>('[aria-current="true"]')?.scrollIntoView?.({ block: 'nearest' });
+    const nav = navRef.current;
+    const row = nav?.querySelector<HTMLElement>('[aria-current="true"]');
+    if (nav && row) revealInList(nav, row);
   }, [cur?.path]);
 
   const conflicts = new Map(applied.at(-1)?.conflicts.map((c) => [c.path, c.reason]) ?? []);
@@ -423,7 +459,7 @@ export function DiffSurface({ chatId, params }: SurfaceProps) {
         <hr
           aria-orientation="horizontal"
           aria-label="Resize file list"
-          aria-valuenow={Math.round(diffListRatio * 100)}
+          aria-valuenow={Math.round(ratio * 100)}
           aria-valuemin={Math.round(listBounds.min * 100)}
           aria-valuemax={Math.round(listBounds.max * 100)}
           tabIndex={0}

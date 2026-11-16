@@ -164,6 +164,14 @@ async function renderStaged() {
 const panel = () => screen.getByRole('complementary', { name: 'Right panel' });
 const card = async () => screen.findByTestId('changes-card');
 
+async function openReview() {
+  const seed = await renderStaged();
+  fireEvent.click(within(await card()).getByRole('button', { name: /Review changes/ }));
+  const p = await waitFor(() => panel());
+  await within(p).findByRole('button', { name: 'Apply' });
+  return { ...seed, p };
+}
+
 describe('proposed edits card', () => {
   it('sits under the turn of PendingChanges.messageId and lists the files', async () => {
     const { client, chat } = await renderStaged();
@@ -196,14 +204,6 @@ describe('proposed edits card', () => {
 });
 
 describe('review pane', () => {
-  async function openReview() {
-    const seed = await renderStaged();
-    fireEvent.click(within(await card()).getByRole('button', { name: /Review changes/ }));
-    const p = await waitFor(() => panel());
-    await within(p).findByRole('button', { name: 'Apply' });
-    return { ...seed, p };
-  }
-
   it('sizes the file list from a keyboard handle, saved globally', async () => {
     const { p } = await openReview();
     const handle = within(p).getByRole('separator', { name: 'Resize file list' });
@@ -236,30 +236,6 @@ describe('review pane', () => {
     window.localStorage.setItem(STORAGE_KEYS.diffListRatio, '0.5');
     act(() => useUiStore.setState(readPersistedUi()));
     expect(handle.getAttribute('aria-valuenow')).toBe('50');
-  });
-
-  it('scrolls the current file row into view when the file changes', async () => {
-    const scrolled: Element[] = [];
-    const original = Element.prototype.scrollIntoView;
-    Element.prototype.scrollIntoView = vi.fn(function (this: Element) {
-      scrolled.push(this);
-    });
-    try {
-      const { p } = await openReview();
-      fireEvent.click(within(await card()).getByRole('button', { name: /constants\.ts/ }));
-      await waitFor(() =>
-        expect(
-          within(p)
-            .getByRole('button', { name: /constants\.ts/ })
-            .getAttribute('aria-current'),
-        ).toBe('true'),
-      );
-      const last = scrolled.at(-1);
-      expect(last?.getAttribute('aria-current')).toBe('true');
-      expect(last?.textContent).toContain('constants.ts');
-    } finally {
-      Element.prototype.scrollIntoView = original;
-    }
   });
 
   it('decides hunks, shows labels and applies the accepted ones', async () => {
@@ -433,6 +409,194 @@ describe('review pane', () => {
   });
 });
 
+// jsdom has no layout. These stubs measure the review pane: the body is `bodyPx` tall, the file list is `navPx` tall
+// (its natural height and its visible box), and each row is `ROW_PX` tall and moves with the list's scroll, so an
+// off-screen row has a real position.
+const ROW_PX = 36;
+const LIST = 'nav[aria-label="Changed files"]';
+
+interface Layout {
+  bodyPx: number;
+  navPx: number;
+}
+
+function stubLayout(layout: Layout): void {
+  const rect = (top: number, height: number) =>
+    ({ top, bottom: top + height, left: 0, right: 0, width: 0, height, x: 0, y: top, toJSON: () => ({}) }) as DOMRect;
+  vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+    if (this.matches(LIST)) return rect(0, layout.navPx);
+    if (this.querySelector(`:scope > ${LIST}`)) return rect(0, layout.bodyPx);
+    const nav = this.closest(LIST);
+    const item = this.closest('li');
+    if (!nav || !item) return rect(0, 0);
+    const index = Array.from(nav.querySelectorAll('li')).indexOf(item);
+    return rect(index * ROW_PX - (nav as HTMLElement).scrollTop, ROW_PX);
+  });
+  vi.spyOn(Element.prototype, 'clientHeight', 'get').mockImplementation(function (this: Element) {
+    return this.matches(LIST) ? layout.navPx : 0;
+  });
+}
+
+describe('measured file list', () => {
+  let layout: Layout;
+  beforeEach(() => {
+    layout = { bodyPx: 500, navPx: 175 };
+    stubLayout(layout);
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  });
+
+  async function openMeasured() {
+    const { p } = await openReview();
+    return {
+      handle: within(p).getByRole('separator', { name: 'Resize file list' }),
+      nav: within(p).getByRole('navigation', { name: 'Changed files' }),
+    };
+  }
+  const fileRow = (nav: HTMLElement, index: number): HTMLElement => {
+    const row = within(nav).getAllByRole('button')[index];
+    if (!row) throw new Error(`no file row ${index}`);
+    return row;
+  };
+  const listWrites = (spy: { mock: { calls: unknown[][] } }) =>
+    spy.mock.calls.filter(([key]) => key === STORAGE_KEYS.diffListRatio);
+
+  it('shows the stored ratio clamped to a small body, and keeps the stored preference', async () => {
+    layout.bodyPx = 400;
+    layout.navPx = 234;
+    useUiStore.setState({ diffListRatio: 0.8 });
+    const { handle, nav } = await openMeasured();
+    const now = Number(handle.getAttribute('aria-valuenow'));
+    expect(now).toBeGreaterThanOrEqual(Number(handle.getAttribute('aria-valuemin')));
+    expect(now).toBeLessThanOrEqual(Number(handle.getAttribute('aria-valuemax')));
+    expect(nav.style.maxHeight).toBe('234px');
+    expect(useUiStore.getState().diffListRatio).toBe(0.8);
+    expect(window.localStorage.getItem(STORAGE_KEYS.diffListRatio)).toBeNull();
+  });
+
+  it('steps from the clamped ratio, not from the stored one', async () => {
+    layout.bodyPx = 400;
+    layout.navPx = 234;
+    useUiStore.setState({ diffListRatio: 0.8 });
+    const { handle } = await openMeasured();
+    fireEvent.keyDown(handle, { key: 'ArrowUp' });
+    expect(Number(window.localStorage.getItem(STORAGE_KEYS.diffListRatio))).toBeCloseTo(0.565);
+  });
+
+  it('jumps Home and End to the measured limits', async () => {
+    const { handle } = await openMeasured();
+    fireEvent.keyDown(handle, { key: 'End' });
+    expect(handle.getAttribute('aria-valuemax')).toBe('67');
+    expect(handle.getAttribute('aria-valuenow')).toBe('67');
+    fireEvent.keyDown(handle, { key: 'Home' });
+    expect(handle.getAttribute('aria-valuemin')).toBe('19');
+    expect(handle.getAttribute('aria-valuenow')).toBe('19');
+  });
+
+  it('drags the ceiling and writes storage once, on release', async () => {
+    const { handle, nav } = await openMeasured();
+    const setItem = vi.spyOn(Storage.prototype, 'setItem');
+    fireEvent.pointerDown(handle, { button: 0, clientY: 100 });
+    fireEvent.pointerMove(window, { clientY: 130 });
+    fireEvent.pointerMove(window, { clientY: 160 });
+    // From the 175px ceiling, down 60px: 235px of 500px.
+    expect(handle.getAttribute('aria-valuenow')).toBe('47');
+    expect(nav.style.maxHeight).toBe('235px');
+    expect(listWrites(setItem)).toHaveLength(0);
+    fireEvent.pointerUp(window, { clientY: 160 });
+    expect(listWrites(setItem)).toEqual([[STORAGE_KEYS.diffListRatio, '0.47']]);
+    expect(window.localStorage.getItem(STORAGE_KEYS.diffListRatio)).toBe('0.47');
+  });
+
+  it('ends a drag on pointercancel the same way as on pointerup', async () => {
+    const { handle } = await openMeasured();
+    fireEvent.pointerDown(handle, { button: 0, clientY: 100 });
+    fireEvent.pointerMove(window, { clientY: 130 });
+    fireEvent.pointerCancel(window, { clientY: 130 });
+    expect(window.localStorage.getItem(STORAGE_KEYS.diffListRatio)).toBe('0.41');
+    fireEvent.pointerMove(window, { clientY: 300 });
+    expect(handle.getAttribute('aria-valuenow')).toBe('41');
+  });
+
+  it('leaves the ratio alone for a click or a 1px jiggle on the handle', async () => {
+    const { handle } = await openMeasured();
+    const setItem = vi.spyOn(Storage.prototype, 'setItem');
+    fireEvent.pointerDown(handle, { button: 0, clientY: 100 });
+    fireEvent.pointerMove(window, { clientY: 101 });
+    fireEvent.pointerUp(window, { clientY: 101 });
+    fireEvent.pointerDown(handle, { button: 0, clientY: 100 });
+    fireEvent.pointerUp(window, { clientY: 100 });
+    expect(handle.getAttribute('aria-valuenow')).toBe('35');
+    expect(useUiStore.getState().diffListRatio).toBe(0.35);
+    expect(listWrites(setItem)).toHaveLength(0);
+  });
+
+  it('does not lower the ceiling when a drag starts on a short list', async () => {
+    // Three rows, 100px of list under a 175px ceiling.
+    layout.navPx = 100;
+    const { handle } = await openMeasured();
+    fireEvent.pointerDown(handle, { button: 0, clientY: 100 });
+    fireEvent.pointerMove(window, { clientY: 103 });
+    fireEvent.pointerUp(window, { clientY: 103 });
+    // (175 + 3) / 500, not (100 + 3) / 500.
+    expect(handle.getAttribute('aria-valuenow')).toBe('36');
+    expect(window.localStorage.getItem(STORAGE_KEYS.diffListRatio)).toBe('0.356');
+  });
+
+  it('restores the body cursor and text selection when it unmounts mid-drag', async () => {
+    document.body.style.cursor = 'help';
+    document.body.style.userSelect = 'text';
+    const { handle } = await openMeasured();
+    fireEvent.pointerDown(handle, { button: 0, clientY: 100 });
+    fireEvent.pointerMove(window, { clientY: 130 });
+    expect(document.body.style.cursor).toBe('row-resize');
+    expect(document.body.style.userSelect).toBe('none');
+    cleanup();
+    expect(document.body.style.cursor).toBe('help');
+    expect(document.body.style.userSelect).toBe('text');
+  });
+
+  it('scrolls only the file list to bring an off-screen current row into view', async () => {
+    // The list shows 60px: row 0 is 0–36, row 1 is 36–72, row 2 is 72–108.
+    layout.navPx = 60;
+    const { nav } = await openMeasured();
+    const original = Element.prototype.scrollIntoView;
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    try {
+      const third = fileRow(nav, 2);
+      fireEvent.click(third);
+      expect(third.getAttribute('aria-current')).toBe('true');
+      expect(nav.scrollTop).toBe(48);
+      fireEvent.click(fileRow(nav, 0));
+      expect(nav.scrollTop).toBe(0);
+      fireEvent.click(fileRow(nav, 1));
+      expect(nav.scrollTop).toBe(12);
+      expect(scrollIntoView).not.toHaveBeenCalled();
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
+  });
+
+  it('does not scroll the list for a row that is already visible', async () => {
+    layout.navPx = 120;
+    const { nav } = await openMeasured();
+    fireEvent.click(fileRow(nav, 2));
+    expect(nav.scrollTop).toBe(0);
+  });
+});
+
 describe('long file lists in the cards', () => {
   const many = (n: number) =>
     Array.from({ length: n }, (_, i) => makeFileChange(`src/gen/file-${i}.ts`, 'modify', [makeHunk(1, 1, '', ['+x'])]));
@@ -466,6 +630,17 @@ describe('long file lists in the cards', () => {
     render(<ProposedEditsCard chatId="c" pending={pendingWith(sampleProposal())} />);
     const el = screen.getByTestId('changes-card');
     expect(liCount(el)).toBe(3);
+    expect(within(el).queryByRole('button', { name: /^Show / })).toBeNull();
+  });
+
+  it('drops the toggle when an expanded card shrinks to five files', () => {
+    const { rerender } = render(<ProposedEditsCard chatId="c" pending={pendingWith(many(12))} />);
+    const el = screen.getByTestId('changes-card');
+    fireEvent.click(within(el).getByRole('button', { name: 'Show all 12 files' }));
+    expect(liCount(el)).toBe(12);
+
+    rerender(<ProposedEditsCard chatId="c" pending={pendingWith(many(5))} />);
+    expect(liCount(el)).toBe(5);
     expect(within(el).queryByRole('button', { name: /^Show / })).toBeNull();
   });
 
