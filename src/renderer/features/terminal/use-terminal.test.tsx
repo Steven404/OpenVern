@@ -77,7 +77,7 @@ describe('useTerminal: attaching and writing output', () => {
     expect(Terminal.last().writes).toEqual(['hello\r\n']);
   });
 
-  it('attaching writes the snapshot once, then ignores events at or below its sequence number', async () => {
+  it('attaching writes the replay once, then ignores events at or below its sequence number', async () => {
     const bridge = new FakeTerminalBridge();
     bridge.seed(CHAT, { replay: 'SNAPSHOT', seq: 5 });
     const { running } = mount(bridge);
@@ -92,7 +92,7 @@ describe('useTerminal: attaching and writing output', () => {
     expect(Terminal.last().writes).toEqual(['SNAPSHOT', 'fresh']);
   });
 
-  it('events that arrive before open resolves are kept only above the snapshot, and written in order', async () => {
+  it('events that arrive before open resolves are kept only above the replay, and written in order', async () => {
     const bridge = new FakeTerminalBridge();
     bridge.seed(CHAT, { replay: 'SNAPSHOT', seq: 5 });
     const release = bridge.holdOpens();
@@ -131,7 +131,7 @@ describe('useTerminal: attaching and writing output', () => {
     expect(into.current?.error).toBe('Too many terminals are open.');
   });
 
-  it('attaches to an exited session: its snapshot and status show, and input never reaches it', async () => {
+  it('attaches to an exited session: its replay and status show, and input never reaches it', async () => {
     const bridge = new FakeTerminalBridge();
     bridge.seed(CHAT, { replay: 'RESTORED OUTPUT', seq: 3 });
     bridge.emitExit(CHAT, { state: 'exited', exitCode: 1, signal: null });

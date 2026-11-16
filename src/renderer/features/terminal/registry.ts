@@ -13,13 +13,23 @@ import { readTerminalBuffer } from './read';
 import { splitTerminalWrite } from './write';
 import { createFitAddon, createTerminal, TERMINAL_DOCK_PADDING, waitForTerminalFont } from './xterm';
 
+export const TERMINAL_RESYNC_PAUSE_MS = 250;
+export const TERMINAL_SKIPPED_OUTPUT = '[Terminal output was skipped while catching up.]';
+export const TERMINAL_PASTE_TOO_LARGE =
+  'Paste too large: the terminal accepts at most 1 MiB at a time. Nothing was sent.';
+
 class NoTerminalError extends Error {}
 
 export class TerminalRegistry {
   private entries = new Map<Id, TerminalEntry>();
   private revisions = new Map<Id, number>();
   get(id: Id): TerminalEntry | undefined {
-    return this.entries.get(id);
+    const entry = this.entries.get(id);
+    if (entry?.disposed) {
+      this.entries.delete(id);
+      return undefined;
+    }
+    return entry;
   }
   async attach(
     id: Id,
@@ -41,7 +51,9 @@ export class TerminalRegistry {
         // Another attach may have completed while list was pending.
         if (this.get(id)) return this.attach(id, bridge, options);
         if (this.entries.size >= TERMINAL.maxSessions)
-          throw new Error('Too many terminal sessions. End a terminal first.');
+          throw new Error(
+            `At most ${TERMINAL.maxSessions} terminals can run at once, counting any that are still closing. End one to open another.`,
+          );
       }
       entry = new TerminalEntry(id, bridge);
       this.entries.set(id, entry);
@@ -110,8 +122,16 @@ export class TerminalEntry {
   ready: Promise<void> = Promise.resolve();
   disposed = false;
   private replaying = true;
-  private untrusted = false;
-  private cancelParsing = new Set<() => void>();
+  private resyncing = false;
+  private resyncTimer: ReturnType<typeof setTimeout> | undefined;
+  private bufferingReplay = false;
+  private recoveryOverflow = false;
+  private pendingChars = 0;
+  private inputNotice: string | null = null;
+  get notice(): string | null {
+    return this.resyncing ? 'Terminal output was skipped. Restoring recent output…' : this.inputNotice;
+  }
+  private cancelParsing = new Set<(error: Error) => void>();
   private seq: number | null = null;
   private pending: TerminalDataEvent[] = [];
   private exit: TerminalStatus | null = null;
@@ -125,8 +145,18 @@ export class TerminalEntry {
     this.offs.push(
       bridge.onData((event) => {
         if (event.chatId !== id || this.disposed) return;
+        if (this.resyncing) {
+          if (!this.bufferingReplay || this.recoveryOverflow) return;
+          if (this.pendingChars + event.data.length > TERMINAL.replayMaxBytes) {
+            this.recoveryOverflow = true;
+            this.pending = [];
+            this.pendingChars = 0;
+            return;
+          }
+          this.pendingChars += event.data.length;
+        }
         this.pending.push(event);
-        if (this.seq !== null) this.drain();
+        if (this.seq !== null && !this.resyncing) this.drain();
       }),
       bridge.onExit((event) => {
         if (event.chatId !== id) return;
@@ -137,6 +167,13 @@ export class TerminalEntry {
     );
     const input = this.term.onData((data) => {
       if (this.replaying || this.disposed || this.info?.status.state !== 'running') return;
+      if (new TextEncoder().encode(data).byteLength > TERMINAL.pendingInputMaxBytes) {
+        this.inputNotice = TERMINAL_PASTE_TOO_LARGE;
+        this.notify();
+        return;
+      }
+      this.inputNotice = null;
+      this.notify();
       for (const piece of splitTerminalWrite(data)) bridge.write(id, piece);
     });
     const resize = this.term.onResize(({ cols, rows }) => {
@@ -186,24 +223,92 @@ export class TerminalEntry {
   private drain(): void {
     for (const event of this.pending.splice(0).sort((a, b) => a.seq - b.seq)) {
       if (event.seq <= (this.seq ?? -1)) continue;
-      if (this.untrusted) continue;
+      if (this.resyncing) continue;
       try {
         this.term.write(event.data);
         this.seq = event.seq;
       } catch {
-        // The missing event cannot be recovered without replay. Never answer from this buffer again.
-        this.untrusted = true;
+        this.startResync();
       }
     }
   }
   async flush(): Promise<void> {
-    if (this.untrusted) throw new Error('Terminal output was dropped');
-    await this.parse('');
-    if (this.untrusted) throw new Error('Terminal output was dropped');
+    if (this.disposed) throw new NoTerminalError();
+    if (this.resyncing) throw new Error('Terminal is resynchronising');
+    try {
+      await this.parse('');
+    } catch (error) {
+      if (!this.disposed) this.startResync();
+      throw error;
+    }
+    if (this.resyncing) throw new Error('Terminal is resynchronising');
+  }
+  private startResync(): void {
+    if (this.disposed || this.resyncing) return;
+    this.resyncing = true;
+    this.pending = [];
+    for (const cancel of this.cancelParsing) cancel(new Error('Terminal is resynchronising'));
+    this.cancelParsing.clear();
+    this.notify();
+    this.scheduleResync();
+  }
+  private scheduleResync(): void {
+    this.bufferingReplay = false;
+    this.pending = [];
+    this.pendingChars = 0;
+    this.recoveryOverflow = false;
+    this.resyncTimer = setTimeout(() => {
+      void this.resync();
+    }, TERMINAL_RESYNC_PAUSE_MS);
+  }
+  private async resync(): Promise<void> {
+    try {
+      // reset() does not discard xterm's queued writes. Drain them before resetting the screen/parser.
+      // No new live output is submitted during recovery, so the queue can catch up.
+      await this.parse('');
+      if (this.disposed) return;
+      this.term.reset();
+      this.bufferingReplay = true;
+      this.replaying = true;
+      const result = await this.bridge.open({
+        chatId: this.id,
+        cwd: this.info.cwd,
+        cols: this.info.cols,
+        rows: this.info.rows,
+      });
+      if (this.disposed) return;
+      if (result.created) {
+        this.dispose();
+        await this.bridge.close(this.id);
+        return;
+      }
+      this.info = { ...result.info, status: this.exit ?? result.info.status };
+      this.term.resize(result.info.cols, result.info.rows);
+      await this.parse(result.replay);
+      await this.parse(`\r\n${TERMINAL_SKIPPED_OUTPUT}\r\n`);
+      if (this.disposed) return;
+      if (this.recoveryOverflow) {
+        this.replaying = false;
+        this.scheduleResync();
+        return;
+      }
+      this.seq = result.seq;
+      this.resyncing = false;
+      this.bufferingReplay = false;
+      this.pendingChars = 0;
+      this.replaying = false;
+      this.drain();
+      this.notify();
+    } catch {
+      if (!this.disposed) {
+        this.replaying = false;
+        this.scheduleResync();
+      }
+    }
   }
   private parse(data: string): Promise<void> {
     return new Promise((resolve, reject) => {
-      const cancel = () => reject(new NoTerminalError());
+      const cancel = (error: Error) => reject(error);
       this.cancelParsing.add(cancel);
       try {
         this.term.write(data, () => {
@@ -212,7 +317,6 @@ export class TerminalEntry {
         });
       } catch (error) {
         this.cancelParsing.delete(cancel);
-        this.untrusted = true;
         reject(error);
       }
     });
@@ -267,7 +371,8 @@ export class TerminalEntry {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    for (const cancel of this.cancelParsing) cancel();
+    clearTimeout(this.resyncTimer);
+    for (const cancel of this.cancelParsing) cancel(new NoTerminalError());
     this.cancelParsing.clear();
     for (const off of this.offs) off();
     this.listeners.clear();

@@ -30,6 +30,7 @@ export interface TerminalHandle {
   /** The message shown when `phase` is `error`. */
   error: string | null;
   hasSelection: boolean;
+  notice: string | null;
   focus(): void;
   /** The selected text, or `null` when nothing is selected. */
   getSelection(): string | null;
@@ -65,6 +66,7 @@ export function useTerminal(chatId: Id, options: UseTerminalOptions): TerminalHa
   const [phase, setPhase] = useState<TerminalPhase>('opening');
   const [info, setInfo] = useState<TerminalInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [hasSelection, setHasSelection] = useState(false);
   const [attempt, setAttempt] = useState(0);
 
@@ -85,6 +87,7 @@ export function useTerminal(chatId: Id, options: UseTerminalOptions): TerminalHa
     setInfo(null);
     setHasSelection(false);
     setError(null);
+    setNotice(null);
     void terminalRegistry
       .attach(chatId, bridge, { cwd, restart, host })
       .then((entry) => {
@@ -92,6 +95,7 @@ export function useTerminal(chatId: Id, options: UseTerminalOptions): TerminalHa
         termRef.current = entry.term;
         detach = entry.mount(host);
         const update = () => {
+          setNotice(entry.notice);
           setInfo(entry.info);
           setPhase(entry.info.status.state);
           setHasSelection(entry.term.hasSelection());
@@ -148,6 +152,7 @@ export function useTerminal(chatId: Id, options: UseTerminalOptions): TerminalHa
     info,
     error,
     hasSelection,
+    notice,
     focus,
     getSelection,
     clearSelection,

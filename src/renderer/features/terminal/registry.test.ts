@@ -1,10 +1,15 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@xterm/xterm', () => import('./test-fakes'));
 vi.mock('@xterm/addon-fit', () => import('./test-fakes'));
 
 import { TERMINAL } from '@shared/terminal';
-import { TerminalRegistry } from './registry';
+import {
+  TERMINAL_PASTE_TOO_LARGE,
+  TERMINAL_RESYNC_PAUSE_MS,
+  TERMINAL_SKIPPED_OUTPUT,
+  TerminalRegistry,
+} from './registry';
 import { FakeTerminalBridge, FitAddon, resetTerminalFakes, Terminal } from './test-fakes';
 
 let registry: TerminalRegistry;
@@ -13,6 +18,10 @@ beforeEach(() => {
   registry = new TerminalRegistry();
   bridge = new FakeTerminalBridge();
   resetTerminalFakes();
+});
+afterEach(() => {
+  registry.disposeAll();
+  vi.useRealTimers();
 });
 describe('terminal emulator registry', () => {
   it('shares one instance and one in-flight attach per chat, with no replay into a live instance', async () => {
@@ -34,7 +43,9 @@ describe('terminal emulator registry', () => {
   });
   it('enforces the instance cap, including pending attaches', async () => {
     for (let i = 0; i < TERMINAL.maxSessions; i++) await registry.attach(`${i}`, bridge, { cwd: null });
-    await expect(registry.attach('extra', bridge, { cwd: null })).rejects.toThrow('Too many');
+    await expect(registry.attach('extra', bridge, { cwd: null })).rejects.toThrow(
+      'At most 8 terminals can run at once, counting any that are still closing. End one to open another.',
+    );
     registry.dispose('0');
     await expect(registry.attach('extra', bridge, { cwd: null })).resolves.toBeDefined();
     registry.disposeAll();
@@ -155,25 +166,35 @@ it('confirms an exited entry with main before returning its buffer', async () =>
   expect(registry.get('a')).toBeUndefined();
 });
 
-it('catches output flood throws in listeners and never trusts the partial buffer', async () => {
+it('resynchronises after a listener overflow and resumes output above the replay sequence', async () => {
   const entry = await registry.attach('a', bridge, { cwd: null });
   const write = vi.spyOn(entry.term, 'write').mockImplementation(() => {
     throw new Error('write buffer exceeded');
   });
   expect(() => bridge.emitData('a', 'lost', 1)).not.toThrow();
   write.mockRestore();
-  bridge.emitData('a', 'later', 2);
+  const release = bridge.holdOpens();
   expect(await registry.read('a', bridge, {})).toEqual({ ok: false, reason: 'unavailable' });
+  await vi.waitFor(() => expect(bridge.opens).toHaveLength(2));
+  bridge.emitData('a', 'later', 2);
+  release();
+  await vi.waitFor(() => expect(entry.notice).toBeNull());
+  expect(await registry.read('a', bridge, {})).toMatchObject({ ok: true });
+  expect(Terminal.last().writes).toEqual(['lost', `\r\n${TERMINAL_SKIPPED_OUTPUT}\r\n`, 'later']);
+  bridge.emitData('a', 'duplicate', 2);
+  bridge.emitData('a', 'after', 3);
+  expect(Terminal.last().writes.at(-1)).toBe('after');
 });
 
-it('catches a parse barrier throw and marks subsequent reads unavailable', async () => {
+it('recovers a parse barrier throw instead of permanently failing reads', async () => {
   const entry = await registry.attach('a', bridge, { cwd: null });
   const write = vi.spyOn(entry.term, 'write').mockImplementation(() => {
     throw new Error('write buffer exceeded');
   });
   expect(await registry.read('a', bridge, {})).toEqual({ ok: false, reason: 'unavailable' });
   write.mockRestore();
-  expect(await registry.read('a', bridge, {})).toEqual({ ok: false, reason: 'unavailable' });
+  await vi.waitFor(() => expect(entry.notice).toBeNull());
+  expect(await registry.read('a', bridge, {})).toMatchObject({ ok: true });
 });
 
 it('answers no_terminal when End happens while waiting for parsing', async () => {
@@ -225,4 +246,78 @@ it('opens at clamped fitted dimensions and skips fitting a zero-size host', asyn
   const unmount = entry.mount(host);
   expect(entry.info).toMatchObject({ cols: 20, rows: 200 });
   unmount();
+});
+
+it('throttles sustained overflow to one recovery attempt at a time and cancels on End', async () => {
+  vi.useFakeTimers();
+  const entry = await registry.attach('a', bridge, { cwd: null });
+  const write = vi.spyOn(entry.term, 'write').mockImplementation(() => {
+    throw new Error('overflow');
+  });
+  bridge.emitData('a', 'lost');
+  await vi.advanceTimersByTimeAsync(TERMINAL_RESYNC_PAUSE_MS - 1);
+  expect(write).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(write).toHaveBeenCalledTimes(2);
+  for (let i = 0; i < 100; i++) bridge.emitData('a', 'flood');
+  expect(write).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(TERMINAL_RESYNC_PAUSE_MS);
+  expect(write).toHaveBeenCalledTimes(3);
+  registry.dispose('a');
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(write).toHaveBeenCalledTimes(3);
+});
+
+it('bounds events received during a recovery replay and retries from a newer snapshot', async () => {
+  vi.useFakeTimers();
+  const entry = await registry.attach('a', bridge, { cwd: null });
+  vi.spyOn(entry.term, 'write').mockImplementationOnce(() => {
+    throw new Error('overflow');
+  });
+  bridge.emitData('a', 'lost');
+  const release = bridge.holdOpens();
+  await vi.advanceTimersByTimeAsync(TERMINAL_RESYNC_PAUSE_MS);
+  expect(bridge.opens).toHaveLength(2);
+  bridge.emitData('a', 'x'.repeat(TERMINAL.replayMaxBytes + 1));
+  release();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(await registry.read('a', bridge, {})).toEqual({ ok: false, reason: 'unavailable' });
+  await vi.advanceTimersByTimeAsync(TERMINAL_RESYNC_PAUSE_MS);
+  expect(bridge.opens).toHaveLength(3);
+  expect(entry.notice).toBeNull();
+  expect(await registry.read('a', bridge, {})).toMatchObject({ ok: true });
+});
+
+it('refuses an oversized bracketed paste atomically, counting UTF-8 bytes, with a dock-only notice', async () => {
+  await registry.attach('a', bridge, { cwd: null });
+  const term = Terminal.last();
+  const before = [...term.writes];
+  term.type(`\x1b[200~${'é'.repeat(TERMINAL.pendingInputMaxBytes / 2)}\x1b[201~`);
+  expect(bridge.writes).toEqual([]);
+  expect(term.writes).toEqual(before);
+  expect(registry.get('a')?.notice).toBe(TERMINAL_PASTE_TOO_LARGE);
+  term.type('x'.repeat(TERMINAL.pendingInputMaxBytes));
+  expect(bridge.writes.map((piece) => piece.data).join('')).toBe('x'.repeat(TERMINAL.pendingInputMaxBytes));
+  expect(registry.get('a')?.notice).toBeNull();
+});
+
+it('retries a failed recovery attach, and never replays a reply arriving after End', async () => {
+  vi.useFakeTimers();
+  const entry = await registry.attach('a', bridge, { cwd: null });
+  vi.spyOn(entry.term, 'write').mockImplementationOnce(() => {
+    throw new Error('overflow');
+  });
+  const open = vi.spyOn(bridge, 'open').mockRejectedValueOnce(new Error('temporarily unavailable'));
+  bridge.emitData('a', 'lost');
+  await vi.advanceTimersByTimeAsync(TERMINAL_RESYNC_PAUSE_MS);
+  expect(open).toHaveBeenCalledTimes(1);
+  const release = bridge.holdOpens();
+  await vi.advanceTimersByTimeAsync(TERMINAL_RESYNC_PAUSE_MS);
+  expect(open).toHaveBeenCalledTimes(2);
+  registry.dispose('a');
+  const writes = [...Terminal.last().writes];
+  release();
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(Terminal.last().writes).toEqual(writes);
+  expect(open).toHaveBeenCalledTimes(2);
 });

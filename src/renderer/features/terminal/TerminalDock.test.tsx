@@ -8,7 +8,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { StrictMode } from 'react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { terminalRegistry } from './registry';
+import { TERMINAL_PASTE_TOO_LARGE, TERMINAL_SKIPPED_OUTPUT, terminalRegistry } from './registry';
 
 // xterm cannot draw in jsdom: the terminal and its fit addon are recording fakes (see `test-fakes.ts`).
 vi.mock('@xterm/xterm', () => import('./test-fakes'));
@@ -165,7 +165,7 @@ describe('terminal dock: Hide, End and the session', () => {
     await waitFor(() => expect(document.activeElement).toBe(Terminal.last().textarea));
   });
 
-  it('hiding and reopening an exited chat attaches to it: the snapshot, exit line and Restart stay', async () => {
+  it('hiding and reopening an exited chat attaches to it: the replay, exit line and Restart stay', async () => {
     const { chat } = await renderChat();
     await openDock();
     bridge.emitData(chat.id, 'the last words\r\n', 1);
@@ -455,3 +455,32 @@ for (const resource of ['chats', 'projects'] as const) {
     expect(within(dock() as HTMLElement).queryByRole('alert')).toBeNull();
   });
 }
+
+it('shows an oversized paste notice in the dock without sending or echoing the paste', async () => {
+  await renderChat();
+  await openDock();
+  const term = Terminal.last();
+  const before = [...term.writes];
+  act(() => term.type(`\x1b[200~${'x'.repeat(TERMINAL.pendingInputMaxBytes)}\x1b[201~`));
+  expect(within(dock() as HTMLElement).getByRole('status').textContent).toBe(TERMINAL_PASTE_TOO_LARGE);
+  expect(bridge.writes).toEqual([]);
+  expect(term.writes).toEqual(before);
+  act(() => term.type('echo small\r'));
+  expect(within(dock() as HTMLElement).queryByRole('status')).toBeNull();
+});
+
+it('shows recovery status during a flood and resumes the same mounted dock', async () => {
+  const { chat } = await renderChat();
+  await openDock();
+  const term = Terminal.last();
+  vi.spyOn(term, 'write').mockImplementationOnce(() => {
+    throw new Error('overflow');
+  });
+  act(() => bridge.emitData(chat.id, 'recent output'));
+  expect(within(dock() as HTMLElement).getByRole('status').textContent).toContain('Restoring recent output');
+  await waitFor(() => expect(within(dock() as HTMLElement).queryByRole('status')).toBeNull());
+  expect(term.writes.join('')).toContain(TERMINAL_SKIPPED_OUTPUT);
+  expect(Terminal.last()).toBe(term);
+  act(() => bridge.emitData(chat.id, 'after recovery'));
+  expect(term.writes.at(-1)).toBe('after recovery');
+});
