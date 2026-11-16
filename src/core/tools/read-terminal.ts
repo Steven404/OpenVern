@@ -210,7 +210,10 @@ function formatResult(
   const lines = defuseMarkers(redacted.text).split('\n');
   // Only a stored secret holding a line break could change the count; then the numbers can't be trusted.
   if (lines.length !== expected) return fail(TERMINAL_INVALID_OUTPUT, 'Terminal answer not valid');
-  redactions += redacted.count;
+  // The window redacts first, so most placeholders arrive already written and this pass replaces nothing. They still
+  // count: the note is what tells the model why the text has gaps.
+  const placeholders = redacted.text.split('«redacted:').length - 1;
+  redactions += Math.max(redacted.count, placeholders);
 
   const framing =
     Buffer.byteLength(header) +

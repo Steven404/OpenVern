@@ -562,6 +562,15 @@ describe('read_terminal removes C1 and directional controls (review finding 4)',
     expect(body(res.output)).toBe('my_ghp_abcdefghijklmnopqrstuvwxyz012345 and task-runner');
   });
 
+  it('adds the redaction note for placeholders the window already wrote', async () => {
+    const res = await run(
+      {},
+      ctx(answerFor(['export K=«redacted:sk-or-v1-…»', 'and «redacted:private-key»', 'plain'])),
+    );
+    expect(res.ok).toBe(true);
+    expect(res.output).toContain(redactionNote(2));
+  });
+
   it('keeps zero-width joiners in ordinary text', async () => {
     const res = await run({}, ctx(answerFor(['family 👨\u200d👩\u200d👧 ok'])));
     expect(body(res.output)).toBe('family 👨\u200d👩\u200d👧 ok');
