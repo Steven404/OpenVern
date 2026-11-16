@@ -150,6 +150,32 @@ function editScript(req: ProviderRequest, text: string): FakeStep[] | null {
   return null;
 }
 
+const FAKE_TERMINAL_PREFIX = 'call_fake_terminal_';
+
+/**
+ * Scripted terminal read (terminal plan T2.6). Step 1 (last message from the user): call `read_terminal` with no
+ * arguments. Step 2 (its result came back): answer with the result's first line, verbatim. Returns null when
+ * `read_terminal` isn't offered, or when the last message is neither of those.
+ */
+function terminalScript(req: ProviderRequest): FakeStep[] | null {
+  if (!req.tools?.some((t) => t.name === 'read_terminal')) return null;
+  const usage: FakeStep = { type: 'usage', usage: { promptTokens: 120, completionTokens: 48 } };
+  const last = req.messages.at(-1);
+  if (last?.role === 'user') {
+    return [
+      ...textDeltas("I'll read your terminal."),
+      { type: 'tool_call', call: { id: callId(FAKE_TERMINAL_PREFIX, 0), name: 'read_terminal', argsJson: '{}' } },
+      usage,
+      { type: 'finish', reason: 'tool_calls' },
+    ];
+  }
+  if (last?.role === 'tool' && last.toolCallId.startsWith(FAKE_TERMINAL_PREFIX)) {
+    const firstLine = last.content.split('\n')[0] ?? '';
+    return [...textDeltas(firstLine), usage, { type: 'finish', reason: 'stop' }];
+  }
+  return null;
+}
+
 /** Pause between text deltas for `[fake:slow]`, so a stream can be stopped or navigated away from. */
 const SLOW_DELTA_MS = 120;
 
@@ -165,6 +191,8 @@ const SLOW_DELTA_MS = 120;
  * - `[fake:edit=<path>]`, `[fake:write=<path>]`, `[fake:delete=<path>]`: when the edit tools are offered, propose that
  *   change (`edit` reads the file and appends a comment to its first non-empty line; `write` creates/overwrites with a
  *   one-line comment). Several markers make one scripted turn that proposes several files.
+ * - `[fake:terminal]`: when `read_terminal` is offered, call it once (no arguments), then answer with the first line
+ *   of its result verbatim (e.g. "No terminal is open in this chat. …").
  * Title requests (`maxTokens` set) ignore the markers.
  */
 export function createDefaultFakeScript(): FakeScript {
@@ -177,6 +205,9 @@ export function createDefaultFakeScript(): FakeScript {
         : '';
     const edits = req.maxTokens === undefined ? editScript(req, editText(req, text)) : null;
     if (edits) return edits;
+    const terminal =
+      req.maxTokens === undefined && editText(req, text).includes('[fake:terminal]') ? terminalScript(req) : null;
+    if (terminal) return terminal;
     const steps = defaultFakeScript(req, callIndex);
     const error = /\[fake:error=([a-z_]+)\]/.exec(text)?.[1] as ErrorCode | undefined;
     if (error) {

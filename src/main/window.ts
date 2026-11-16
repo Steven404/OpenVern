@@ -48,7 +48,16 @@ function harden(win: BrowserWindow): void {
   win.webContents.on('will-attach-webview', (event) => event.preventDefault());
 }
 
-export function createMainWindow(): BrowserWindow {
+export interface MainWindowOptions {
+  /** Runs once the window has closed (not on a reload). */
+  onClosed?: () => void;
+  /** Runs when the page's unload handler kept the window open, which also cancels a quit in progress. */
+  onUnloadPrevented?: () => void;
+  /** Runs when the window's renderer process is gone (crashed, killed, out of memory), not on a reload. */
+  onRendererGone?: () => void;
+}
+
+export function createMainWindow(options: MainWindowOptions = {}): BrowserWindow {
   // Dev only: the packaged app gets its icon from electron-builder.
   const devIcon = join(app.getAppPath(), 'build/icon.png');
 
@@ -72,7 +81,11 @@ export function createMainWindow(): BrowserWindow {
   mainWindow = win;
   win.on('closed', () => {
     if (mainWindow === win) mainWindow = null;
+    options.onClosed?.();
   });
+  // Not prevented here, so the page's handler wins and the window stays open; the owner only learns of it.
+  win.webContents.on('will-prevent-unload', () => options.onUnloadPrevented?.());
+  win.webContents.on('render-process-gone', () => options.onRendererGone?.());
   win.once('ready-to-show', () => win.show());
   harden(win);
 

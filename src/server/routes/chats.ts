@@ -1,12 +1,22 @@
 // /chats* (CRUD + the two streaming routes)
 
-import { applyChangesBody, createChatBody, ROUTES, retryBody, sendMessageBody, updateChatBody } from '@shared/api';
+import {
+  applyChangesBody,
+  createChatBody,
+  ROUTES,
+  retryBody,
+  sendMessageBody,
+  terminalReadAnswerBody,
+  updateChatBody,
+} from '@shared/api';
 import { LIMITS } from '@shared/constants';
+import { TERMINAL } from '@shared/terminal';
 import type { Id } from '@shared/types';
 import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { CoreError } from '../../core/errors';
 import type { Core } from '../../core/types';
-import { readJson } from '../http';
+import { errorResponse, readJson } from '../http';
 import { streamTurn } from '../sse';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -133,6 +143,7 @@ export function chatRoutes(core: Core): Hono {
       model: body.model,
       newUserMessage: { text: body.text, attachmentIds: body.attachmentIds },
       effort: body.effort,
+      terminal: body.terminal,
       release,
     });
   });
@@ -144,8 +155,34 @@ export function chatRoutes(core: Core): Hono {
     if (!chat.messages.some((m) => m.role === 'user'))
       throw new CoreError('invalid_request', 'There is no message to retry in this chat.');
     const release = claim(chatId);
-    return streamTurn(c, core, { chatId, model: body.model, effort: body.effort, release });
+    return streamTurn(c, core, { chatId, model: body.model, effort: body.effort, terminal: body.terminal, release });
   });
+
+  // The client's answer to a `terminal_read_request` (terminal plan §4.2, T2.5). The body is validated before the
+  // broker sees it; the broker accepts it once, only for a request still waiting under this chat. Anything else
+  // (unknown, expired, answered, another chat's id) is the same 404, so the route reveals nothing about other chats.
+  //
+  // The body is bounded before it is buffered or parsed (on `Content-Length`, or while streaming when there is none),
+  // and a property the schema does not know is refused rather than dropped after it was allocated.
+  r.post(
+    ROUTES.chatTerminalRead,
+    bodyLimit({
+      maxSize: TERMINAL.readWireMaxBytes,
+      onError: (c) =>
+        errorResponse(
+          c,
+          'invalid_request',
+          `The terminal answer is too large. The limit is ${TERMINAL.readWireMaxBytes / (1024 * 1024)} MB.`,
+          413,
+        ),
+    }),
+    async (c) => {
+      const body = await readJson(c, terminalReadAnswerBody, { strict: true });
+      if (!core.terminalReads.answer(c.req.param('id'), c.req.param('requestId'), body))
+        throw new CoreError('not_found', 'No terminal read is waiting under that id.');
+      return c.body(null, 204);
+    },
+  );
 
   r.get(ROUTES.chatChanges, async (c) => {
     const id = c.req.param('id');

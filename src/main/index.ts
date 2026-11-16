@@ -9,7 +9,9 @@ import { buildAppMenuTemplate } from './menu';
 import { isDev } from './origin';
 import { handleAppProtocol, registerAppScheme } from './protocol';
 import { noSandboxWarning, resolveUserDataDir } from './startup';
-import { createMainWindow, focusMainWindow } from './window';
+import { createQuitGuard } from './terminal/quit';
+import { createTerminalManager } from './terminal/service';
+import { createMainWindow, focusMainWindow, getMainWindow } from './window';
 
 // Must happen before `ready`. (Harmless in dev: nothing is served on the scheme there.)
 registerAppScheme();
@@ -32,6 +34,27 @@ if (sandboxWarning) console.warn(sandboxWarning);
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
+  // Terminal sessions live as long as the main window: a reload keeps them, closing the window or quitting ends every
+  // shell (docs/terminal-plan.md T1.6).
+  const terminals = createTerminalManager(getMainWindow);
+  // Hold the quit until every shell has ended (SIGHUP, then SIGKILL after 1 s if it is still running), so none
+  // outlives the app; no terminal may open once the quit has begun, unless the quit is cancelled (./terminal/quit.ts).
+  const quitGuard = createQuitGuard({ terminals, quit: () => app.quit() });
+  const openMainWindow = () => {
+    quitGuard.windowOpening();
+    return createMainWindow({
+      onClosed: () => void terminals.disposeAll(),
+      // The page's unload handler kept the window open, which also cancels a quit in progress.
+      onUnloadPrevented: () => quitGuard.quitCancelled(),
+      // The shells keep running, but their kept output is dropped: if a sequence in it crashed the renderer, replaying
+      // it into the reloaded page would crash that too.
+      onRendererGone: () => terminals.clearReplays(),
+    });
+  };
+  app.on('before-quit', (event) => quitGuard.beforeQuit(event));
+  // Last resort when main exits without a quit (app.exit, a fatal error): SIGKILL every shell still running.
+  process.on('exit', () => terminals.killAllNow());
+
   void app.whenReady().then(async () => {
     if (!isDev()) {
       const template = buildAppMenuTemplate(process.platform);
@@ -48,17 +71,17 @@ if (!app.requestSingleInstanceLock()) {
       console.log(`[openvern] data dir: ${backend.dataDir}`);
       handleAppProtocol({ fetchApi: backend.fetch, rendererDir: join(import.meta.dirname, '../renderer') });
     }
-    registerIpc();
-    createMainWindow();
+    registerIpc({ terminals });
+    openMainWindow();
 
     // Register after startup: a second instance can arrive during createBackend (including a Keychain wait),
     // before the protocol and first window are ready.
     app.on('second-instance', () => {
-      if (!focusMainWindow()) createMainWindow();
+      if (!focusMainWindow()) openMainWindow();
     });
 
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
+      if (BrowserWindow.getAllWindows().length === 0) openMainWindow();
     });
   });
 

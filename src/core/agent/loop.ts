@@ -15,6 +15,7 @@
 import { LIMITS, MAX_AGENT_STEPS, NEW_CHAT_TITLE, TREE_UNAVAILABLE_NOTICE } from '@shared/constants';
 import { type ApiErrorInfo, errorInfo } from '@shared/errors';
 import type { AgentEvent } from '@shared/events';
+import type { TerminalReadRequest } from '@shared/terminal';
 import type {
   AssistantMessage,
   ChangeSummary,
@@ -28,9 +29,17 @@ import type {
   UserMessage,
 } from '@shared/types';
 import { CoreError, toErrorInfo } from '../errors';
-import type { Provider, ProviderMessage } from '../providers/types';
+import type { Provider, ProviderMessage, ToolSpec } from '../providers/types';
 import { redactionNote, redactSecrets } from '../security/redact';
-import type { GetProjectTools, RenderTree, Tool, ToolChanges } from '../tools/types';
+import type {
+  ChatToolContext,
+  GetProjectTools,
+  GetTerminalTools,
+  RenderTree,
+  Tool,
+  ToolChanges,
+  ToolResult,
+} from '../tools/types';
 import type {
   AgentService,
   AttachmentsService,
@@ -39,6 +48,7 @@ import type {
   ModelCatalog,
   ProjectsService,
   RunTurnInput,
+  TerminalReadBroker,
 } from '../types';
 import { EDIT_TOOL_NAMES } from './edit-mode';
 import { buildHistory, flattenToolCall, INTERRUPTED_OUTPUT } from './history';
@@ -72,6 +82,33 @@ export interface AgentServiceDeps {
    * their edits are staged here; when absent the agent is read-only.
    */
   changes?: ChangesService;
+  /**
+   * Terminal reads (terminal plan T2.3). With both present, a turn whose input says `terminal: true` gets these tools
+   * when the model supports tools, in project chats and chats without a project alike, and their reads go through
+   * the broker.
+   */
+  terminalReads?: TerminalReadBroker;
+  getTerminalTools?: GetTerminalTools;
+}
+
+/**
+ * A tool offered for this request, bound to what it needs: a project tool carries its project root, so it can only
+ * be offered in a project chat; a chat tool runs with the chat context alone.
+ */
+interface OfferedTool {
+  spec: ToolSpec;
+  run(rawArgs: unknown, ctx: ChatToolContext, changes: ToolChanges | undefined): Promise<ToolResult>;
+}
+
+function projectTool(tool: Tool, projectRoot: string): OfferedTool {
+  return {
+    spec: tool.spec,
+    run: (rawArgs, ctx, changes) => tool.run(rawArgs, { ...ctx, projectRoot, ...(changes ? { changes } : {}) }),
+  };
+}
+
+function chatTool(tool: Tool<ChatToolContext>): OfferedTool {
+  return { spec: tool.spec, run: (rawArgs, ctx) => tool.run(rawArgs, ctx) };
 }
 
 type Emit = (event: AgentEvent) => Promise<void>;
@@ -234,10 +271,25 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
     }
     const canEdit = !!(project && modelInfo.supportsTools && deps.changes); // v0.2 G2.4
     const editNames: readonly string[] = EDIT_TOOL_NAMES;
-    const tools: Tool[] =
+    const projectTools: OfferedTool[] =
       project && modelInfo.supportsTools
-        ? deps.getProjectTools().filter((t) => canEdit || !editNames.includes(t.spec.name)) // S4.8
+        ? deps
+            .getProjectTools()
+            .filter((t) => canEdit || !editNames.includes(t.spec.name)) // S4.8
+            .map((t) => projectTool(t, project.rootPath))
         : [];
+    // Terminal plan T2.3: offered in any chat, project or not, when the client can answer reads.
+    const terminalReads = deps.terminalReads;
+    const terminal =
+      input.terminal && modelInfo.supportsTools && terminalReads && deps.getTerminalTools
+        ? {
+            tools: deps.getTerminalTools().map(chatTool),
+            reader: {
+              read: (request: TerminalReadRequest) => terminalReads.request(chatId, request, { emit, signal }),
+            },
+          }
+        : undefined;
+    const tools: OfferedTool[] = [...projectTools, ...(terminal?.tools ?? [])];
     let tree: string | undefined;
     let treeTimedOut = false;
     if (project) {
@@ -269,13 +321,19 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
       identity: buildIdentity(modelInfo, deps.version ?? '0.0.0'),
       now: now(),
       ...(project ? { project: { name: project.name, rootPath: project.rootPath } } : {}),
-      hasTools: tools.length > 0,
+      hasTools: projectTools.length > 0,
       canEdit,
+      terminal: (terminal?.tools.length ?? 0) > 0,
       ...(tree !== undefined ? { tree } : {}),
       ...(treeTimedOut ? { treeUnavailable: true } : {}),
     });
     const toolSpecs = tools.map((t) => t.spec);
     const knownSecrets = (await deps.getKnownSecrets?.().catch(() => [])) ?? [];
+    const toolContext: ChatToolContext = {
+      signal,
+      knownSecrets,
+      ...(terminal ? { terminal: terminal.reader } : {}),
+    };
     const history: ProviderMessage[] = await buildHistory(chat.messages, {
       model,
       knownSecrets,
@@ -365,7 +423,7 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
       const flattened: string[] = text.length > 0 ? [text] : [];
       for (const call of toolCalls) {
         stepChanges?.reset();
-        const toolMessage = await runTool(call, messageId, tools, project, signal, emit, knownSecrets, stepChanges);
+        const toolMessage = await runTool(call, messageId, tools, toolContext, emit, stepChanges);
         await chats.appendMessage(chatId, toolMessage);
         await emit({ type: 'tool_result', message: toolMessage });
         const staged = stepChanges?.lastStage();
@@ -410,20 +468,20 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
   async function runTool(
     call: ToolCall,
     messageId: Id,
-    tools: Tool[],
-    project: Project | undefined,
-    signal: AbortSignal,
+    tools: OfferedTool[],
+    ctx: ChatToolContext,
     emit: Emit,
-    knownSecrets: readonly string[],
     changes?: ToolChanges,
   ): Promise<ToolMessage> {
+    const { signal } = ctx;
+    const knownSecrets = ctx.knownSecrets ?? [];
     await emit({ type: 'tool_call', messageId, toolCall: call });
     const started = now().getTime();
 
     const execute = async (): Promise<{ ok: boolean; output: string; summary: string }> => {
       if (signal.aborted) return interrupted();
       const tool = tools.find((t) => t.spec.name === call.name);
-      if (!tool || !project) {
+      if (!tool) {
         const available = tools.map((t) => t.spec.name);
         return {
           ok: false,
@@ -445,12 +503,7 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
         };
       }
       try {
-        const result = await tool.run(args, {
-          projectRoot: project.rootPath,
-          signal,
-          knownSecrets,
-          ...(changes ? { changes } : {}),
-        });
+        const result = await tool.run(args, ctx, changes);
         // A result that arrives after a stop is replaced, so what is stored never depends on a race.
         return signal.aborted ? interrupted() : result;
       } catch {

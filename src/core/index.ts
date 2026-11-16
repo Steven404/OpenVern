@@ -10,7 +10,8 @@ import { createProjectFilesService } from './project-files';
 import { createModelCatalog } from './providers/models';
 import { createOpenRouterProvider } from './providers/openrouter';
 import { createStorage, dataPaths, expandHome, LEGACY_SLUG } from './storage';
-import { getProjectTools, renderTree } from './tools';
+import { createTerminalReadBroker } from './terminal';
+import { getProjectTools, getTerminalTools, renderTree } from './tools';
 import type { Core, CoreDeps } from './types';
 
 /**
@@ -56,6 +57,7 @@ export async function createCore(deps: CoreDeps): Promise<Core> {
   const cacheFile = dataPaths(dataReal).modelsCache;
   const models = createModelCatalog({ provider, cacheFile });
   const changes = createChangesService({ dataDir: dataReal, sandbox: { deniedRoots, deniedFiles } });
+  const terminalReads = createTerminalReadBroker();
   const agent = createAgentService({
     version: deps.version,
     changes,
@@ -70,6 +72,8 @@ export async function createCore(deps: CoreDeps): Promise<Core> {
       return key ? [key] : [];
     },
     renderTree: (root, opts) => renderTree(root, { ...opts, deniedRoots }),
+    terminalReads,
+    getTerminalTools,
   });
 
   await attachments.cleanupOrphans();
@@ -89,11 +93,7 @@ export async function createCore(deps: CoreDeps): Promise<Core> {
       deniedFiles,
       homeDir: deps.homeDir ?? os.homedir(),
     }),
-    // T0 stub (terminal plan §4.3): nothing asks yet. T2 replaces it with the real broker.
-    terminalReads: {
-      request: async () => ({ ok: false, reason: 'unavailable' }),
-      answer: () => false,
-    },
+    terminalReads,
     version: deps.version,
   };
 }

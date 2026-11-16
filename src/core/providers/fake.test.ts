@@ -3,6 +3,7 @@ import { createFakeProvider, scriptFromTurns, textDeltas } from './fake';
 import { ProviderError, type ProviderEvent, type ProviderRequest } from './types';
 
 const readFile = { name: 'read_file', description: 'Read a file', parameters: { type: 'object' } };
+const readTerminal = { name: 'read_terminal', description: 'Read the terminal', parameters: { type: 'object' } };
 
 async function collect(it: AsyncIterable<ProviderEvent>): Promise<ProviderEvent[]> {
   const out: ProviderEvent[] = [];
@@ -87,6 +88,49 @@ describe('FakeProvider test markers', () => {
     const events = await run(p, userReq('look [fake:read=../outside.txt]', { tools: [readFile] }));
     const call = events.find((e) => e.type === 'tool_call');
     expect(call && call.type === 'tool_call' && JSON.parse(call.call.argsJson)).toEqual({ path: '../outside.txt' });
+  });
+
+  it('[fake:terminal] calls read_terminal with no arguments when it is offered', async () => {
+    const p = createFakeProvider({ delayMs: 0 });
+    const events = await run(p, userReq('[fake:terminal]', { tools: [readTerminal] }));
+    const call = events.find((e): e is Extract<ProviderEvent, { type: 'tool_call' }> => e.type === 'tool_call');
+    expect(call?.call.name).toBe('read_terminal');
+    expect(JSON.parse(call?.call.argsJson as string)).toEqual({});
+    expect(events.at(-1)).toEqual({ type: 'finish', reason: 'tool_calls' });
+  });
+
+  it("[fake:terminal] then repeats the result's first line", async () => {
+    const p = createFakeProvider({ delayMs: 0 });
+    const first = await run(p, userReq('[fake:terminal]', { tools: [readTerminal] }));
+    const call = first.find((e): e is Extract<ProviderEvent, { type: 'tool_call' }> => e.type === 'tool_call');
+    if (!call) throw new Error('no read_terminal call');
+    expect(call.call.id).toMatch(/^call_fake_terminal_/);
+
+    const toolText = 'No terminal is open in this chat.\nAsk the user to open one.';
+    const events = await run(p, {
+      model: 'm',
+      system: '',
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: '[fake:terminal]' }] },
+        { role: 'assistant', text: '', toolCalls: [call.call] },
+        { role: 'tool', toolCallId: call.call.id, content: toolText },
+      ],
+      tools: [readTerminal],
+    });
+    expect(text(events)).toBe('No terminal is open in this chat.');
+    expect(events.at(-1)).toEqual({ type: 'finish', reason: 'stop' });
+  });
+
+  it('[fake:terminal] does nothing when read_terminal is not offered', async () => {
+    const p = createFakeProvider({ delayMs: 0 });
+    const events = await run(p, userReq('[fake:terminal]', { tools: [readFile] }));
+    expect(events.some((e) => e.type === 'tool_call' && e.call.name === 'read_terminal')).toBe(false);
+  });
+
+  it('[fake:terminal] is ignored in title requests', async () => {
+    const p = createFakeProvider({ delayMs: 0 });
+    const events = await run(p, userReq('[fake:terminal]', { tools: [readTerminal], maxTokens: 30 }));
+    expect(events.some((e) => e.type === 'tool_call')).toBe(false);
   });
 
   it('ignores the markers in title requests (maxTokens set)', async () => {

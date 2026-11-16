@@ -21,6 +21,8 @@ export interface StreamTurnInput {
   newUserMessage?: RunTurnInput['newUserMessage'];
   /** F3: omitted = the chat's stored effort. */
   effort?: RunTurnInput['effort'];
+  /** The client can answer terminal reads, so the run offers `read_terminal` (terminal plan T2). */
+  terminal?: boolean;
   /** Called as soon as `agent.runTurn` has registered the run (or the stream gave up), to drop the pre-run claim. */
   release: () => void;
 }
@@ -47,6 +49,7 @@ export function streamTurn(c: Context, core: Core, input: StreamTurnInput): Resp
         newUserMessage: input.newUserMessage,
         model: input.model,
         ...(input.effort !== undefined ? { effort: input.effort } : {}),
+        ...(input.terminal ? { terminal: true } : {}),
         signal: controller.signal,
         emit: async (event: AgentEvent) => {
           await stream.writeSSE({ data: JSON.stringify(event) });
