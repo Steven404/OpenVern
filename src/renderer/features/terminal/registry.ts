@@ -11,7 +11,7 @@ import {
 } from '@shared/terminal';
 import type { Id } from '@shared/types';
 import { readTerminalBuffer } from './read';
-import { setLoadedTerminalRegistry } from './registry-handle';
+import { type LoadedTerminalEntry, setLoadedTerminalRegistry, terminalAttachesHeld } from './registry-handle';
 import { splitTerminalWrite } from './write';
 import { createFitAddon, createTerminal, TERMINAL_DOCK_PADDING, waitForTerminalFont } from './xterm';
 
@@ -21,6 +21,13 @@ export const TERMINAL_PASTE_TOO_LARGE =
   'Paste too large: the terminal accepts at most 1 MiB at a time. Nothing was sent.';
 
 class NoTerminalError extends Error {}
+
+/** An attach that waited out a hand-over of its id and was then no longer wanted (`TerminalOpenOptions.wanted`). */
+export class TerminalAttachCancelled extends Error {
+  constructor() {
+    super('Terminal attach cancelled');
+  }
+}
 
 export class TerminalRegistry {
   private entries = new Map<Id, TerminalEntry>();
@@ -36,6 +43,16 @@ export class TerminalRegistry {
   /** Every `attach` in flight per id, from its first step (a wait for a free slot included) until it settles. */
   private attaching = new Map<Id, Set<Promise<TerminalEntry>>>();
   attach(id: Id, bridge: TerminalBridge, options: TerminalOpenOptions): Promise<TerminalEntry> {
+    // A hand-over of this id is under way (`holdTerminalAttaches`): wait it out before asking main for anything, then
+    // go on only if the caller still wants the id. Not tracked meanwhile, so the hand-over's `settle` never waits for
+    // an attach that is waiting for the hand-over.
+    const held = terminalAttachesHeld(id);
+    if (held) {
+      return held.then(() => {
+        if (options.wanted?.() === false) throw new TerminalAttachCancelled();
+        return this.attach(id, bridge, options);
+      });
+    }
     const attaching = this.attachNow(id, bridge, options);
     let pending = this.attaching.get(id);
     if (!pending) {
@@ -76,8 +93,9 @@ export class TerminalRegistry {
           const oldestExited = [...this.entries].find(([, candidate]) => candidate.info?.status.state === 'exited');
           if (oldestExited) this.dispose(oldestExited[0]);
         }
-        // Another attach may have completed while list was pending.
-        if (this.get(id)) return this.attach(id, bridge, options);
+        // Another attach may have completed while list was pending. Straight on, not through `attach`: this attach is
+        // already tracked, and a hand-over that began meanwhile is waiting for it in `settle`.
+        if (this.get(id)) return this.attachNow(id, bridge, options);
         if (this.entries.size >= TERMINAL.maxSessions)
           throw new Error(
             `At most ${TERMINAL.maxSessions} terminals can run at once, counting any that are still closing. End one to open another.`,
@@ -108,11 +126,14 @@ export class TerminalRegistry {
    * goes out before any data event carrying `to` (main renames synchronously and the reply is queued before the
    * PTY's next output callback can run), and the caller renames as soon as the reply resolves, in the same task. So no
    * event for `to` reaches the entry while it still answers to `from`, and none for `from` arrives after.
+   *
+   * With `only`, renames nothing unless that is the entry filed under `from` (the hand-over moves the emulator it had
+   * before it asked main, never one made since).
    */
-  rename(from: Id, to: Id): boolean {
+  rename(from: Id, to: Id, only?: LoadedTerminalEntry): boolean {
     if (from === to) return false;
     const entry = this.get(from);
-    if (!entry) return false;
+    if (!entry || (only !== undefined && entry !== only)) return false;
     // A fresh chat has no emulator; one left behind under its id would answer for a session main no longer has there.
     if (this.entries.has(to)) this.dispose(to);
     this.revisions.set(from, (this.revisions.get(from) ?? 0) + 1);
@@ -177,6 +198,11 @@ export interface TerminalOpenOptions {
   host?: HTMLElement;
   /** Called once when this attach started a new shell (not when it attached to an existing session). */
   onCreated?: () => void;
+  /**
+   * Asked once an attach has waited out a hand-over of its id (`holdTerminalAttaches`), before it asks main for the
+   * session: false drops the attach with `TerminalAttachCancelled`. Absent = still wanted.
+   */
+  wanted?: () => boolean;
 }
 
 export class TerminalEntry {

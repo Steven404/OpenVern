@@ -7,7 +7,8 @@ import type { Id } from '@shared/types';
 import type { Terminal } from '@xterm/xterm';
 import { type RefObject, useCallback, useEffect, useRef, useState } from 'react';
 import { getTerminalBridge } from './bridge';
-import { terminalRegistry } from './registry';
+import { TerminalAttachCancelled, terminalRegistry } from './registry';
+import { useTerminalUiStore } from './terminal-store';
 
 /** Resizes are coalesced this long, so a drag of the dock's edge sends one IPC message, not twenty. */
 export const RESIZE_DEBOUNCE_MS = 120;
@@ -104,6 +105,9 @@ export function useTerminal(chatId: Id, options: UseTerminalOptions): TerminalHa
         restart,
         host,
         ...(onCreated ? { onCreated } : {}),
+        // Asked after the attach waited out a hand-over (the New Chat screen's terminal moving into its chat). The dock
+        // is shown only while open in the store, and the hand-over closes or moves it before React unmounts this.
+        wanted: () => !disposed && useTerminalUiStore.getState().openDocks[chatId] === true,
       })
       .then((entry) => {
         if (disposed) return;
@@ -123,7 +127,8 @@ export function useTerminal(chatId: Id, options: UseTerminalOptions): TerminalHa
         }
       })
       .catch((err: unknown) => {
-        if (!disposed) {
+        // A cancelled attach is one this dock no longer wants: it is closing, not failing.
+        if (!disposed && !(err instanceof TerminalAttachCancelled)) {
           setPhase('error');
           setError(terminalErrorMessage(err));
         }

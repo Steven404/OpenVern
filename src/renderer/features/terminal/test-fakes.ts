@@ -205,7 +205,10 @@ export class FakeTerminalBridge implements TerminalBridge {
     };
   }
 
-  /** Holds every `adopt` reply until the returned function is called. Main has already moved the session meanwhile. */
+  /**
+   * Holds every `adopt` reply (a rejection included) until the returned function is called. Main has already moved the
+   * session meanwhile.
+   */
   holdAdopts(): () => void {
     let release: () => void = () => {};
     this.adoptGate = new Promise<void>((resolve) => {
@@ -277,9 +280,16 @@ export class FakeTerminalBridge implements TerminalBridge {
   /** Like main: moves `from`'s session to `to` unless there is none or `to` has one; later events carry `to`. */
   async adopt(from: Id, to: Id): Promise<boolean> {
     this.adopts.push({ from, to });
-    const moved = this.move(from, to);
+    const outcome = (() => {
+      try {
+        return { moved: this.move(from, to) };
+      } catch (error) {
+        return { error };
+      }
+    })();
     if (this.adoptGate) await this.adoptGate;
-    return moved;
+    if ('error' in outcome) throw outcome.error;
+    return outcome.moved;
   }
 
   private move(from: Id, to: Id): boolean {

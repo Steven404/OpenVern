@@ -8,14 +8,19 @@
 import { DRAFT_CHAT_ID } from '@shared/constants';
 import type { Id } from '@shared/types';
 import { getTerminalBridge } from './bridge';
-import { loadedTerminalRegistry } from './registry-handle';
+import { holdTerminalAttaches, loadedTerminalRegistry } from './registry-handle';
 import { useTerminalUiStore } from './terminal-store';
 
 export async function adoptDraftTerminal(chatId: Id): Promise<void> {
   let pause: { settled: Promise<void>; resume(): void } | undefined;
+  let releaseAttaches: (() => void) | undefined;
   try {
     const bridge = getTerminalBridge();
     if (!bridge || chatId === DRAFT_CHAT_ID) return;
+    // A draft attach that starts from here on (the dock opening while main moves the session) waits until the hand-over
+    // is done, then goes on only if its dock still shows the draft: sent now, its `open` could start a second shell
+    // under the draft id, and its emulator must not be the one renamed below.
+    releaseAttaches = holdTerminalAttaches(DRAFT_CHAT_ID);
     // A draft terminal still opening, or still waiting for a free slot before it opens: let it settle first, so main
     // has the session to move (or has refused it).
     const entry = await loadedTerminalRegistry()?.settle(DRAFT_CHAT_ID);
@@ -27,7 +32,9 @@ export async function adoptDraftTerminal(chatId: Id): Promise<void> {
     const registry = loadedTerminalRegistry();
     const store = useTerminalUiStore.getState();
     if (moved === true) {
-      registry?.rename(DRAFT_CHAT_ID, chatId);
+      // Only the emulator there was before main was asked. Without one, the chat attaches to the moved session (and
+      // its replay) when its dock opens or the model reads it.
+      if (entry) registry?.rename(DRAFT_CHAT_ID, chatId, entry);
       store.moveDock(DRAFT_CHAT_ID, chatId);
       store.setDraftProject(undefined);
     } else {
@@ -41,5 +48,7 @@ export async function adoptDraftTerminal(chatId: Id): Promise<void> {
   } finally {
     // After the rename: a recovery held meanwhile asks for the session under the chat's id.
     pause?.resume();
+    // After the dock state moved: a draft attach held meanwhile finds its dock closed (moved or ended) and stops.
+    releaseAttaches?.();
   }
 }

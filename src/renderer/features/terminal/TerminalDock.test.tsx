@@ -453,6 +453,36 @@ describe('terminal dock: the New Chat screen', () => {
     act(() => bridge.emitData(chatId, 'after'));
     expect(term.writes).toEqual(['pre-chat-41\r\n', 'after']);
   });
+
+  it('a dock opened while the send moves a hidden draft starts no second shell and the chat gets the original', async () => {
+    // A draft shell main kept with its dock closed (after a reload, say): no emulator for it in this window.
+    bridge.seed('__draft__', { replay: 'pre-chat-41\r\n' });
+    await renderNew('/new');
+    const releaseAdopt = bridge.holdAdopts();
+    fireEvent.change(composer(), { target: { value: 'hi' } });
+    fireEvent.keyDown(composer(), { key: 'Enter' });
+    // Main has moved the session; its reply is still on the way when the dock opens.
+    await waitFor(() => expect(bridge.adopts).toHaveLength(1));
+    fireEvent.keyDown(window, { key: '`', ctrlKey: true });
+    await screen.findByRole('region', { name: 'Terminal' });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(bridge.opens).toEqual([]);
+
+    releaseAdopt();
+    await waitFor(() => expect(location()).toMatch(/^\/chat\/.+/));
+    const chatId = location().replace('/chat/', '');
+    await waitFor(() => expect(bridge.opens).toHaveLength(1));
+    // Only the chat's dock asked main, and it attached to the shell that was the draft, output and all.
+    expect(bridge.opens[0]).toMatchObject({ chatId });
+    await waitFor(() => expect(Terminal.last().writes).toEqual(['pre-chat-41\r\n']));
+    expect(Terminal.instances).toHaveLength(1);
+    expect(bridge.hasSession('__draft__')).toBe(false);
+    expect(bridge.closes).toEqual([]);
+    expect(terminalRegistry.get('__draft__')).toBeUndefined();
+    expect(useTerminalUiStore.getState().openDocks).toEqual({ [chatId]: true });
+  });
 });
 
 describe('draftTerminalTarget', () => {
