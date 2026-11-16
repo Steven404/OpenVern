@@ -61,7 +61,7 @@ export function terminalErrorMessage(err: unknown): string {
 
 export function useTerminal(chatId: Id, options: UseTerminalOptions): TerminalHandle {
   const { cwd, defaultFolder, bridge: bridgeOverride } = options;
-  // Read when a shell is created, so a new callback each render does not re-run the attach effect.
+  // Taken by each attach as it starts, so a new callback each render does not re-run the attach effect.
   const onCreatedRef = useRef(options.onCreated);
   onCreatedRef.current = options.onCreated;
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -95,13 +95,15 @@ export function useTerminal(chatId: Id, options: UseTerminalOptions): TerminalHa
     setHasSelection(false);
     setError(null);
     setNotice(null);
+    // This attach's callback, rendered with this `cwd`: a later render (another project) must not claim its shell.
+    const onCreated = onCreatedRef.current;
     void terminalRegistry
       .attach(chatId, bridge, {
         cwd,
         ...(defaultFolder ? { defaultFolder } : {}),
         restart,
         host,
-        onCreated: () => onCreatedRef.current?.(),
+        ...(onCreated ? { onCreated } : {}),
       })
       .then((entry) => {
         if (disposed) return;
