@@ -82,7 +82,7 @@ export function TerminalDock({ chatId }: { chatId: Id }) {
   const projectId = chats.data === undefined || chatMissing ? undefined : (listed?.projectId ?? null);
   // The project list is only needed for a chat with a project.
   const needsProject = typeof projectId === 'string';
-  const projectFailed = needsProject && projects.isError;
+  const projectFailed = needsProject && projects.isError && projects.data === undefined;
   const ready = projectId !== undefined && (!needsProject || projects.data !== undefined);
 
   const sectionRef = useRef<HTMLElement | null>(null);
@@ -185,7 +185,7 @@ export function TerminalDock({ chatId }: { chatId: Id }) {
         onHide={hide}
       />
     );
-  } else if (chats.isError) {
+  } else if (chats.isError && chats.data === undefined) {
     body = (
       <DockNote
         message={dockLoadError("Couldn't load your chats.", chats.error)}

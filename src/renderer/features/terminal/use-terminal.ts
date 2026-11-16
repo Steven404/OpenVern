@@ -86,7 +86,7 @@ export function useTerminal(chatId: Id, options: UseTerminalOptions): TerminalHa
     setHasSelection(false);
     setError(null);
     void terminalRegistry
-      .attach(chatId, bridge, { cwd, restart })
+      .attach(chatId, bridge, { cwd, restart, host })
       .then((entry) => {
         if (disposed) return;
         termRef.current = entry.term;

@@ -154,6 +154,11 @@ export class FitAddon {
     this.terminal = null;
   }
 
+  proposeDimensions(): { cols: number; rows: number } | undefined {
+    FitAddon.fits++;
+    return FitAddon.size ?? undefined;
+  }
+
   fit(): void {
     FitAddon.fits++;
     if (this.terminal && FitAddon.size) this.terminal.resize(FitAddon.size.cols, FitAddon.size.rows);

@@ -53,3 +53,11 @@ describe('terminalSelectionBlock', () => {
     expect(block).not.toContain('was cut');
   });
 });
+
+it('redacts invisible and screen-split keys before inserting selection into chat', () => {
+  for (const separator of ['\u200b', '\u202e', '\n']) {
+    const block = terminalSelectionBlock(`K=sk-or-v1-${'a'.repeat(3)}${separator}${'a'.repeat(61)}`);
+    expect(block).toContain('redacted');
+    expect(block).not.toContain('aaa');
+  }
+});

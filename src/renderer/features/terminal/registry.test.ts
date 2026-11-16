@@ -5,7 +5,7 @@ vi.mock('@xterm/addon-fit', () => import('./test-fakes'));
 
 import { TERMINAL } from '@shared/terminal';
 import { TerminalRegistry } from './registry';
-import { FakeTerminalBridge, resetTerminalFakes, Terminal } from './test-fakes';
+import { FakeTerminalBridge, FitAddon, resetTerminalFakes, Terminal } from './test-fakes';
 
 let registry: TerminalRegistry;
 let bridge: FakeTerminalBridge;
@@ -95,7 +95,7 @@ describe('terminal emulator registry', () => {
     registry.dispose('a');
     await bridge.close('a');
     release(sessions);
-    await expect(read).rejects.toThrow('sessions changed');
+    expect(await read).toEqual({ ok: false, reason: 'no_terminal' });
     expect(bridge.opens).toEqual([]);
   });
   it('waits for queued output to parse before reading', async () => {
@@ -118,4 +118,111 @@ describe('terminal emulator registry', () => {
     flush();
     expect(await reading).toMatchObject({ ok: true, result: { text: 'latest', info: entry.info } });
   });
+});
+
+it('closes an accidental shell created between a read list and attach', async () => {
+  bridge.seed('a');
+  const list = bridge.list.bind(bridge);
+  bridge.list = async () => {
+    const infos = await list();
+    await bridge.close('a');
+    return infos;
+  };
+  expect(await registry.read('a', bridge, {})).toEqual({ ok: false, reason: 'no_terminal' });
+  expect(bridge.closes).toEqual(['a', 'a']);
+  expect(registry.get('a')).toBeUndefined();
+  expect(Terminal.last().disposed).toBe(true);
+});
+
+it('reconciles missing main sessions at capacity and evicts the oldest exited entry', async () => {
+  for (let i = 0; i < TERMINAL.maxSessions; i++) await registry.attach(`${i}`, bridge, { cwd: null });
+  await bridge.close('0');
+  await registry.attach('extra', bridge, { cwd: null });
+  expect(registry.get('0')).toBeUndefined();
+  bridge.emitExit('1', { state: 'exited', exitCode: 0, signal: null });
+  bridge.emitExit('2', { state: 'exited', exitCode: 0, signal: null });
+  await registry.attach('next', bridge, { cwd: null });
+  expect(registry.get('1')).toBeUndefined();
+  expect(registry.get('2')).toBeDefined();
+});
+
+it('confirms an exited entry with main before returning its buffer', async () => {
+  await registry.attach('a', bridge, { cwd: null });
+  bridge.emitExit('a', { state: 'exited', exitCode: 0, signal: null });
+  expect(await registry.read('a', bridge, {})).toMatchObject({ ok: true });
+  await bridge.close('a');
+  expect(await registry.read('a', bridge, {})).toEqual({ ok: false, reason: 'no_terminal' });
+  expect(registry.get('a')).toBeUndefined();
+});
+
+it('catches output flood throws in listeners and never trusts the partial buffer', async () => {
+  const entry = await registry.attach('a', bridge, { cwd: null });
+  const write = vi.spyOn(entry.term, 'write').mockImplementation(() => {
+    throw new Error('write buffer exceeded');
+  });
+  expect(() => bridge.emitData('a', 'lost', 1)).not.toThrow();
+  write.mockRestore();
+  bridge.emitData('a', 'later', 2);
+  expect(await registry.read('a', bridge, {})).toEqual({ ok: false, reason: 'unavailable' });
+});
+
+it('catches a parse barrier throw and marks subsequent reads unavailable', async () => {
+  const entry = await registry.attach('a', bridge, { cwd: null });
+  const write = vi.spyOn(entry.term, 'write').mockImplementation(() => {
+    throw new Error('write buffer exceeded');
+  });
+  expect(await registry.read('a', bridge, {})).toEqual({ ok: false, reason: 'unavailable' });
+  write.mockRestore();
+  expect(await registry.read('a', bridge, {})).toEqual({ ok: false, reason: 'unavailable' });
+});
+
+it('answers no_terminal when End happens while waiting for parsing', async () => {
+  const entry = await registry.attach('a', bridge, { cwd: null });
+  vi.spyOn(entry.term, 'write').mockImplementation(() => {});
+  const read = registry.read('a', bridge, {});
+  await Promise.resolve();
+  registry.dispose('a');
+  expect(await read).toEqual({ ok: false, reason: 'no_terminal' });
+});
+
+it('does not let disposal of another chat invalidate a read during list', async () => {
+  bridge.seed('a', { replay: 'safe' });
+  const list = bridge.list.bind(bridge);
+  bridge.list = async () => {
+    registry.dispose('unrelated');
+    return list();
+  };
+  expect(await registry.read('a', bridge, {})).toMatchObject({ ok: true, result: { text: 'safe' } });
+});
+
+it('rejects invalid requests before list or open', async () => {
+  const list = vi.spyOn(bridge, 'list');
+  for (const value of [0, -1, 1.2, NaN, Infinity]) {
+    for (const request of [{ count: value }, { startLine: value }]) {
+      expect(await registry.read('a', bridge, request)).toEqual({ ok: false, reason: 'unavailable' });
+    }
+  }
+  expect(list).not.toHaveBeenCalled();
+  expect(bridge.opens).toEqual([]);
+});
+
+it('opens at clamped fitted dimensions and skips fitting a zero-size host', async () => {
+  const host = document.createElement('div');
+  Object.defineProperties(host, {
+    clientWidth: { value: 800, configurable: true },
+    clientHeight: { value: 240, configurable: true },
+  });
+  FitAddon.size = { cols: 1000, rows: 1 };
+  const entry = await registry.attach('a', bridge, { cwd: null, host });
+  expect(bridge.opens[0]).toMatchObject({ cols: 500, rows: 5 });
+  expect(entry.info).toMatchObject({ cols: 500, rows: 5 });
+  FitAddon.size = { cols: 1, rows: 1000 };
+  const detach = entry.mount(host);
+  expect(entry.info).toMatchObject({ cols: 20, rows: 200 });
+  detach();
+  Object.defineProperty(host, 'clientWidth', { value: 0 });
+  FitAddon.size = { cols: 99, rows: 99 };
+  const unmount = entry.mount(host);
+  expect(entry.info).toMatchObject({ cols: 20, rows: 200 });
+  unmount();
 });

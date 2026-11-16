@@ -1,3 +1,4 @@
+import { terminalReadAnswerBody } from '@shared/api';
 import { TERMINAL, type TerminalInfo } from '@shared/terminal';
 import { describe, expect, it, vi } from 'vitest';
 import { type ReadBuffer, readTerminalBuffer } from './read';
@@ -9,7 +10,11 @@ function buffer(lines: string[], wrapped: number[] = []): ReadBuffer {
     getLine: (i) => ({ isWrapped: wrapped.includes(i), translateToString: () => lines[i] ?? '' }),
   };
 }
-const read = (lines: string[], request = {}) => readTerminalBuffer(buffer(lines), info, request);
+const read = (lines: string[], request = {}) => {
+  const result = readTerminalBuffer(buffer(lines), info, request);
+  expect(terminalReadAnswerBody.safeParse({ ok: true, result }).success).toBe(true);
+  return result;
+};
 describe('renderer terminal read', () => {
   it('defaults to the last 200 logical lines and returns main info', () => {
     const r = read(Array.from({ length: 300 }, (_, i) => `${i + 1}`));
@@ -73,4 +78,21 @@ describe('renderer terminal read', () => {
       spy.mockRestore();
     }
   });
+});
+
+it('uses the shared search across invisible characters and strips every forbidden control', () => {
+  const controls = Array.from({ length: 160 }, (_, i) => i)
+    .filter((i) => (i < 32 && i !== 9 && i !== 10) || i >= 127)
+    .map((i) => String.fromCharCode(i))
+    .join('');
+  const result = read([`export K=sk-or-v1-${'a'.repeat(20)}\u200b${'a'.repeat(44)}`, controls]);
+  expect(result.text).not.toContain('aaaa');
+  expect(result.text).toContain('redacted');
+});
+
+it('rejects noninteger, nonpositive and nonfinite read ranges', () => {
+  for (const value of [0, -1, 1.5, NaN, Infinity]) {
+    expect(() => read(['safe'], { startLine: value })).toThrow('Invalid');
+    expect(() => read(['safe'], { count: value })).toThrow('Invalid');
+  }
 });

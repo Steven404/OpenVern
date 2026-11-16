@@ -3,8 +3,9 @@
 // composer goes to the model. The cap is applied only after redaction: cutting first can strip a key's prefix and leave
 // its body unmatched, so the body would reach the model unredacted.
 
-import { redactSecrets } from '@shared/redact';
 import { TERMINAL } from '@shared/terminal';
+import { redactTerminalText } from '@shared/terminal-redact';
+import { redactBufferLines } from './redact-buffer';
 
 /** A backtick fence longer than any run of backticks in `text`, so output that shows a fence does not end ours. */
 function fenceFor(text: string): string {
@@ -26,7 +27,13 @@ export function terminalSelectionBlock(selection: string): string | null {
   const trimmed = lines.join('\n').trim();
   if (trimmed === '') return null;
 
-  const { text: redacted } = redactSecrets(trimmed);
+  const selectedLines = trimmed.split('\n');
+  const { text: redacted } = redactTerminalText(
+    redactBufferLines(
+      selectedLines,
+      selectedLines.map(() => true),
+    ).join('\n'),
+  );
   // Cut by code point, so a surrogate pair at the boundary is kept whole.
   const points = Array.from(redacted);
   const truncated = points.length > TERMINAL.selectionMaxChars;

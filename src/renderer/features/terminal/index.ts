@@ -1,6 +1,5 @@
 export { getTerminalBridge, hasTerminalBridge } from './bridge';
 export { isTerminalFocused, TERMINAL_DOCK_SELECTOR } from './dom';
-export { terminalSelectionBlock } from './selection';
 export {
   clampDockHeight,
   DOCK_MAX_FRACTION,

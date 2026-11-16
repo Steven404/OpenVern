@@ -1,0 +1,5 @@
+{
+  "source": "/bin/zsh -f, TERM=xterm-256color, PROMPT=%# , 80x24; typed one character every 5ms; captured all node-pty onData through before Enter; runs of the placeholder letter are stored as {{a:N}} so this file holds no key-shaped text",
+  "command": ": export OPENROUTER_API_KEY=sk-or-v1-{{a:64}}",
+  "output": "\u001b[1m\u001b[7m%\u001b[27m\u001b[1m\u001b[0m                                                                               \r \r\r\u001b[0m\u001b[27m\u001b[24m\u001b[J% \u001b[K\u001b[?2004h:\b: export OPENROUTER_API_KEY=sk-or-v1-{{a:41}} \r\u001b[Ka\r{{a:23}}"
+}

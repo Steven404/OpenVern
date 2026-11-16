@@ -64,6 +64,7 @@ export function useCloseDeletedTerminals(): void {
       if (ids.has(id)) continue;
       seen.current.delete(id);
       useTerminalUiStore.getState().closeDock(id);
+      if (!bridge) continue;
       void import('./registry').then(({ terminalRegistry }) => {
         terminalRegistry.dispose(id);
         if (bridge) void bridge.close(id).catch(() => {});

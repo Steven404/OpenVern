@@ -54,6 +54,8 @@ function mount(bridge = new FakeTerminalBridge(), chatId = CHAT) {
 beforeEach(() => {
   terminalRegistry.disposeAll();
   resetTerminalFakes();
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(800);
+  vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(240);
   FakeResizeObserver.instances = [];
   vi.stubGlobal('ResizeObserver', FakeResizeObserver);
 });

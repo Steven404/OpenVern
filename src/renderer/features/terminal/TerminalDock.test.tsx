@@ -438,3 +438,20 @@ describe('terminal dock: module boundaries', () => {
     expect('useTerminal' in barrel).toBe(false);
   });
 });
+
+for (const resource of ['chats', 'projects'] as const) {
+  it(`keeps the mounted terminal through a failed background ${resource} refetch`, async () => {
+    const { client, queryClient } = await renderChat();
+    await openDock();
+    const term = Terminal.last();
+    const method = resource === 'chats' ? 'listChats' : 'listProjects';
+    vi.spyOn(client, method).mockRejectedValue(new Error('background offline'));
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey: resource === 'chats' ? queryKeys.chats : queryKeys.projects });
+    });
+    expect(screen.getByTestId('terminal-screen').contains(term.element)).toBe(true);
+    expect(Terminal.last()).toBe(term);
+    expect(term.disposed).toBe(false);
+    expect(within(dock() as HTMLElement).queryByRole('alert')).toBeNull();
+  });
+}
