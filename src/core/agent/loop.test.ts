@@ -765,20 +765,16 @@ describe('stuck-loop guard', () => {
   });
 
   it('Stop during the 4th identical step is a stop, not a loop error', async () => {
-    let runs = 0;
-    const tool = createFakeTool('read_file', (_args, ctx) => {
-      runs++;
-      if (runs < MAX_REPEATED_TOOL_STEPS) return { ok: true, output: 'same', summary: 'same' };
-      return new Promise((resolve) => {
-        ctx.signal.addEventListener('abort', () => resolve({ ok: true, output: 'late', summary: 'late' }));
-      });
-    });
+    // The 4th result is identical to the first three, so only the abort check standing before the guard keeps this
+    // from being reported as a loop.
+    const tool = createFakeTool('read_file', () => ({ ok: true, output: 'same', summary: 'same' }));
     const h = await createHarness({
       tools: [tool],
       script: (_req, i) => callTools([[`c${i}`, 'read_file', '{"path":"a"}']]),
     });
     const controller = new AbortController();
     const events: AgentEvent[] = [];
+    let results = 0;
     await h.agent.runTurn({
       chatId: h.chatId,
       newUserMessage: { text: 'Hi', attachmentIds: [] },
@@ -786,17 +782,26 @@ describe('stuck-loop guard', () => {
       signal: controller.signal,
       emit: (e) => {
         events.push(e);
-        if (e.type === 'tool_call' && e.toolCall.id === `c${MAX_REPEATED_TOOL_STEPS - 1}`) {
-          setTimeout(() => controller.abort(), 5);
-        }
+        if (e.type === 'tool_result' && ++results === MAX_REPEATED_TOOL_STEPS) controller.abort();
       },
     });
     expect(events.some((e) => e.type === 'error')).toBe(false);
     expect(h.provider.calls).toHaveLength(MAX_REPEATED_TOOL_STEPS);
     expect(shape(events).at(-1)).toBe('done');
     const last = find(events, 'tool_result').at(-1)?.message;
-    expect([last?.ok, last?.output]).toEqual([false, INTERRUPTED_OUTPUT]);
+    expect([last?.ok, last?.output]).toEqual([true, 'same']);
     expect((await h.chats.get(h.chatId)).title).toBe(NEW_CHAT_TITLE);
+  });
+
+  it('blank args and {} count as the same call', async () => {
+    const tool = createFakeTool('read_file', () => ({ ok: true, output: 'same', summary: 'same' }));
+    const h = await createHarness({
+      tools: [tool],
+      script: (_req, i) => callTools([[`c${i}`, 'read_file', i % 2 === 0 ? '' : '{}']]),
+    });
+    const events = await h.run();
+    expect(h.provider.calls).toHaveLength(MAX_REPEATED_TOOL_STEPS);
+    expect(find(events, 'error').at(-1)?.error.code).toBe('tool_loop_detected');
   });
 });
 

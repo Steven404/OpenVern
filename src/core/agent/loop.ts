@@ -184,6 +184,7 @@ function sortKeys(value: unknown): unknown {
 
 /** Canonical form of a tool call's raw arguments; text that is not JSON is compared as typed (trimmed). */
 function canonicalArgs(argsJson: string): string {
+  if (argsJson.trim() === '') return '{}'; // runTool runs blank args as {}, so they are the same call
   try {
     return JSON.stringify(sortKeys(JSON.parse(argsJson)));
   } catch {
