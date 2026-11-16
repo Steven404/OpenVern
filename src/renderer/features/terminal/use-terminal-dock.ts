@@ -12,8 +12,8 @@ export interface TerminalDockState {
   /** The chat's dock is open. */
   open: boolean;
   /**
-   * The open/close handler for the global shortcut, or `undefined` where there is nothing to toggle: no chat on screen
-   * (the new-chat screen has no terminal) or no bridge (the web build).
+   * The open/close handler for the global shortcut, or `undefined` where there is nothing to toggle: neither a chat nor
+   * the New Chat screen (whose terminal is kept under `DRAFT_CHAT_ID`) on screen, or no bridge (the web build).
    */
   shortcut: (() => void) | undefined;
 }

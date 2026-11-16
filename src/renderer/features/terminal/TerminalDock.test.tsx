@@ -14,7 +14,7 @@ import { TERMINAL_PASTE_TOO_LARGE, TERMINAL_SKIPPED_OUTPUT, terminalRegistry } f
 vi.mock('@xterm/xterm', () => import('./test-fakes'));
 vi.mock('@xterm/addon-fit', () => import('./test-fakes'));
 
-import { availableDockHeight } from './TerminalDock';
+import { availableDockHeight, DRAFT_FOLDER_NOTICE, draftTerminalTarget } from './TerminalDock';
 import { useTerminalUiStore } from './terminal-store';
 import { FakeTerminalBridge, installTerminalBridge, resetTerminalFakes, Terminal } from './test-fakes';
 
@@ -26,7 +26,7 @@ let bridge: FakeTerminalBridge;
 beforeEach(() => {
   resetUi();
   window.sessionStorage.clear();
-  useTerminalUiStore.setState({ openDocks: {}, focusRequests: {} });
+  useTerminalUiStore.setState({ openDocks: {}, focusRequests: {}, draftProjectId: undefined });
   terminalRegistry.disposeAll();
   resetTerminalFakes();
   bridge = new FakeTerminalBridge();
@@ -354,6 +354,141 @@ describe('terminal dock: chats and projects that are not there', () => {
     await waitFor(() => expect(bridge.opens).toHaveLength(1));
     expect(bridge.opens[0]).toMatchObject({ chatId: seed.chat.id, cwd: seed.project.rootPath });
     expect(await screen.findByText(`zsh · ${seed.project.rootPath}`)).toBeTruthy();
+  });
+});
+
+describe('terminal dock: the New Chat screen', () => {
+  const chip = () => screen.getByRole('button', { name: /^Project:/ });
+  async function renderNew(route: string, client?: Awaited<ReturnType<typeof seededClient>>['client']) {
+    const view = renderApp({ ...(client ? { client } : {}), route });
+    await screen.findByRole('heading', { name: 'What are we building?' });
+    return view;
+  }
+
+  it('without a project, asks main for Documents and never sends a path', async () => {
+    await renderNew('/new');
+    await openDock();
+    expect(bridge.opens[0]).toStrictEqual({
+      chatId: '__draft__',
+      cwd: null,
+      defaultFolder: 'documents',
+      cols: expect.any(Number),
+      rows: expect.any(Number),
+    });
+    expect(await screen.findByText('zsh · /home/you/Documents')).toBeTruthy();
+    expect(screen.queryByText(/doesn't exist/)).toBeNull();
+  });
+
+  it('with a project, starts in its folder without the Documents flag', async () => {
+    const seed = await seededClient();
+    await renderNew(`/new?project=${seed.project.id}`, seed.client);
+    await waitFor(() => expect(chip().textContent).toBe(seed.project.name));
+    await openDock();
+    expect(bridge.opens[0]).toMatchObject({ chatId: '__draft__', cwd: seed.project.rootPath });
+    expect(bridge.opens[0]).not.toHaveProperty('defaultFolder');
+    expect(await screen.findByText(`zsh · ${seed.project.rootPath}`)).toBeTruthy();
+  });
+
+  it('waits for the projects list before opening a project shell', async () => {
+    const seed = await seededClient();
+    const listProjects = seed.client.listProjects.bind(seed.client);
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    seed.client.listProjects = async () => {
+      await gate;
+      return listProjects();
+    };
+    await renderNew(`/new?project=${seed.project.id}`, seed.client);
+    fireEvent.keyDown(window, { key: '`', ctrlKey: true });
+    await screen.findByRole('region', { name: 'Terminal' });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(bridge.opens).toEqual([]);
+    release();
+    await waitFor(() => expect(bridge.opens).toHaveLength(1));
+    expect(bridge.opens[0]).toMatchObject({ chatId: '__draft__', cwd: seed.project.rootPath });
+  });
+
+  it('a chip change keeps the shell in its folder, opens nothing new and says so', async () => {
+    const seed = await seededClient();
+    await renderNew(`/new?project=${seed.project.id}`, seed.client);
+    await waitFor(() => expect(chip().textContent).toBe(seed.project.name));
+    await openDock();
+    await screen.findByText(`zsh · ${seed.project.rootPath}`);
+    expect(screen.queryByText(DRAFT_FOLDER_NOTICE)).toBeNull();
+
+    fireEvent.keyDown(chip(), { key: 'Enter' });
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: 'No project' }));
+    await waitFor(() => expect(chip().textContent).toBe('No project'));
+
+    expect(await screen.findByText(DRAFT_FOLDER_NOTICE)).toBeTruthy();
+    expect(screen.getByText(`zsh · ${seed.project.rootPath}`)).toBeTruthy();
+    expect(bridge.opens.filter((o) => !o.restart)).toHaveLength(1);
+    expect(bridge.closes).toEqual([]);
+    expect(Terminal.instances).toHaveLength(1);
+
+    fireEvent.keyDown(chip(), { key: 'Enter' });
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: seed.project.name }));
+    await waitFor(() => expect(screen.queryByText(DRAFT_FOLDER_NOTICE)).toBeNull());
+  });
+
+  it('sending the first message moves the open terminal into the chat with its output', async () => {
+    await renderNew('/new');
+    await openDock();
+    act(() => bridge.emitData('__draft__', 'pre-chat-41\r\n'));
+    const term = Terminal.last();
+    fireEvent.change(composer(), { target: { value: 'hi' } });
+    fireEvent.keyDown(composer(), { key: 'Enter' });
+    await waitFor(() => expect(location()).toMatch(/^\/chat\/.+/));
+    const chatId = location().replace('/chat/', '');
+    expect(bridge.adopts).toEqual([{ from: '__draft__', to: chatId }]);
+    await screen.findByText('zsh · /home/you/Documents');
+    expect(useTerminalUiStore.getState().openDocks).toEqual({ [chatId]: true });
+    // The same emulator, no new shell, and the chat's later output reaches it.
+    expect(Terminal.instances).toHaveLength(1);
+    expect(bridge.opens).toHaveLength(1);
+    act(() => bridge.emitData(chatId, 'after'));
+    expect(term.writes).toEqual(['pre-chat-41\r\n', 'after']);
+  });
+});
+
+describe('draftTerminalTarget', () => {
+  const projects = [{ id: 'p1', rootPath: '/work/p1' }];
+  it('starts in Documents without a project', () => {
+    expect(draftTerminalTarget(null, undefined, false)).toStrictEqual({
+      state: 'ready',
+      projectId: null,
+      cwd: null,
+      defaultFolder: 'documents',
+    });
+  });
+  it("starts in a known project's folder", () => {
+    expect(draftTerminalTarget('p1', projects, false)).toStrictEqual({
+      state: 'ready',
+      projectId: 'p1',
+      cwd: '/work/p1',
+    });
+  });
+  it('waits for the list, and for one refetch of a project the list lacks', () => {
+    expect(draftTerminalTarget('p1', undefined, false)).toStrictEqual({ state: 'waiting' });
+    expect(draftTerminalTarget('p2', projects, false)).toStrictEqual({ state: 'waiting' });
+    expect(draftTerminalTarget('p2', projects, true)).toMatchObject({ state: 'ready', projectId: null, cwd: null });
+  });
+});
+
+describe('a chat without a project', () => {
+  it('still starts in home, without the Documents flag', async () => {
+    const seed = await seededClient();
+    const chat = await seed.client.createChat({ projectId: null, model: 'm' });
+    renderApp({ client: seed.client, route: `/chat/${chat.id}` });
+    await screen.findByRole('region', { name: 'Conversation' });
+    await screen.findAllByRole('link', { name: chat.title });
+    await openDock();
+    expect(bridge.opens[0]).toMatchObject({ chatId: chat.id, cwd: null });
+    expect(bridge.opens[0]).not.toHaveProperty('defaultFolder');
   });
 });
 

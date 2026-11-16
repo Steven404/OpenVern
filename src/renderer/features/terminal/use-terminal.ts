@@ -2,7 +2,7 @@
 //
 // The registry owns the emulator and subscriptions. This hook only mounts its element and observes UI state.
 
-import type { TerminalBridge, TerminalInfo } from '@shared/terminal';
+import type { TerminalBridge, TerminalDefaultFolder, TerminalInfo } from '@shared/terminal';
 import type { Id } from '@shared/types';
 import type { Terminal } from '@xterm/xterm';
 import { type RefObject, useCallback, useEffect, useRef, useState } from 'react';
@@ -16,8 +16,12 @@ export const RESIZE_DEBOUNCE_MS = 120;
 export type TerminalPhase = 'opening' | 'running' | 'exited' | 'error';
 
 export interface UseTerminalOptions {
-  /** The folder the shell starts in, or `null` for home. Main stat-checks it and falls back to home. */
+  /** The folder the shell starts in, or `null` for `defaultFolder`. Main stat-checks it and falls back to home. */
   cwd: string | null;
+  /** Where a `null` cwd starts; main resolves the folder (Documents falls back to home). Absent = home. */
+  defaultFolder?: TerminalDefaultFolder;
+  /** Called when opening started a new shell (not when it attached to one that was already running or had exited). */
+  onCreated?: () => void;
   /** Replaces `window.openvern.terminal` (tests). */
   bridge?: TerminalBridge | null;
 }
@@ -56,7 +60,10 @@ export function terminalErrorMessage(err: unknown): string {
 }
 
 export function useTerminal(chatId: Id, options: UseTerminalOptions): TerminalHandle {
-  const { cwd, bridge: bridgeOverride } = options;
+  const { cwd, defaultFolder, bridge: bridgeOverride } = options;
+  // Read when a shell is created, so a new callback each render does not re-run the attach effect.
+  const onCreatedRef = useRef(options.onCreated);
+  onCreatedRef.current = options.onCreated;
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   /** Set by `focus()` before xterm opened; the start step applies it once there is a textarea. */
@@ -89,7 +96,13 @@ export function useTerminal(chatId: Id, options: UseTerminalOptions): TerminalHa
     setError(null);
     setNotice(null);
     void terminalRegistry
-      .attach(chatId, bridge, { cwd, restart, host })
+      .attach(chatId, bridge, {
+        cwd,
+        ...(defaultFolder ? { defaultFolder } : {}),
+        restart,
+        host,
+        onCreated: () => onCreatedRef.current?.(),
+      })
       .then((entry) => {
         if (disposed) return;
         termRef.current = entry.term;
@@ -119,7 +132,7 @@ export function useTerminal(chatId: Id, options: UseTerminalOptions): TerminalHa
       detach?.();
       termRef.current = null;
     };
-  }, [chatId, cwd, attempt, bridgeOverride]);
+  }, [chatId, cwd, defaultFolder, attempt, bridgeOverride]);
 
   const focus = useCallback(() => {
     const term = termRef.current;

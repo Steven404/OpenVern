@@ -28,7 +28,12 @@ beforeEach(() => {
   window.sessionStorage.clear();
   window.localStorage.clear();
   setViewportHeight(1000);
-  useTerminalUiStore.setState({ openDocks: {}, focusRequests: {}, dockHeight: TERMINAL.dockDefaultHeight });
+  useTerminalUiStore.setState({
+    openDocks: {},
+    focusRequests: {},
+    dockHeight: TERMINAL.dockDefaultHeight,
+    draftProjectId: undefined,
+  });
 });
 
 afterEach(() => {
@@ -186,5 +191,48 @@ describe('focus requests', () => {
     openDock('a');
     clearFocusRequestsExcept(undefined);
     expect(useTerminalUiStore.getState().focusRequests).toEqual({});
+  });
+});
+
+describe('the New Chat screen terminal', () => {
+  it('moveDock carries an open dock to the chat, persists it and drops focus requests', async () => {
+    const { openDock, moveDock } = useTerminalUiStore.getState();
+    openDock('__draft__');
+    openDock('other');
+    moveDock('__draft__', 'chat-1');
+    const state = useTerminalUiStore.getState();
+    expect(state.openDocks).toStrictEqual({ other: true, 'chat-1': true });
+    expect(state.focusRequests).toStrictEqual({ other: true });
+    const after = await reload();
+    expect(selectDockOpen('chat-1')(after)).toBe(true);
+    expect(selectDockOpen('__draft__')(after)).toBe(false);
+  });
+
+  it('moveDock does nothing when the draft dock is closed', () => {
+    useTerminalUiStore.getState().moveDock('__draft__', 'chat-1');
+    expect(useTerminalUiStore.getState().openDocks).toStrictEqual({});
+    expect(window.sessionStorage.getItem(TERMINAL_STORAGE_KEYS.openDocks)).toBeNull();
+  });
+
+  it('the draft dock stays open through a reload', async () => {
+    useTerminalUiStore.getState().openDock('__draft__');
+    const after = await reload();
+    expect(selectDockOpen('__draft__')(after)).toBe(true);
+  });
+
+  it('remembers the project the draft shell started for through a reload, and forgets it on request', async () => {
+    useTerminalUiStore.getState().setDraftProject('proj-1');
+    expect((await reload()).draftProjectId).toBe('proj-1');
+    useTerminalUiStore.getState().setDraftProject(null);
+    expect((await reload()).draftProjectId).toBeNull();
+    useTerminalUiStore.getState().setDraftProject(undefined);
+    expect((await reload()).draftProjectId).toBeUndefined();
+  });
+
+  it('reads a corrupt project record as unknown', async () => {
+    for (const raw of ['{', '[]', '{"projectId":5}', '{"projectId":""}', '"proj"']) {
+      window.sessionStorage.setItem(TERMINAL_STORAGE_KEYS.draftProject, raw);
+      expect((await reload()).draftProjectId).toBeUndefined();
+    }
   });
 });

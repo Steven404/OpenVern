@@ -3,6 +3,7 @@ import {
   TERMINAL,
   type TerminalBridge,
   type TerminalDataEvent,
+  type TerminalDefaultFolder,
   type TerminalInfo,
   type TerminalReadAnswer,
   type TerminalReadRequest,
@@ -10,6 +11,7 @@ import {
 } from '@shared/terminal';
 import type { Id } from '@shared/types';
 import { readTerminalBuffer } from './read';
+import { setLoadedTerminalRegistry } from './registry-handle';
 import { splitTerminalWrite } from './write';
 import { createFitAddon, createTerminal, TERMINAL_DOCK_PADDING, waitForTerminalFont } from './xterm';
 
@@ -31,11 +33,7 @@ export class TerminalRegistry {
     }
     return entry;
   }
-  async attach(
-    id: Id,
-    bridge: TerminalBridge,
-    options: { cwd: string | null; restart?: boolean; info?: TerminalInfo; host?: HTMLElement },
-  ): Promise<TerminalEntry> {
+  async attach(id: Id, bridge: TerminalBridge, options: TerminalOpenOptions): Promise<TerminalEntry> {
     if (options.restart && this.get(id)?.info?.status.state === 'exited') this.dispose(id);
     let entry = this.get(id);
     if (!entry) {
@@ -57,16 +55,41 @@ export class TerminalRegistry {
       }
       entry = new TerminalEntry(id, bridge);
       this.entries.set(id, entry);
-      entry.ready = entry.open(options).catch((error: unknown) => {
-        if (this.get(id) === entry) {
-          entry?.dispose();
-          this.entries.delete(id);
+      const created = entry;
+      created.ready = created.open(options).catch((error: unknown) => {
+        // The entry's current id: a rename may have moved it while `open` was in flight.
+        if (this.get(created.id) === created) {
+          created.dispose();
+          this.entries.delete(created.id);
         }
         throw error;
       });
     }
     await entry.ready;
     return entry;
+  }
+  /**
+   * Files the emulator held under `from` under `to` (the New Chat screen's terminal joining the chat created from it,
+   * after main moved the session with `adopt`). Same emulator, scrollback and subscriptions; from here on it answers
+   * to `to` and writes and resizes go to `to`. Reads in flight for `from` answer `no_terminal`. False when `from` has
+   * no emulator.
+   *
+   * Relies on Electron delivering a window's main → renderer messages in the order main sent them: the `adopt` reply
+   * goes out before any data event carrying `to` (main renames synchronously and the reply is queued before the
+   * PTY's next output callback can run), and the caller renames as soon as the reply resolves, in the same task. So no
+   * event for `to` reaches the entry while it still answers to `from`, and none for `from` arrives after.
+   */
+  rename(from: Id, to: Id): boolean {
+    if (from === to) return false;
+    const entry = this.get(from);
+    if (!entry) return false;
+    // A fresh chat has no emulator; one left behind under its id would answer for a session main no longer has there.
+    if (this.entries.has(to)) this.dispose(to);
+    this.revisions.set(from, (this.revisions.get(from) ?? 0) + 1);
+    this.entries.delete(from);
+    entry.rekey(to);
+    this.entries.set(to, entry);
+    return true;
   }
   dispose(id: Id): void {
     this.revisions.set(id, (this.revisions.get(id) ?? 0) + 1);
@@ -115,6 +138,17 @@ export class TerminalRegistry {
   }
 }
 
+export interface TerminalOpenOptions {
+  cwd: string | null;
+  /** Where main starts the shell when `cwd` is null (main resolves the folder). Absent = home. */
+  defaultFolder?: TerminalDefaultFolder;
+  restart?: boolean;
+  info?: TerminalInfo;
+  host?: HTMLElement;
+  /** Called once when this attach started a new shell (not when it attached to an existing session). */
+  onCreated?: () => void;
+}
+
 export class TerminalEntry {
   readonly term = createTerminal();
   readonly fit = createFitAddon();
@@ -137,14 +171,20 @@ export class TerminalEntry {
   private exit: TerminalStatus | null = null;
   private listeners = new Set<() => void>();
   private offs: (() => void)[] = [];
+  /** Changes only through `rekey` (the registry's `rename`). Every filter and call below reads it at the time. */
+  private key: Id;
+  get id(): Id {
+    return this.key;
+  }
   constructor(
-    readonly id: Id,
+    id: Id,
     private bridge: TerminalBridge,
   ) {
+    this.key = id;
     this.term.loadAddon(this.fit);
     this.offs.push(
       bridge.onData((event) => {
-        if (event.chatId !== id || this.disposed) return;
+        if (event.chatId !== this.id || this.disposed) return;
         if (this.resyncing) {
           if (!this.bufferingReplay || this.recoveryOverflow) return;
           if (this.pendingChars + event.data.length > TERMINAL.replayMaxBytes) {
@@ -159,7 +199,7 @@ export class TerminalEntry {
         if (this.seq !== null && !this.resyncing) this.drain();
       }),
       bridge.onExit((event) => {
-        if (event.chatId !== id) return;
+        if (event.chatId !== this.id) return;
         this.exit = event.status;
         if (this.info) this.info = { ...this.info, status: event.status };
         this.notify();
@@ -174,12 +214,12 @@ export class TerminalEntry {
       }
       this.inputNotice = null;
       this.notify();
-      for (const piece of splitTerminalWrite(data)) bridge.write(id, piece);
+      for (const piece of splitTerminalWrite(data)) bridge.write(this.id, piece);
     });
     const resize = this.term.onResize(({ cols, rows }) => {
       if (this.replaying || !this.info) return;
       this.info = { ...this.info, cols, rows };
-      if (this.info.status.state === 'running') bridge.resize(id, cols, rows);
+      if (this.info.status.state === 'running') bridge.resize(this.id, cols, rows);
     });
     const selection = this.term.onSelectionChange(() => this.notify());
     this.offs.push(
@@ -188,18 +228,20 @@ export class TerminalEntry {
       () => selection.dispose(),
     );
   }
-  async open(options: {
-    cwd: string | null;
-    restart?: boolean;
-    info?: TerminalInfo;
-    host?: HTMLElement;
-  }): Promise<void> {
+  /** Answers to another chat id from now on (see `TerminalRegistry.rename`). */
+  rekey(to: Id): void {
+    this.key = to;
+    if (this.info) this.info = { ...this.info, chatId: to };
+    this.notify();
+  }
+  async open(options: TerminalOpenOptions): Promise<void> {
     const detach = options.host ? this.mount(options.host) : undefined;
     const size = { cols: this.term.cols, rows: this.term.rows };
     detach?.();
     const result = await this.bridge.open({
       chatId: this.id,
       cwd: options.cwd,
+      ...(options.cwd === null && options.defaultFolder === 'documents' ? { defaultFolder: 'documents' } : {}),
       cols: options.info?.cols ?? size.cols,
       rows: options.info?.rows ?? size.rows,
       ...(options.restart ? { restart: true } : {}),
@@ -209,6 +251,7 @@ export class TerminalEntry {
       await this.bridge.close(this.id);
       throw new NoTerminalError();
     }
+    if (result.created && !this.disposed) options.onCreated?.();
     if (this.disposed) throw new Error('Terminal ended');
     this.info = { ...result.info, status: this.exit ?? result.info.status };
     // Never fit until replay has parsed: an unseen terminal must wrap exactly as main's shell did.
@@ -380,3 +423,4 @@ export class TerminalEntry {
   }
 }
 export const terminalRegistry = new TerminalRegistry();
+setLoadedTerminalRegistry(terminalRegistry);
