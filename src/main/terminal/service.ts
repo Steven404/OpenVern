@@ -4,7 +4,7 @@
 import { statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { TERMINAL_IPC } from '@shared/terminal';
-import type { BrowserWindow } from 'electron';
+import { app, type BrowserWindow } from 'electron';
 import { type IPty, spawn } from 'node-pty';
 import { isAppUrl } from '../origin';
 import { TerminalManager } from './manager';
@@ -49,6 +49,13 @@ export function createTerminalManager(getWindow: () => BrowserWindow | null): Te
     spawn: spawnNodePty,
     shell: () => ({ file: chooseShell(process.env.SHELL), args: SHELL_ARGS, env: buildShellEnv(process.env) }),
     homeDir: homedir,
+    documentsDir: () => {
+      try {
+        return app.getPath('documents');
+      } catch {
+        return null;
+      }
+    },
     isDirectory,
     isOwnChild: createIsOwnChild(),
     events: {

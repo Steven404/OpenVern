@@ -183,6 +183,9 @@ export class FakeTerminalBridge implements TerminalBridge {
   readonly writes: { chatId: Id; data: string }[] = [];
   readonly resizes: { chatId: Id; cols: number; rows: number }[] = [];
   readonly closes: Id[] = [];
+  readonly adopts: { from: Id; to: Id }[] = [];
+  /** What the next `adopt` does instead of moving: `reject` fails the call, `refuse` answers false. */
+  adoptMode: 'move' | 'refuse' | 'reject' = 'move';
 
   private sessions = new Map<Id, FakeSession>();
   private gate: Promise<void> | null = null;
@@ -229,7 +232,7 @@ export class FakeTerminalBridge implements TerminalBridge {
       info: {
         chatId: req.chatId,
         shell: 'zsh',
-        cwd: req.cwd ?? '/home/you',
+        cwd: req.cwd ?? (req.defaultFolder === 'documents' ? '/home/you/Documents' : '/home/you'),
         cols: req.cols,
         rows: req.rows,
         status: { state: 'running' },
@@ -256,6 +259,19 @@ export class FakeTerminalBridge implements TerminalBridge {
   async close(chatId: Id): Promise<void> {
     this.closes.push(chatId);
     this.sessions.delete(chatId);
+  }
+
+  /** Like main: moves `from`'s session to `to` unless there is none or `to` has one; later events carry `to`. */
+  async adopt(from: Id, to: Id): Promise<boolean> {
+    this.adopts.push({ from, to });
+    if (this.adoptMode === 'reject') throw new Error('terminal: invalid request');
+    if (this.adoptMode === 'refuse') return false;
+    const session = this.sessions.get(from);
+    if (!session || this.sessions.has(to)) return false;
+    this.sessions.delete(from);
+    session.info = { ...session.info, chatId: to };
+    this.sessions.set(to, session);
+    return true;
   }
 
   onData(listener: Listener<TerminalDataEvent>): () => void {

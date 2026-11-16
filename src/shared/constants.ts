@@ -9,6 +9,11 @@ export const APP_ID = 'dev.stefanos.openvern';
 /** Picked from openrouter.ai/models on 2026-10-31: current Claude Sonnet with tools + image input. */
 export const DEFAULT_MODEL = 'anthropic/claude-sonnet-5.5';
 export const NEW_CHAT_TITLE = 'New chat';
+/**
+ * Stands in for a chat id on the New Chat screen, before the chat exists: the right panel's state and the terminal
+ * started there are kept under it, then moved to the chat on its first send. Never a real chat id (those are UUIDs).
+ */
+export const DRAFT_CHAT_ID = '__draft__';
 export const MAX_AGENT_STEPS = 25; // model calls per user turn
 /** F1: OpenRouter is the only provider; the Context popover shows this label. */
 export const PROVIDER_LABEL = 'OpenRouter';
