@@ -262,7 +262,8 @@ export function DiffSurface({ chatId, params }: SurfaceProps) {
     event.preventDefault();
     setDiffListRatio(next);
   };
-  const resetListRatio = () => setDiffListRatio(clampListRatio(LIST_RATIO_DEFAULT, bodyPx));
+  // Store the raw default: the render clamps it, and a short panel must not rewrite the preference.
+  const resetListRatio = () => setDiffListRatio(LIST_RATIO_DEFAULT);
 
   // Split needs a panel at least `splitMin` wide. The panel only widens on an explicit Split click (never on its
   // own), and only when the window has room; otherwise Split is disabled. `windowWidth` is 0 only before it is known.
