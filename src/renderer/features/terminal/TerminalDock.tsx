@@ -281,7 +281,7 @@ function TerminalPanel({ chatId, cwd, bridge }: { chatId: Id; cwd: string | null
   const terminal = useTerminal(chatId, { cwd, bridge });
   const closeDock = useTerminalUiStore((s) => s.closeDock);
   const focusRequested = useTerminalUiStore((s) => s.focusRequests[chatId] === true);
-  const { phase, info, error, hasSelection, containerRef } = terminal;
+  const { phase, info, error, hasSelection, containerRef, notice } = terminal;
 
   // Opening the dock asks for focus through the store. A chat switch mounts the dock too, and that must not pull focus
   // away from the chat's composer: only an explicit open (`openDock`) or a launcher click sets a request, and consuming
@@ -345,6 +345,14 @@ function TerminalPanel({ chatId, cwd, bridge }: { chatId: Id; cwd: string | null
 
       <div className="flex min-h-0 flex-1 flex-col">
         <div ref={containerRef} className="min-h-0 flex-1 overflow-hidden bg-code" data-testid="terminal-screen" />
+        {notice ? (
+          <p
+            role="status"
+            className="m-0 shrink-0 border-t border-border-header px-3 py-1.5 text-[12.5px] text-text-secondary"
+          >
+            {notice}
+          </p>
+        ) : null}
         {phase === 'error' ? (
           <div className="flex shrink-0 flex-wrap items-center gap-3 border-t border-border-header px-3 py-1.5">
             <p role="alert" className="m-0 min-w-0 flex-1 text-[12.5px] text-danger">

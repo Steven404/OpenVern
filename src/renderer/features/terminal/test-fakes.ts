@@ -80,6 +80,10 @@ export class Terminal {
     callback?.();
   }
 
+  reset(): void {
+    this.writes.length = 0;
+  }
+
   focus(): void {
     this.textarea?.focus();
   }
