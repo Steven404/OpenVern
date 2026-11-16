@@ -291,7 +291,7 @@ export function Composer({
               type="button"
               aria-label="Stop"
               onClick={onStop}
-              className="inline-flex size-[38px] cursor-pointer items-center justify-center rounded-[10px] border-0 bg-accent text-bg hover:brightness-106"
+              className="inline-flex size-[38px] shrink-0 cursor-pointer items-center justify-center rounded-[10px] border-0 bg-accent text-bg hover:brightness-106"
             >
               <Square aria-hidden="true" size={14} fill="currentColor" strokeWidth={0} />
             </button>
@@ -300,7 +300,7 @@ export function Composer({
               type="submit"
               aria-label="Send message"
               disabled={!canSend}
-              className="inline-flex size-[38px] cursor-pointer items-center justify-center rounded-[10px] border-0 bg-accent text-bg hover:brightness-106 disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex size-[38px] shrink-0 cursor-pointer items-center justify-center rounded-[10px] border-0 bg-accent text-bg hover:brightness-106 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <ArrowUp aria-hidden="true" size={18} strokeWidth={2.2} />
             </button>

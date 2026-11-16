@@ -735,6 +735,19 @@ describe('compact composer toolbar', () => {
     expect(reset.getAttribute('title')).toBe('Reasoning effort: Default');
   });
 
+  it('the toolbar row is a non-wrapping container and the labels switch on its width', async () => {
+    const { api, chat } = await setup();
+    renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    const model = await screen.findByRole('button', { name: `Model: ${VISION}` });
+    const row = model.closest('.\\@container\\/toolbar');
+    expect(row).not.toBeNull();
+    expect(row?.classList.contains('flex-nowrap')).toBe(true);
+    expect(model.querySelector('svg.lucide-brain')?.getAttribute('class')).toContain('@xl/toolbar:hidden');
+    const effort = screen.getByRole('button', { name: /^Effort:/ });
+    expect(effort.querySelector('svg.lucide-dumbbell')?.getAttribute('class')).toContain('@xl/toolbar:hidden');
+    expect(effort.querySelector('span.hidden')?.className).toContain('@xl/toolbar:inline');
+  });
+
   it('without a key the trigger is named "Add API key" and carries a KeyRound icon', async () => {
     const { api, chat } = await setup({ keyConfigured: false });
     renderWithProviders(<ReplyComposer chat={chat} />, { api });
