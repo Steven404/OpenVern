@@ -1,4 +1,5 @@
 import type { ReasoningEffort } from '@shared/types';
+import { Dumbbell } from 'lucide-react';
 import { useId } from 'react';
 import {
   Button,
@@ -53,9 +54,15 @@ export function EffortPicker({ value, onChange, efforts, defaultEffort }: Effort
   return (
     <Menu>
       <MenuTrigger asChild>
-        {/* No aria-label: the visible "Effort: …" text is the accessible name (plan §5.3). */}
-        <Button variant="ghost" className={triggerClass} title="Reasoning effort">
-          Effort: {label}
+        {/* Narrow toolbar: icon only, so the explicit aria-label carries the effort name. Wide: the text shows. */}
+        <Button
+          variant="ghost"
+          className={triggerClass}
+          aria-label={`Effort: ${label}`}
+          title={`Reasoning effort: ${label}`}
+        >
+          <Dumbbell aria-hidden="true" size={16} strokeWidth={1.75} className="@xl/toolbar:hidden" />
+          <span className="hidden @xl/toolbar:inline">Effort: {label}</span>
         </Button>
       </MenuTrigger>
       <MenuContent side="top" align="end" aria-describedby={hintId} className="w-[min(240px,calc(100vw-32px))]">

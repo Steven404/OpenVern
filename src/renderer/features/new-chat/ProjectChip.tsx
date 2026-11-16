@@ -31,6 +31,7 @@ function FolderIcon() {
       strokeWidth="1.8"
       strokeLinejoin="round"
       aria-hidden="true"
+      className="shrink-0"
     >
       <path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2h8.5A1.5 1.5 0 0 1 21 9.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z" />
     </svg>
@@ -48,10 +49,10 @@ export function ProjectChip({ projects, value, onChange }: ProjectChipProps) {
         <button
           type="button"
           aria-label={`Project: ${current?.name ?? 'No project'}`}
-          className="inline-flex min-h-8 cursor-pointer items-center gap-1.5 rounded-[8px] px-2.5 text-[13px] text-text-secondary hover:bg-surface-raised-hover hover:text-text"
+          className="inline-flex min-h-8 min-w-0 max-w-[240px] cursor-pointer items-center gap-1.5 rounded-[8px] px-2.5 text-[13px] text-text-secondary hover:bg-surface-raised-hover hover:text-text"
         >
           <FolderIcon />
-          <span className="max-w-[200px] truncate">{current?.name ?? 'No project'}</span>
+          <span className="min-w-0 max-w-[200px] truncate">{current?.name ?? 'No project'}</span>
         </button>
       </MenuTrigger>
       <MenuContent align="start" side="top" className="max-h-[320px] min-w-56">

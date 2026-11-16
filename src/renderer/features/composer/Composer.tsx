@@ -254,7 +254,7 @@ export function Composer({
             isNew ? 'text-base' : 'text-[15.5px]'
           }`}
         />
-        <div className="flex flex-wrap items-center gap-1.5">
+        <div className="@container/toolbar flex flex-nowrap items-center gap-1.5 min-w-0">
           <AttachMenu onAddFiles={() => fileInputRef.current?.click()} />
           <input
             ref={fileInputRef}
