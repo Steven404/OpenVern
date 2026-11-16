@@ -1,3 +1,4 @@
+import { DRAFT_CHAT_ID } from '@shared/constants';
 import type { ChatSummary, ReasoningEffort } from '@shared/types';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -97,7 +98,7 @@ export function NewChatScreen() {
             projectId={projectId}
             onSend={onSend}
             autoFocus
-            sinkKey={DRAFT_PANEL_CHAT_ID}
+            sinkKey={DRAFT_CHAT_ID}
             projectSlot={<ProjectChip projects={projects} value={projectId} onChange={onProjectChange} />}
           />
         </div>

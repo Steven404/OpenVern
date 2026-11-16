@@ -116,7 +116,8 @@ export function Composer({
   useEffect(() => (sinkKey ? registerAttachmentSink(sinkKey, addRef) : undefined), [sinkKey, addRef]);
 
   // An open terminal dock is fixed space under the composer: the draft grows into what is left of the column instead
-  // of pushing the dock (and its prompt) below the window. `sinkKey` is the chat id for a reply composer.
+  // of pushing the dock (and its prompt) below the window. `sinkKey` is the chat id for a reply composer and
+  // `DRAFT_CHAT_ID` for the New Chat composer, the same keys the terminal dock store uses.
   const dockHeight = useTerminalUiStore((s) =>
     sinkKey !== undefined && s.openDocks[sinkKey] === true ? s.dockHeight : 0,
   );
