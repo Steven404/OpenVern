@@ -47,6 +47,38 @@ describe('createQuitGuard', () => {
     expect(terminals.endShutdown).not.toHaveBeenCalled();
   });
 
+  it('a window opened while the terminals are being ended does not let opens through', async () => {
+    const { terminals, quit, guard, event, finish } = setup();
+    guard.beforeQuit(event());
+    guard.windowOpening(); // the app was activated again mid-quit
+    expect(terminals.endShutdown).not.toHaveBeenCalled();
+
+    finish();
+    await flush();
+    expect(quit).toHaveBeenCalledTimes(1);
+    guard.windowOpening(); // and again, while the resumed quit is closing windows
+    expect(terminals.endShutdown).not.toHaveBeenCalled();
+    const final = event();
+    guard.beforeQuit(final);
+    expect(final.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it('an unload prevented while the terminals are being ended does not let opens through', async () => {
+    const { terminals, quit, guard, event, finish } = setup();
+    guard.beforeQuit(event());
+    guard.quitCancelled(); // unrelated to the quit, which is on hold
+    expect(terminals.endShutdown).not.toHaveBeenCalled();
+    finish();
+    await flush();
+    expect(quit).toHaveBeenCalledTimes(1);
+  });
+
+  it('a window opened when no quit is under way lets opens through', () => {
+    const { terminals, guard } = setup();
+    guard.windowOpening();
+    expect(terminals.endShutdown).toHaveBeenCalledTimes(1);
+  });
+
   it('after a cancelled quit, opens are allowed and the next quit ends the terminals again', async () => {
     const { terminals, guard, event, finish } = setup();
     guard.beforeQuit(event());

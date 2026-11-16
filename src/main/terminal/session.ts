@@ -17,6 +17,9 @@ export const KILL_GRACE_MS = 1_000;
 export const INPUT_UNMEASURABLE_NOTICE =
   '\r\n[OpenVern] This terminal no longer accepts input: OpenVern cannot tell how much input is waiting for the ' +
   'shell, so it cannot keep that input bounded. Output still shows. Open a new terminal after updating OpenVern.\r\n';
+/** Shown once per stretch of dropped input, so a paste that was cut short is not a silent loss. */
+export const INPUT_DROPPED_NOTICE =
+  '\r\n[OpenVern] The shell is not reading fast enough, so part of what was typed or pasted was dropped.\r\n';
 
 export interface SessionEvents {
   data(event: TerminalDataEvent): void;
@@ -157,6 +160,7 @@ export class TerminalSession {
         this.log(
           `[openvern] terminal: the shell is not reading its input; dropping input beyond ${this.pendingInputMax} bytes`,
         );
+        this.output(INPUT_DROPPED_NOTICE);
       }
       return;
     }

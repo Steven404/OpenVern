@@ -17,7 +17,7 @@ export interface QuitGuard {
   beforeQuit(event: { preventDefault(): void }): void;
   /** The quit or window close was cancelled (Electron's `will-prevent-unload`). */
   quitCancelled(): void;
-  /** A main window is being opened (again): opens are allowed. */
+  /** A main window is being opened (again): opens are allowed, unless a quit is under way. */
   windowOpening(): void;
 }
 
@@ -38,10 +38,18 @@ export function createQuitGuard({ terminals, quit }: QuitGuardDeps): QuitGuard {
       });
     },
     quitCancelled() {
+      // While the terminals are still being ended, the quit itself is on hold (the first `before-quit` was prevented),
+      // so an unload that was prevented now belongs to something else, such as a reload. Letting opens through here
+      // would admit a shell that the quit about to resume never ends.
+      if (ending) return;
       ended = false;
       terminals.endShutdown();
     },
     windowOpening() {
+      // A window opened while a quit is under way (the app was activated again, or a second instance started) must not
+      // lift the refusal: a terminal opened in it would outlive the disposal that has already run or is running. Only
+      // a cancelled quit lifts it.
+      if (ending || ended) return;
       terminals.endShutdown();
     },
   };

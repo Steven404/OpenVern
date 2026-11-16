@@ -4,7 +4,7 @@
 import { TERMINAL, type TerminalDataEvent, type TerminalExitEvent } from '@shared/terminal';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFakePty, type FakePty, type PendingInputMode } from './fake-pty';
-import { INPUT_UNMEASURABLE_NOTICE, KILL_GRACE_MS, TerminalSession } from './session';
+import { INPUT_DROPPED_NOTICE, INPUT_UNMEASURABLE_NOTICE, KILL_GRACE_MS, TerminalSession } from './session';
 
 interface Harness {
   readonly pty: FakePty;
@@ -150,18 +150,22 @@ describe('TerminalSession queued input', () => {
   });
 
   it('drops writes that would queue more than the bound, with one log line per stretch of drops', () => {
-    const { pty, session, log } = makeSession({ pendingInputMaxBytes: 10 });
+    const { pty, session, log, data } = makeSession({ pendingInputMaxBytes: 10 });
+    const notices = () => data.filter((event) => event.data === INPUT_DROPPED_NOTICE).length;
     session.write('12345');
     session.write('67890');
     session.write('x');
     session.write('y');
     expect(pty.writes).toStrictEqual(['12345', '67890']);
     expect(log).toHaveBeenCalledTimes(1);
+    // The user is told too, once per stretch, so a paste that was cut short is not a silent loss.
+    expect(notices()).toBe(1);
     pty.drainInput();
     session.write('z');
     expect(pty.writes).toStrictEqual(['12345', '67890', 'z']);
     session.write('0123456789');
     expect(log).toHaveBeenCalledTimes(2);
+    expect(notices()).toBe(2);
   });
 
   it('measures in UTF-8 bytes', () => {
