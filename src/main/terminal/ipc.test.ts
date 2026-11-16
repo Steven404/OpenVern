@@ -148,6 +148,40 @@ describe('registerTerminalIpc sender check', () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining('untrusted'));
   });
 
+  it('checks the sender before the payload: an untrusted sender with a malformed payload is refused as untrusted', async () => {
+    const { fake, manager, log, untrusted } = setup();
+
+    await expect(fake.invoke(TERMINAL_IPC.open, untrusted, { chatId: 'bad id', cols: 'x' })).rejects.toThrow(
+      UNTRUSTED_SENDER,
+    );
+    await expect(fake.invoke(TERMINAL_IPC.open, untrusted, null)).rejects.toThrow(UNTRUSTED_SENDER);
+    // A malformed close from a trusted sender resolves quietly; refused as untrusted here, the check came first.
+    await expect(fake.invoke(TERMINAL_IPC.close, untrusted, '../chat')).rejects.toThrow(UNTRUSTED_SENDER);
+    await expect(fake.invoke(TERMINAL_IPC.adopt, untrusted, '__draft__', '__draft__')).rejects.toThrow(
+      UNTRUSTED_SENDER,
+    );
+    await expect(fake.invoke(TERMINAL_IPC.adopt, untrusted, 7)).rejects.toThrow(UNTRUSTED_SENDER);
+    await expect(fake.invoke(TERMINAL_IPC.adopt, untrusted)).rejects.toThrow(UNTRUSTED_SENDER);
+    for (const [channel, args] of [
+      [TERMINAL_IPC.open, [null]],
+      [TERMINAL_IPC.close, ['../chat']],
+      [TERMINAL_IPC.adopt, ['chat-0', 'chat-1']],
+    ] as const) {
+      await expect(fake.invoke(channel, untrusted, ...args)).rejects.not.toThrow(INVALID_REQUEST);
+    }
+    fake.send(TERMINAL_IPC.write, untrusted, 'bad id', 42);
+    fake.send(TERMINAL_IPC.resize, untrusted, 'bad id', Number.NaN, 'x');
+
+    expect(manager.open).not.toHaveBeenCalled();
+    expect(manager.close).not.toHaveBeenCalled();
+    expect(manager.adopt).not.toHaveBeenCalled();
+    expect(manager.write).not.toHaveBeenCalled();
+    expect(manager.resize).not.toHaveBeenCalled();
+    const logged = log.mock.calls.map(([line]) => String(line));
+    expect(logged.filter((line) => line.includes('untrusted sender'))).toHaveLength(11);
+    expect(logged.filter((line) => line.includes('invalid payload'))).toEqual([]);
+  });
+
   it('treats a throwing sender check as untrusted', async () => {
     const manager = createManager();
     const fake = createFakeIpc();
