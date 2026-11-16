@@ -509,6 +509,45 @@ describe('read_terminal removes C1 and directional controls (review finding 4)',
     }
   });
 
+  it.each([
+    ['a directional control', '\u202e'],
+    ['a zero-width space', '\u200b'],
+    ['a line separator', '\u2028'],
+  ])('redacts a key with %s both before it and inside it (the combined placement)', async (_, ch) => {
+    // Removing first glues the key to `x`; redacting first sees only a prefix too short to match. Neither order works.
+    const key = FAKE_OPENROUTER_KEY;
+    const combined = `x${ch}${key.slice(0, 9)}${ch}${key.slice(9)}`;
+    const twoKeys = `${key} x${ch}${key.slice(0, 9)}${ch}${key.slice(9)}`;
+    for (const known of [[], [key]]) {
+      for (const line of [combined, twoKeys, `${ch}${combined}${ch}`]) {
+        const res = await run({}, ctx(answerFor(['before', line, 'after']), { knownSecrets: known }));
+        expect(res.ok).toBe(true);
+        expect(res.output).not.toContain('abcdef12');
+        expect(body(res.output).split('\n')).toHaveLength(3);
+        expect(res.output).toMatch(/secret-looking value/);
+      }
+    }
+  });
+
+  it.each([
+    ['shell', (value: string) => ({ shell: value })],
+    ['cwd', (value: string) => ({ cwd: `/tmp/${value}` })],
+  ])('redacts a key in the %s with invisible characters before it and inside it', async (_, overrides) => {
+    const key = FAKE_OPENROUTER_KEY;
+    for (const ch of ['\u200b', '\u202e', '\u0085']) {
+      const value = `x${ch}${key.slice(0, 9)}${ch}${key.slice(9)}`;
+      for (const known of [[], [key]]) {
+        const res = await run({}, ctx(answerFor(['x'], { info: info(overrides(value)) }), { knownSecrets: known }));
+        expect(res.output).not.toContain('abcdef12');
+      }
+    }
+  });
+
+  it('does not treat a key-like run inside an ordinary word as a key', async () => {
+    const res = await run({}, ctx(answerFor(['my_ghp_abcdefghijklmnopqrstuvwxyz012345 and task-runner'])));
+    expect(body(res.output)).toBe('my_ghp_abcdefghijklmnopqrstuvwxyz012345 and task-runner');
+  });
+
   it('keeps zero-width joiners in ordinary text', async () => {
     const res = await run({}, ctx(answerFor(['family 👨\u200d👩\u200d👧 ok'])));
     expect(body(res.output)).toBe('family 👨\u200d👩\u200d👧 ok');

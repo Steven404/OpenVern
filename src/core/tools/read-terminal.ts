@@ -12,7 +12,7 @@
 import { terminalReadAnswerBody } from '@shared/api';
 import { TERMINAL, type TerminalReadAnswer, type TerminalReadResult, type TerminalStatus } from '@shared/terminal';
 import { z } from 'zod';
-import { redactionNote, redactSecrets, sentinel } from '../security/redact';
+import { redactionNote, redactSecrets, SECRET_PATTERNS, sentinel } from '../security/redact';
 import type { ChatToolContext, Tool, ToolResult } from './types';
 import { abortedResult, fail, parseArgs, succeed, toParameters } from './util';
 
@@ -73,41 +73,77 @@ function plainText(text: string): string {
   return text.replace(TEXT_CONTROL_RE, '');
 }
 
-/** Shown in place of a line whose invisible characters make its redaction ambiguous. */
-const LINE_SENTINEL = sentinel('line');
-
 /** Zero-width characters. Kept in the text (emoji sequences need them), but ignored when looking for secrets. */
-const ZERO_WIDTH_RE = /[\u200b-\u200d\u2060\ufeff]/g;
-const withoutInvisibles = (text: string): string => plainText(text).replace(ZERO_WIDTH_RE, '');
+const ZERO_WIDTH = '\u200b-\u200d\u2060\ufeff';
+const TEXT_INVISIBLE_RE = new RegExp(`${TEXT_CONTROL_RE.source.slice(0, -1)}${ZERO_WIDTH}]`, 'g');
+
+// The vendor patterns without the "not inside a longer word" rule, which `redactIgnoring` applies itself.
+const LOOSE_TOKEN_RE = new RegExp(SECRET_PATTERNS.map((p) => `(?:${p.source})`).join('|'), 'g');
+const WORD_CHAR_RE = /[A-Za-z0-9_-]/;
 
 /**
- * Redacts the text and removes its directional controls, in a way that does not depend on where invisible characters
- * sit. Removing them first can join a key to the word before it (`x` + a directional control + key becomes `xsk-…`,
- * which no pattern accepts), and redacting first can replace only the first half of a key that such a character
- * splits. So the text is redacted both ways, with and without its invisible characters (the removed ones and the
- * zero-width ones), and the two results are compared line by line. Where they agree, the line is shown, redacted. A
- * line on which they disagree holds a secret next to an invisible character, and is replaced whole. Line breaks are
- * never added or removed.
+ * Redacts `text` as if its invisible characters (`invisible`, a global regex of single characters) were not there,
+ * and returns it without them. An invisible character inside a key cannot split it, because the search runs on the
+ * text without them. One just before a key cannot glue the key to the word in front of it either: the place where a
+ * character was removed counts as a word boundary. No order of "remove" and "redact" gives both; this does not depend
+ * on an order. Line breaks are kept as `redactSecrets` keeps them.
+ */
+function redactIgnoring(
+  text: string,
+  invisible: RegExp,
+  known: readonly string[] | undefined,
+): { text: string; count: number } {
+  // The text without its invisible characters, and where in it one was removed just before a character.
+  let stripped = '';
+  const removedBefore = new Set<number>();
+  let last = 0;
+  for (const match of text.matchAll(invisible)) {
+    stripped += text.slice(last, match.index);
+    removedBefore.add(stripped.length);
+    last = match.index + match[0].length;
+  }
+  stripped += text.slice(last);
+
+  let out = '';
+  let count = 0;
+  let from = 0;
+  LOOSE_TOKEN_RE.lastIndex = 0;
+  for (let match = LOOSE_TOKEN_RE.exec(stripped); match; match = LOOSE_TOKEN_RE.exec(stripped)) {
+    const at = match.index;
+    const atBoundary = at === 0 || removedBefore.has(at) || !WORD_CHAR_RE.test(stripped[at - 1] as string);
+    if (!atBoundary) {
+      LOOSE_TOKEN_RE.lastIndex = at + 1; // a key may still start further into this word
+      continue;
+    }
+    // Alone, the token starts its string, so the shared redactor accepts it and writes the usual placeholder.
+    out += stripped.slice(from, at) + redactSecrets(match[0], { known }).text;
+    count++;
+    from = at + match[0].length;
+  }
+  out += stripped.slice(from);
+
+  // Stored keys (exact values), private-key blocks, and nothing new among the tokens already replaced.
+  const rest = redactSecrets(out, { known });
+  return { text: rest.text, count: count + rest.count };
+}
+
+/**
+ * The text for the block: redacted without regard to its invisible characters, with the directional controls and
+ * separators removed. A line that held a secret is shown without any invisible character; every other line keeps its
+ * zero-width characters. Line breaks are never added or removed (unless a stored secret holds one, which the caller
+ * detects by the line count).
  */
 function redactText(text: string, known: readonly string[] | undefined): { text: string; count: number } {
-  const redactedFirst = redactSecrets(text, { known });
-  const removedFirst = redactSecrets(withoutInvisibles(text), { known });
-  const shown = plainText(redactedFirst.text).split('\n');
-  const a = removedFirst.text.split('\n');
-  const b = withoutInvisibles(redactedFirst.text).split('\n');
-  const count = Math.max(removedFirst.count, redactedFirst.count);
-  // Redaction keeps line breaks, so all three have the same lines unless a stored secret holds one; then nothing of
-  // the text can be trusted line by line.
-  if (a.length !== b.length || a.length !== shown.length) {
-    return { text: shown.map(() => LINE_SENTINEL).join('\n'), count: Math.max(count, 1) };
-  }
-  let replaced = 0;
-  const lines = shown.map((line, i) => {
-    if (a[i] === b[i]) return line;
-    replaced++;
-    return LINE_SENTINEL;
+  const redacted = redactIgnoring(text, TEXT_INVISIBLE_RE, known);
+  if (redacted.count === 0) return { text: plainText(text), count: 0 };
+  const redactedLines = redacted.text.split('\n');
+  const originalLines = text.split('\n');
+  if (redactedLines.length !== originalLines.length) return redacted;
+  const lines = originalLines.map((line, i) => {
+    const bare = line.replace(TEXT_INVISIBLE_RE, '');
+    return bare === redactedLines[i] ? plainText(line) : (redactedLines[i] as string);
   });
-  return { text: lines.join('\n'), count: Math.max(count, replaced) };
+  return { text: lines.join('\n'), count: redacted.count };
 }
 
 /** The text can't close (or reopen) the block it is shown in. Never changes the number of lines. */
@@ -128,19 +164,19 @@ const HEADER_CONTROLS_RE = /[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u
 /** Shown in place of a metadata value whose control characters may split a secret. */
 const METADATA_SENTINEL = sentinel('terminal-metadata');
 
+const HEADER_INVISIBLE_RE = new RegExp(`${HEADER_CONTROLS_RE.source.slice(0, -1)}${ZERO_WIDTH}]`, 'g');
+
 /**
  * Redacts a whole metadata value, before it is escaped or clipped: clipping first could drop a key's prefix and leave
- * a body no pattern matches. Controls can split a secret so that neither the value as sent nor the value without its
- * controls holds all of it in one match (`sk-or-v1-abc<NEL>def…`): a value with controls in which either reading finds
- * a secret is replaced whole.
+ * a body no pattern matches. The search ignores control and zero-width characters (see `redactIgnoring`), and a value
+ * that holds both such a character and a secret is replaced whole, since escaping its controls afterwards would put
+ * text back between the pieces.
  */
 function redactValue(raw: string, known: readonly string[] | undefined): { value: string; count: number } {
-  const whole = redactSecrets(raw, { known });
-  const withoutControls = raw.replace(HEADER_CONTROLS_RE, '');
-  if (withoutControls === raw) return { value: whole.text, count: whole.count };
-  const joined = redactSecrets(withoutControls, { known });
-  const count = Math.max(whole.count, joined.count);
-  return count > 0 ? { value: METADATA_SENTINEL, count } : { value: raw, count: 0 };
+  const redacted = redactIgnoring(raw, HEADER_INVISIBLE_RE, known);
+  if (redacted.count === 0) return { value: raw, count: 0 };
+  const hasInvisible = raw.replace(HEADER_INVISIBLE_RE, '') !== raw;
+  return { value: hasInvisible ? METADATA_SENTINEL : redacted.text, count: redacted.count };
 }
 
 /**
