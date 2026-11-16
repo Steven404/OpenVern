@@ -59,13 +59,14 @@ export const ERROR_DEFAULTS: Record<ErrorCode, { message: string; retryable: boo
   unsupported_file: { message: 'This file type is not supported. Attach text files or images.', retryable: false },
   file_too_large: { message: 'This file is too large.', retryable: false },
   path_invalid: { message: 'That folder does not exist or cannot be read.', retryable: false },
+  // Not retryable: Retry truncates back to the user message and reruns it, throwing away the turn's work.
   max_steps_reached: {
-    message: 'Stopped after too many steps in one turn. Reply to let it continue.',
-    retryable: true,
+    message: 'Stopped after too many steps in one turn. Reply "Continue" to let the model pick up where it left off.',
+    retryable: false,
   },
   tool_loop_detected: {
     message:
-      'Stopped because the model kept repeating the same tool call with the same result. Reply with more guidance to continue.',
+      'Stopped because the model kept repeating the same tool call with the same result. Reply "Continue" to let it keep going, or tell it what to do differently.',
     retryable: false,
   },
   changes_stale: {

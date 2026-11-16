@@ -645,7 +645,7 @@ describe('errors', () => {
     expect(find(events, 'tool_result')).toHaveLength(MAX_AGENT_STEPS);
     const tail = shape(events).slice(-4);
     expect(tail).toEqual(['tool_result', 'error', 'chat_updated', 'done']);
-    expect(find(events, 'error')[0]?.error.code).toBe('max_steps_reached');
+    expect(find(events, 'error')[0]?.error).toMatchObject({ code: 'max_steps_reached', retryable: false });
     expect((await h.chats.get(h.chatId)).title).toBe(NEW_CHAT_TITLE);
   });
 });
@@ -670,22 +670,19 @@ describe('stuck-loop guard', () => {
     const h = await createHarness({
       tools: [counter],
       script: scriptFromTurns([
-        ...Array.from({ length: 6 }, (_, i) => callTools([[`c${i}`, 'read_file', '{"path":"a"}']])),
+        ...Array.from({ length: MAX_REPEATED_TOOL_STEPS + 2 }, (_, i) =>
+          callTools([[`c${i}`, 'read_file', '{"path":"a"}']]),
+        ),
         reply('done'),
         TITLE_TURN,
       ]),
     });
     const events = await h.run();
     expect(find(events, 'error')).toHaveLength(0);
-    expect(find(events, 'tool_result').map((e) => e.message.output)).toEqual([
-      'count 1',
-      'count 2',
-      'count 3',
-      'count 4',
-      'count 5',
-      'count 6',
-    ]);
-    expect(h.provider.calls).toHaveLength(8); // six tool steps, the reply, the title
+    expect(find(events, 'tool_result').map((e) => e.message.output)).toEqual(
+      Array.from({ length: MAX_REPEATED_TOOL_STEPS + 2 }, (_, i) => `count ${i + 1}`),
+    );
+    expect(h.provider.calls).toHaveLength(MAX_REPEATED_TOOL_STEPS + 4); // the tool steps, the reply, the title
     expect(shape(events).at(-1)).toBe('done');
     expect((await h.chats.get(h.chatId)).title).toBe('Friendly greeting');
   });
@@ -710,20 +707,16 @@ describe('stuck-loop guard', () => {
     const readB = callTools([['b', 'read_file', '{"path":"b"}']]);
     const h = await createHarness({
       script: scriptFromTurns([
-        readA('a1'),
-        readA('a2'),
-        readA('a3'),
+        ...Array.from({ length: MAX_REPEATED_TOOL_STEPS - 1 }, (_, i) => readA(`a${i}`)),
         readB,
-        readA('a4'),
-        readA('a5'),
-        readA('a6'),
+        ...Array.from({ length: MAX_REPEATED_TOOL_STEPS - 1 }, (_, i) => readA(`c${i}`)),
         reply('done'),
         TITLE_TURN,
       ]),
     });
     const events = await h.run();
     expect(find(events, 'error')).toHaveLength(0);
-    expect(h.provider.calls).toHaveLength(9); // seven tool steps, the reply, the title
+    expect(h.provider.calls).toHaveLength(2 * MAX_REPEATED_TOOL_STEPS + 1); // the tool steps, the reply, the title
     expect(h.messages().at(-1)).toMatchObject({ role: 'assistant', status: 'complete', text: 'done' });
     expect((await h.chats.get(h.chatId)).title).toBe('Friendly greeting');
   });
@@ -749,18 +742,19 @@ describe('stuck-loop guard', () => {
   it('parallel steps where only one of the two calls repeats do not trip the guard', async () => {
     const h = await createHarness({
       script: (_req, i) => {
-        if (i < 6) {
+        const steps = MAX_REPEATED_TOOL_STEPS + 2;
+        if (i < steps) {
           return callTools([
             [`a${i}`, 'read_file', '{"path":"a"}'],
             [`b${i}`, 'read_file', `{"path":"b${i}"}`],
           ]);
         }
-        return i === 6 ? reply('done') : TITLE_TURN;
+        return i === steps ? reply('done') : TITLE_TURN;
       },
     });
     const events = await h.run();
     expect(find(events, 'error')).toHaveLength(0);
-    expect(h.provider.calls).toHaveLength(8); // six tool steps, the reply, the title
+    expect(h.provider.calls).toHaveLength(MAX_REPEATED_TOOL_STEPS + 4); // the tool steps, the reply, the title
     expect(h.messages().at(-1)).toMatchObject({ role: 'assistant', status: 'complete', text: 'done' });
   });
 

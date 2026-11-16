@@ -12,7 +12,7 @@ export const NEW_CHAT_TITLE = 'New chat';
 /** Model calls per user turn. A cost backstop only: a stuck loop is stopped earlier by `MAX_REPEATED_TOOL_STEPS`. */
 export const MAX_AGENT_STEPS = 100;
 /** Stop a turn when this many consecutive steps make the same tool calls and get the same results. */
-export const MAX_REPEATED_TOOL_STEPS = 4;
+export const MAX_REPEATED_TOOL_STEPS = 6;
 /** F1: OpenRouter is the only provider; the Context popover shows this label. */
 export const PROVIDER_LABEL = 'OpenRouter';
 
