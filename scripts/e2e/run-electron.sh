@@ -67,4 +67,11 @@ node scripts/e2e/archive.mjs || RC=1
 # S9.3 screenshots (after the persistence check: they add their own project and chat).
 if [ "${E2E_SHOTS:-0}" = 1 ]; then node scripts/e2e/shots.mjs || RC=1; fi
 
+# T4 terminal (plan §6 T4.2): launcher → shell, read_terminal, redaction, reload, Ctrl+backtick, chat switch, End, quit.
+# Electron only, and it quits the app at the end, so it runs last. E2E_APP_PID lets it check the quit and the shells.
+if [ "${E2E_SKIP_TERMINAL:-0}" != 1 ]; then
+  export E2E_APP_PID="$APP_PGID"
+  node scripts/e2e/terminal.mjs || RC=1
+fi
+
 exit "$RC"

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # End-to-end run against a PACKAGED build (the release .app on macOS, an AppImage on Linux), driven over CDP the same
-# way run-electron.sh drives the unpackaged app: smoke (main + persist), edits and archive. Uses temp data / userData
-# dirs and the fake provider. Does not build: package first (npm run dist:mac, or the validation build for AS-10/11).
+# way run-electron.sh drives the unpackaged app: smoke (main + persist), edits, archive and terminal. Uses temp data /
+# userData dirs and the fake provider. Does not build: package first (npm run dist:mac, or the validation build for
+# AS-10/11).
 #   npm run e2e:packaged                        macOS: the AS-10 validation package (D-KC-PKG)
 #   E2E_APP=<path> npm run e2e:packaged         a .app (macOS) or an AppImage (Linux)
 #   E2E_ALLOW_REAL_IDENTITY=1 …                 allow the real dev.stefanos.openvern bundle (needs your approval, X2)
@@ -162,5 +163,10 @@ run_step "edits" node scripts/e2e/edits.mjs || RC=1
 
 # F2 archive project chats (plan §6 F2.6).
 run_step "archive" node scripts/e2e/archive.mjs || RC=1
+
+# T4 terminal (plan §6 T4.3): the same steps against the packaged build. Electron only, and it quits the app at the
+# end, so it runs last. E2E_APP_PID lets it check the quit and the shells.
+export E2E_APP_PID="$APP_PGID"
+run_step "terminal" node scripts/e2e/terminal.mjs || RC=1
 
 exit "$RC"

@@ -169,7 +169,12 @@ try {
     await sleep(400);
     check('B15 loose chat has no pending edits', (await changes()).pending === null);
     await showLauncher();
-    check('B4 Terminal is disabled', (await rowDisabled('Terminal')) === true);
+    // The Terminal row depends on the host (terminal plan §5, A9): the desktop app opens a shell in the home folder
+    // for a chat without a project; the web build has no PTY and says so.
+    check(
+      electron ? 'B4 Terminal is enabled in the desktop app' : 'B4 Terminal is disabled on the web',
+      (await rowDisabled('Terminal')) === !electron,
+    );
     check('B4/B15 Files is enabled (home folder) in a chat without a project', (await rowDisabled('Files')) === false);
     const filesHint = await ev(`${launcherRow('Files')}?.innerText ?? ''`);
     check(
@@ -179,7 +184,13 @@ try {
     );
     check('B4/B15 Diff is disabled in a chat without edits', (await rowDisabled('Diff')) === true);
     const hint = await ev(`${launcherRow('Terminal')}?.innerText ?? ''`);
-    check('B4 Terminal hint says "Not available yet"', hint.includes('Not available yet'), hint.replace(/\n/g, ' | '));
+    check(
+      electron
+        ? 'B4 Terminal hint offers a shell in the home folder'
+        : 'B4 Terminal hint says "Available in the desktop app"',
+      hint.includes(electron ? 'Open a shell in your home folder' : 'Available in the desktop app'),
+      hint.replace(/\n/g, ' | '),
+    );
     await setPanel(false);
   }
 
