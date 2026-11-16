@@ -2,7 +2,7 @@
 // shell, the file system, the own-child check and where events go are injected, so tests run it with a fake PTY.
 
 import { basename, isAbsolute, resolve } from 'node:path';
-import { TERMINAL, type TerminalInfo, type TerminalOpenResult } from '@shared/terminal';
+import { TERMINAL, type TerminalDefaultFolder, type TerminalInfo, type TerminalOpenResult } from '@shared/terminal';
 import type { Id } from '@shared/types';
 import type { IsOwnChild } from './own-child';
 import type { PtyProcess, SpawnPty } from './pty';
@@ -20,6 +20,8 @@ export interface TerminalManagerDeps {
   /** Resolved on every new session, so a changed environment is picked up. */
   shell: () => ShellCommand;
   homeDir: () => string;
+  /** The user's Documents folder, or null when it cannot be found. Must not throw (a throw is treated as null). */
+  documentsDir: () => string | null;
   /** Whether the path is an existing directory. Must not throw. */
   isDirectory: (path: string) => boolean;
   events: SessionEvents;
@@ -35,8 +37,10 @@ export interface TerminalManagerDeps {
 
 export interface OpenParams {
   chatId: Id;
-  /** null = the home folder. */
+  /** null = `defaultFolder`. */
   cwd: string | null;
+  /** Where a null `cwd` starts: Documents (home when missing). Absent = home. Never set with a string `cwd`. */
+  defaultFolder?: Exclude<TerminalDefaultFolder, 'home'>;
   cols: number;
   rows: number;
   /** Replace an exited session with a fresh shell (Restart). Ignored while the shell is running. */
@@ -141,6 +145,23 @@ export class TerminalManager {
     return { info: session.info(), replay: '', replayTruncated: false, seq: 0, created: true };
   }
 
+  /**
+   * Moves the session held under `from` to `to` (the New Chat screen's terminal joining the chat created from it): the
+   * same shell, replay and `seq`, and later events carry `to`. False, with nothing changed, when `from` has no session
+   * or `to` already has one. Never spawns and never ends a shell, so the session limit and the spawn count are
+   * unaffected. Synchronous, so no event can go out between the move and the rename. Callers check that `from` is
+   * the draft id (./validate.ts `parseAdopt`).
+   */
+  adopt(from: Id, to: Id): boolean {
+    if (from === to) return false;
+    const session = this.sessions.get(from);
+    if (!session || this.sessions.has(to)) return false;
+    this.sessions.delete(from);
+    session.rekey(to);
+    this.sessions.set(to, session);
+    return true;
+  }
+
   write(chatId: Id, data: string): void {
     this.sessions.get(chatId)?.write(data);
   }
@@ -202,7 +223,7 @@ export class TerminalManager {
   }
 
   private create(params: OpenParams): TerminalSession {
-    const cwd = this.resolveCwd(params.cwd);
+    const cwd = this.resolveCwd(params.cwd, params.defaultFolder);
     const shell = this.deps.shell();
     // Counted before the call: a spawn that fails in native code may leak as well.
     this.spawned += 1;
@@ -229,12 +250,34 @@ export class TerminalManager {
     });
   }
 
-  /** The requested folder when it is an absolute path to an existing directory, else home. */
-  private resolveCwd(requested: string | null): string {
-    if (requested !== null && isAbsolute(requested)) {
-      const path = resolve(requested);
-      if (this.deps.isDirectory(path)) return path;
+  /**
+   * The requested folder when it is an absolute path to an existing directory, else home. With no folder requested,
+   * Documents when asked for and it is an absolute path to an existing directory, else home.
+   */
+  private resolveCwd(requested: string | null, defaultFolder: OpenParams['defaultFolder']): string {
+    if (requested !== null) {
+      if (isAbsolute(requested)) {
+        const path = resolve(requested);
+        if (this.deps.isDirectory(path)) return path;
+      }
+      return this.deps.homeDir();
+    }
+    if (defaultFolder === 'documents') {
+      const documents = this.documentsDir();
+      if (documents !== null && isAbsolute(documents)) {
+        const path = resolve(documents);
+        if (this.deps.isDirectory(path)) return path;
+      }
     }
     return this.deps.homeDir();
+  }
+
+  private documentsDir(): string | null {
+    try {
+      const dir = this.deps.documentsDir();
+      return typeof dir === 'string' && dir.length > 0 ? dir : null;
+    } catch {
+      return null;
+    }
   }
 }

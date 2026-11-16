@@ -19,7 +19,7 @@ let bridge: FakeTerminalBridge;
 beforeEach(() => {
   resetUi();
   window.sessionStorage.clear();
-  useTerminalUiStore.setState({ openDocks: {}, focusRequests: {} });
+  useTerminalUiStore.setState({ openDocks: {}, focusRequests: {}, draftProjectId: undefined });
   terminalRegistry.disposeAll();
   resetTerminalFakes();
   bridge = new FakeTerminalBridge();
@@ -101,11 +101,19 @@ describe('Ctrl+backtick toggles the terminal dock', () => {
     expect(await screen.findByRole('region', { name: 'Terminal' })).toBeTruthy();
   });
 
-  it('does nothing on the new-chat screen, which has no terminal', async () => {
+  it('toggles the draft dock on the new-chat screen, whose shell starts in Documents', async () => {
     renderApp({ route: '/new' });
     await screen.findByRole('heading', { name: 'What are we building?' });
     backtick();
-    expect(dock()).toBeNull();
+    expect(await screen.findByRole('region', { name: 'Terminal' })).toBeTruthy();
+    expect(useTerminalUiStore.getState().openDocks).toStrictEqual({ __draft__: true });
+    await waitFor(() => expect(bridge.opens).toHaveLength(1));
+    expect(bridge.opens[0]).toMatchObject({ chatId: '__draft__', cwd: null, defaultFolder: 'documents' });
+    backtick();
+    await waitFor(() => expect(dock()).toBeNull());
+    expect(useTerminalUiStore.getState().openDocks).toStrictEqual({});
+    // Hiding never ends the shell.
+    expect(bridge.closes).toStrictEqual([]);
     expect(location()).toBe('/new');
   });
 

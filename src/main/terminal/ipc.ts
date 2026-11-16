@@ -1,12 +1,14 @@
-// The terminal's IPC handlers (plan T1.5): `open`, `list` and `close` are invoked, `write` and `resize` are sent.
+// The terminal's IPC handlers (plan T1.5): `open`, `list`, `close` and `adopt` are invoked, `write` and `resize` are
+// sent.
 // Every handler first checks the sender, then the payload. Nothing here throws out of an `on` listener (that would be
-// an uncaught exception in main); invoke handlers reject only an untrusted sender and a bad or refused `open`.
+// an uncaught exception in main); invoke handlers reject only an untrusted sender, a bad or refused `open`, and a bad
+// `adopt`.
 // `data` and `exit` go the other way and are sent by ./service.ts, to the main window only.
 
 import { TERMINAL_IPC, type TerminalInfo, type TerminalOpenResult } from '@shared/terminal';
 import type { IpcMainEvent, IpcMainInvokeEvent } from 'electron';
 import type { TerminalManager } from './manager';
-import { parseChatId, parseOpenRequest, parseSize, parseWriteData } from './validate';
+import { parseAdopt, parseChatId, parseOpenRequest, parseSize, parseWriteData } from './validate';
 
 /** The part of `ipcMain` used here, so tests can pass a fake. */
 export interface TerminalIpcMain {
@@ -16,7 +18,7 @@ export interface TerminalIpcMain {
 
 export interface TerminalIpcDeps {
   ipc: TerminalIpcMain;
-  manager: Pick<TerminalManager, 'open' | 'list' | 'write' | 'resize' | 'close'>;
+  manager: Pick<TerminalManager, 'open' | 'list' | 'write' | 'resize' | 'close' | 'adopt'>;
   /** True only for the app's own page in the main window. */
   isTrustedSender: (event: IpcMainEvent | IpcMainInvokeEvent) => boolean;
   log?: (message: string) => void;
@@ -54,6 +56,15 @@ export function registerTerminalIpc({ ipc, manager, isTrustedSender, log = conso
     const id = parseChatId(chatId);
     // No session can exist under a malformed id, so there is nothing to close.
     if (id) await manager.close(id);
+  });
+
+  // Moves the New Chat screen's session to the chat just created from it. Only the draft id can be moved, never onto
+  // the draft id, and a chat that already has a session keeps it (the manager answers false). Never spawns.
+  ipc.handle(TERMINAL_IPC.adopt, async (event, from, to): Promise<boolean> => {
+    if (!trusted(event, TERMINAL_IPC.adopt)) throw new Error(UNTRUSTED_SENDER);
+    const ids = parseAdopt(from, to);
+    if (!ids) throw new Error(INVALID_REQUEST);
+    return manager.adopt(ids.from, ids.to);
   });
 
   ipc.on(TERMINAL_IPC.write, (event, chatId, data) => {

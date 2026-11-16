@@ -67,12 +67,12 @@ describe('the exposed terminal bridge', () => {
     const exposed = bridge();
     expect(exposed.isElectron).toBe(true);
     expect(exposed.terminal).toBeTypeOf('object');
-    for (const method of ['open', 'list', 'write', 'resize', 'close', 'onData', 'onExit'] as const) {
+    for (const method of ['open', 'list', 'write', 'resize', 'close', 'adopt', 'onData', 'onExit'] as const) {
       expect(typeof exposed.terminal[method]).toBe('function');
     }
     // Fixed methods only: nothing that hands out ipcRenderer or a way to name a channel.
     expect(Object.keys(exposed.terminal).sort()).toStrictEqual(
-      ['close', 'list', 'onData', 'onExit', 'open', 'resize', 'write'].sort(),
+      ['adopt', 'close', 'list', 'onData', 'onExit', 'open', 'resize', 'write'].sort(),
     );
     expect(Object.keys(exposed).sort()).toStrictEqual(['isElectron', 'pickDirectory', 'terminal']);
   });
@@ -95,6 +95,11 @@ describe('the exposed terminal bridge', () => {
 
     await terminal.close('chat-1');
     expect(mocks.ipcRenderer.invoke).toHaveBeenCalledWith(TERMINAL_IPC.close, 'chat-1');
+
+    mocks.ipcRenderer.invoke.mockResolvedValueOnce(true);
+    await expect(terminal.adopt('__draft__', 'chat-1')).resolves.toBe(true);
+    // Exactly the two ids: nothing else rides along.
+    expect(mocks.ipcRenderer.invoke.mock.lastCall).toStrictEqual([TERMINAL_IPC.adopt, '__draft__', 'chat-1']);
   });
 
   it('passes only the payload to onData listeners and unsubscribes them', () => {

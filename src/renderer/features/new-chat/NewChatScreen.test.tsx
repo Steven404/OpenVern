@@ -11,6 +11,8 @@ import { useUiStore } from '../../stores/ui';
 import { installDomStubs, renderWithProviders, resetStores } from '../composer/test-utils';
 import { Conversation } from '../conversation';
 import { usePanelStore } from '../right-panel/panel-store';
+import { useTerminalUiStore } from '../terminal/terminal-store';
+import { FakeTerminalBridge, installTerminalBridge } from '../terminal/test-fakes';
 import { NewChatScreen } from './NewChatScreen';
 
 beforeAll(installDomStubs);
@@ -176,6 +178,65 @@ describe('NewChatScreen', () => {
     fireEvent.click(screen.getByRole('button', { name: 'go /new' }));
     await screen.findByRole('heading', { name: 'What are we building?' });
     expect(usePanelStore.getState().chats.__draft__?.tabs ?? []).toEqual([]);
+  });
+
+  it('moves the draft terminal to the new chat before navigating and before the first message is sent', async () => {
+    const bridge = new FakeTerminalBridge();
+    bridge.seed('__draft__', { replay: 'pre-chat-41' });
+    installTerminalBridge(bridge);
+    window.sessionStorage.clear();
+    useTerminalUiStore.setState({ openDocks: { __draft__: true }, focusRequests: {}, draftProjectId: null });
+    try {
+      const api = new MockApiClient({ delayMs: 0 });
+      const order: string[] = [];
+      const adopt = bridge.adopt.bind(bridge);
+      vi.spyOn(bridge, 'adopt').mockImplementation(async (from, to) => {
+        order.push(`adopt ${from} -> ${to} at ${screen.getByTestId('location').textContent}`);
+        return adopt(from, to);
+      });
+      const send = vi.spyOn(api, 'sendMessage');
+      send.mockImplementation((...args) => {
+        order.push('sendMessage');
+        return MockApiClient.prototype.sendMessage.apply(api, args);
+      });
+      renderWithProviders(<App />, { api, route: '/new' });
+      await screen.findByRole('button', { name: 'Model: Claude Sonnet 5.5' });
+
+      fireEvent.change(textarea(), { target: { value: 'hi' } });
+      fireEvent.keyDown(textarea(), { key: 'Enter' });
+
+      await waitFor(() => expect(screen.getByTestId('location').textContent).toMatch(/^\/chat\/.+/));
+      const chatId = screen.getByTestId('location').textContent?.replace('/chat/', '') ?? '';
+      await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+      expect(order).toEqual([`adopt __draft__ -> ${chatId} at /new`, 'sendMessage']);
+      expect(send.mock.calls[0]?.[0]).toBe(chatId);
+      expect(send.mock.calls[0]?.[1]).toMatchObject({ terminal: true });
+      expect(bridge.hasSession(chatId)).toBe(true);
+      expect(bridge.hasSession('__draft__')).toBe(false);
+      expect(useTerminalUiStore.getState().openDocks).toEqual({ [chatId]: true });
+      expect(useTerminalUiStore.getState().draftProjectId).toBeUndefined();
+    } finally {
+      installTerminalBridge(null);
+      useTerminalUiStore.setState({ openDocks: {}, focusRequests: {}, draftProjectId: undefined });
+    }
+  });
+
+  it('without the desktop bridge, sending leaves the terminal state alone', async () => {
+    installTerminalBridge(null);
+    useTerminalUiStore.setState({ openDocks: { __draft__: true }, focusRequests: {}, draftProjectId: undefined });
+    try {
+      const api = new MockApiClient({ delayMs: 0 });
+      const send = vi.spyOn(api, 'sendMessage');
+      renderWithProviders(<App />, { api, route: '/new' });
+      await screen.findByRole('button', { name: 'Model: Claude Sonnet 5.5' });
+      fireEvent.change(textarea(), { target: { value: 'hi' } });
+      fireEvent.keyDown(textarea(), { key: 'Enter' });
+      await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+      expect(send.mock.calls[0]?.[1]).not.toHaveProperty('terminal');
+      expect(useTerminalUiStore.getState().openDocks).toEqual({ __draft__: true });
+    } finally {
+      useTerminalUiStore.setState({ openDocks: {}, focusRequests: {}, draftProjectId: undefined });
+    }
   });
 
   it('keeps the run going after leaving the screen and shows its progress on return', async () => {

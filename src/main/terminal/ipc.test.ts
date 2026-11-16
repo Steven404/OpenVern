@@ -24,6 +24,7 @@ interface FakeManager {
   close: Mock<(chatId: string) => Promise<void>>;
   write: Mock<(chatId: string, data: string) => void>;
   resize: Mock<(chatId: string, cols: number, rows: number) => void>;
+  adopt: Mock<(from: string, to: string) => boolean>;
 }
 
 function createManager(): FakeManager {
@@ -33,6 +34,7 @@ function createManager(): FakeManager {
     close: vi.fn(async (_chatId: string): Promise<void> => {}),
     write: vi.fn((_chatId: string, _data: string): void => {}),
     resize: vi.fn((_chatId: string, _cols: number, _rows: number): void => {}),
+    adopt: vi.fn((_from: string, _to: string): boolean => true),
   };
 }
 
@@ -105,12 +107,19 @@ describe('registerTerminalIpc channels', () => {
   it('registers every inbound channel and no outbound one', () => {
     const { fake } = setup();
     expect([...fake.handled.keys()].sort()).toStrictEqual(
-      [TERMINAL_IPC.open, TERMINAL_IPC.list, TERMINAL_IPC.close].sort(),
+      [TERMINAL_IPC.open, TERMINAL_IPC.list, TERMINAL_IPC.close, TERMINAL_IPC.adopt].sort(),
     );
     expect([...fake.listened.keys()].sort()).toStrictEqual([TERMINAL_IPC.write, TERMINAL_IPC.resize].sort());
     // data and exit only go the other way.
     expect([...fake.handled.keys(), ...fake.listened.keys()].sort()).toStrictEqual(
-      [TERMINAL_IPC.open, TERMINAL_IPC.list, TERMINAL_IPC.close, TERMINAL_IPC.write, TERMINAL_IPC.resize].sort(),
+      [
+        TERMINAL_IPC.open,
+        TERMINAL_IPC.list,
+        TERMINAL_IPC.close,
+        TERMINAL_IPC.adopt,
+        TERMINAL_IPC.write,
+        TERMINAL_IPC.resize,
+      ].sort(),
     );
     expect(fake.handled.has(TERMINAL_IPC.data)).toBe(false);
     expect(fake.listened.has(TERMINAL_IPC.data)).toBe(false);
@@ -126,6 +135,7 @@ describe('registerTerminalIpc sender check', () => {
     await expect(fake.invoke(TERMINAL_IPC.open, untrusted, GOOD_OPEN)).rejects.toThrow(UNTRUSTED_SENDER);
     await expect(fake.invoke(TERMINAL_IPC.list, untrusted)).rejects.toThrow(UNTRUSTED_SENDER);
     await expect(fake.invoke(TERMINAL_IPC.close, untrusted, 'chat-1')).rejects.toThrow(UNTRUSTED_SENDER);
+    await expect(fake.invoke(TERMINAL_IPC.adopt, untrusted, '__draft__', 'chat-1')).rejects.toThrow(UNTRUSTED_SENDER);
     expect(() => fake.send(TERMINAL_IPC.write, untrusted, 'chat-1', 'ls\r')).not.toThrow();
     expect(() => fake.send(TERMINAL_IPC.resize, untrusted, 'chat-1', 100, 30)).not.toThrow();
 
@@ -134,7 +144,42 @@ describe('registerTerminalIpc sender check', () => {
     expect(manager.close).not.toHaveBeenCalled();
     expect(manager.write).not.toHaveBeenCalled();
     expect(manager.resize).not.toHaveBeenCalled();
+    expect(manager.adopt).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith(expect.stringContaining('untrusted'));
+  });
+
+  it('checks the sender before the payload: an untrusted sender with a malformed payload is refused as untrusted', async () => {
+    const { fake, manager, log, untrusted } = setup();
+
+    await expect(fake.invoke(TERMINAL_IPC.open, untrusted, { chatId: 'bad id', cols: 'x' })).rejects.toThrow(
+      UNTRUSTED_SENDER,
+    );
+    await expect(fake.invoke(TERMINAL_IPC.open, untrusted, null)).rejects.toThrow(UNTRUSTED_SENDER);
+    // A malformed close from a trusted sender resolves quietly; refused as untrusted here, the check came first.
+    await expect(fake.invoke(TERMINAL_IPC.close, untrusted, '../chat')).rejects.toThrow(UNTRUSTED_SENDER);
+    await expect(fake.invoke(TERMINAL_IPC.adopt, untrusted, '__draft__', '__draft__')).rejects.toThrow(
+      UNTRUSTED_SENDER,
+    );
+    await expect(fake.invoke(TERMINAL_IPC.adopt, untrusted, 7)).rejects.toThrow(UNTRUSTED_SENDER);
+    await expect(fake.invoke(TERMINAL_IPC.adopt, untrusted)).rejects.toThrow(UNTRUSTED_SENDER);
+    for (const [channel, args] of [
+      [TERMINAL_IPC.open, [null]],
+      [TERMINAL_IPC.close, ['../chat']],
+      [TERMINAL_IPC.adopt, ['chat-0', 'chat-1']],
+    ] as const) {
+      await expect(fake.invoke(channel, untrusted, ...args)).rejects.not.toThrow(INVALID_REQUEST);
+    }
+    fake.send(TERMINAL_IPC.write, untrusted, 'bad id', 42);
+    fake.send(TERMINAL_IPC.resize, untrusted, 'bad id', Number.NaN, 'x');
+
+    expect(manager.open).not.toHaveBeenCalled();
+    expect(manager.close).not.toHaveBeenCalled();
+    expect(manager.adopt).not.toHaveBeenCalled();
+    expect(manager.write).not.toHaveBeenCalled();
+    expect(manager.resize).not.toHaveBeenCalled();
+    const logged = log.mock.calls.map(([line]) => String(line));
+    expect(logged.filter((line) => line.includes('untrusted sender'))).toHaveLength(11);
+    expect(logged.filter((line) => line.includes('invalid payload'))).toEqual([]);
   });
 
   it('treats a throwing sender check as untrusted', async () => {
@@ -152,6 +197,7 @@ describe('registerTerminalIpc sender check', () => {
     await expect(fake.invoke(TERMINAL_IPC.open, {}, GOOD_OPEN)).rejects.toThrow(UNTRUSTED_SENDER);
     await expect(fake.invoke(TERMINAL_IPC.list, {})).rejects.toThrow(UNTRUSTED_SENDER);
     await expect(fake.invoke(TERMINAL_IPC.close, {}, 'chat-1')).rejects.toThrow(UNTRUSTED_SENDER);
+    await expect(fake.invoke(TERMINAL_IPC.adopt, {}, '__draft__', 'chat-1')).rejects.toThrow(UNTRUSTED_SENDER);
     expect(() => fake.send(TERMINAL_IPC.write, {}, 'chat-1', 'x')).not.toThrow();
     expect(() => fake.send(TERMINAL_IPC.resize, {}, 'chat-1', 80, 24)).not.toThrow();
     expect(manager.open).not.toHaveBeenCalled();
@@ -159,6 +205,7 @@ describe('registerTerminalIpc sender check', () => {
     expect(manager.close).not.toHaveBeenCalled();
     expect(manager.resize).not.toHaveBeenCalled();
     expect(manager.write).not.toHaveBeenCalled();
+    expect(manager.adopt).not.toHaveBeenCalled();
   });
 });
 
@@ -241,6 +288,44 @@ describe('registerTerminalIpc malformed open', () => {
     const { fake, manager, trusted } = setup();
     await expect(fake.invoke(TERMINAL_IPC.open, trusted, payload)).rejects.toThrow(INVALID_REQUEST);
     expect(manager.open).not.toHaveBeenCalled();
+  });
+});
+
+describe('registerTerminalIpc adopt', () => {
+  it("answers with the manager's result for a valid move", async () => {
+    const { fake, manager, trusted } = setup();
+    await expect(fake.invoke(TERMINAL_IPC.adopt, trusted, '__draft__', 'chat-1')).resolves.toBe(true);
+    expect(manager.adopt).toHaveBeenLastCalledWith('__draft__', 'chat-1');
+    manager.adopt.mockReturnValueOnce(false);
+    await expect(fake.invoke(TERMINAL_IPC.adopt, trusted, '__draft__', 'chat-2')).resolves.toBe(false);
+    expect(manager.adopt).toHaveBeenCalledTimes(2);
+  });
+
+  it('passes on the defaultFolder of an open', async () => {
+    const { fake, manager, trusted } = setup();
+    await fake.invoke(TERMINAL_IPC.open, trusted, { ...GOOD_OPEN, chatId: '__draft__', defaultFolder: 'documents' });
+    expect(manager.open).toHaveBeenLastCalledWith({ ...GOOD_OPEN, chatId: '__draft__', defaultFolder: 'documents' });
+    await expect(
+      fake.invoke(TERMINAL_IPC.open, trusted, { ...GOOD_OPEN, defaultFolder: '/Users/someone/Documents' }),
+    ).rejects.toThrow(INVALID_REQUEST);
+    expect(manager.open).toHaveBeenCalledTimes(1);
+  });
+
+  const invalid: Array<{ name: string; args: unknown[] }> = [
+    { name: 'no arguments', args: [] },
+    { name: 'a source that is not the draft', args: ['chat-0', 'chat-1'] },
+    { name: 'the draft as the target', args: ['__draft__', '__draft__'] },
+    { name: 'the index id as the target', args: ['__draft__', 'index'] },
+    { name: 'a bad target id', args: ['__draft__', '../chat'] },
+    { name: 'an over-long target id', args: ['__draft__', 'x'.repeat(129)] },
+    { name: 'a non-string target', args: ['__draft__', 7] },
+    { name: 'a non-string source', args: [{ id: '__draft__' }, 'chat-1'] },
+  ];
+
+  it.each(invalid)('rejects $name without reaching the manager', async ({ args }) => {
+    const { fake, manager, trusted } = setup();
+    await expect(fake.invoke(TERMINAL_IPC.adopt, trusted, ...args)).rejects.toThrow(INVALID_REQUEST);
+    expect(manager.adopt).not.toHaveBeenCalled();
   });
 });
 

@@ -19,7 +19,10 @@ export interface SurfaceContext {
   projectId: Id | null;
   /** The chat has pending or applied edits (`chatChanges` query). */
   hasChanges: boolean;
-  /** The new-chat screen, which has no chat (and so no terminal) yet. */
+  /**
+   * The New Chat screen, which has no chat yet. Its terminal is kept under the draft id and moves into the chat on the
+   * first send; with no project it starts in Documents rather than home.
+   */
   draft: boolean;
 }
 
@@ -70,10 +73,10 @@ const registry: SurfaceDefinition[] = [
     icon: <TerminalIcon />,
     availability: ({ draft, projectId }) => {
       if (!hasTerminalBridge()) return { enabled: false, hint: 'Available in the desktop app' };
-      if (draft) return { enabled: false, hint: 'Available once the chat has started' };
+      if (projectId) return { enabled: true, hint: 'Open a shell in the project folder' };
       return {
         enabled: true,
-        hint: projectId ? 'Open a shell in the project folder' : 'Open a shell in your home folder',
+        hint: draft ? 'Open a shell in your Documents folder' : 'Open a shell in your home folder',
       };
     },
     tab: 'opened',

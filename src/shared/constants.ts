@@ -9,6 +9,11 @@ export const APP_ID = 'dev.stefanos.openvern';
 /** Picked from openrouter.ai/models on 2026-10-31: current Claude Sonnet with tools + image input. */
 export const DEFAULT_MODEL = 'anthropic/claude-sonnet-5.5';
 export const NEW_CHAT_TITLE = 'New chat';
+/**
+ * Stands in for a chat id on the New Chat screen, before the chat exists: the right panel's state and the terminal
+ * started there are kept under it, then moved to the chat on its first send. Never a real chat id (those are UUIDs).
+ */
+export const DRAFT_CHAT_ID = '__draft__';
 /** Model calls per user turn. A cost backstop only: a stuck loop is stopped earlier by `MAX_REPEATED_TOOL_STEPS`. */
 export const MAX_AGENT_STEPS = 100;
 /** Stop a turn when this many consecutive steps make the same tool calls and get the same results. */

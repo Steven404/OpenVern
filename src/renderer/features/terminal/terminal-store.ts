@@ -11,6 +11,7 @@ import { create } from 'zustand';
 export const TERMINAL_STORAGE_KEYS = {
   openDocks: 'openvern.terminal.openDocks',
   dockHeight: 'openvern.terminal.dockHeight',
+  draftProject: 'openvern.terminal.draftProject',
 } as const;
 
 /** The dock never takes more than 60% of the window (plan §5). */
@@ -59,8 +60,30 @@ function writeLocal(key: string, value: string): void {
   }
 }
 
+function removeSession(key: string): void {
+  try {
+    window.sessionStorage.removeItem(key);
+  } catch {
+    // As above.
+  }
+}
+
+/** `{ "projectId": <id or null> }`; anything else reads as unknown. */
+function readDraftProject(): Id | null | undefined {
+  try {
+    const raw = readSession(TERMINAL_STORAGE_KEYS.draftProject);
+    if (raw === null) return undefined;
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null || !('projectId' in parsed)) return undefined;
+    const { projectId } = parsed;
+    return projectId === null || (typeof projectId === 'string' && projectId !== '') ? projectId : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Persisted slice of the terminal state. Exported so tests can simulate a reload. */
-export function readPersistedTerminal(): Pick<TerminalUiState, 'openDocks' | 'dockHeight'> {
+export function readPersistedTerminal(): Pick<TerminalUiState, 'openDocks' | 'dockHeight' | 'draftProjectId'> {
   let openDocks: Record<Id, true> = {};
   try {
     const parsed: unknown = JSON.parse(readSession(TERMINAL_STORAGE_KEYS.openDocks) ?? '[]');
@@ -76,6 +99,7 @@ export function readPersistedTerminal(): Pick<TerminalUiState, 'openDocks' | 'do
   return {
     openDocks,
     dockHeight: rawHeight === null ? TERMINAL.dockDefaultHeight : clampDockHeight(Number(rawHeight)),
+    draftProjectId: readDraftProject(),
   };
 }
 
@@ -89,10 +113,24 @@ export interface TerminalUiState {
    * switch mounts the dock too, and that must not pull focus away from the composer.
    */
   focusRequests: Record<Id, true>;
+  /**
+   * The project the New Chat screen's shell was started for (`null` = none, so Documents), or `undefined` when no
+   * draft shell was started in this window session (`sessionStorage`). The shell keeps its folder when the project chip
+   * changes; the dock compares this with the chip to say so.
+   */
+  draftProjectId: Id | null | undefined;
 
   openDock(chatId: Id): void;
   closeDock(chatId: Id): void;
   toggleDock(chatId: Id): void;
+  /**
+   * Carries an open dock from `from` to `to` (the New Chat screen's terminal joining the chat created from it). Drops
+   * any focus request for either, so the dock does not take focus from the chat's composer after navigation. Nothing
+   * happens when `from`'s dock is closed.
+   */
+  moveDock(from: Id, to: Id): void;
+  /** Records the project a new draft shell was started for (see `draftProjectId`); `undefined` forgets it. */
+  setDraftProject(projectId: Id | null | undefined): void;
   /** True once per `openDock` / `toggleDock`-while-closed, so the dock knows to focus the terminal. */
   consumeFocusRequest(chatId: Id): boolean;
   /** Drops focus requests that belong to another chat (a switch makes them stale; a later mount must not steal focus). */
@@ -127,6 +165,19 @@ export const useTerminalUiStore = create<TerminalUiState>()((set, get) => ({
     persistOpenDocks(openDocks);
   },
   toggleDock: (chatId) => (get().openDocks[chatId] ? get().closeDock(chatId) : get().openDock(chatId)),
+  moveDock: (from, to) => {
+    if (from === to || !get().openDocks[from]) return;
+    const { [from]: _moved, ...rest } = get().openDocks;
+    const openDocks: Record<Id, true> = { ...rest, [to]: true };
+    const { [from]: _a, [to]: _b, ...focusRequests } = get().focusRequests;
+    set({ openDocks, focusRequests });
+    persistOpenDocks(openDocks);
+  },
+  setDraftProject: (projectId) => {
+    if (projectId === undefined) removeSession(TERMINAL_STORAGE_KEYS.draftProject);
+    else writeSession(TERMINAL_STORAGE_KEYS.draftProject, JSON.stringify({ projectId }));
+    set({ draftProjectId: projectId });
+  },
   consumeFocusRequest: (chatId) => {
     if (!get().focusRequests[chatId]) return false;
     const { [chatId]: _taken, ...focusRequests } = get().focusRequests;
