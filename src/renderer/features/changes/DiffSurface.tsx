@@ -226,6 +226,8 @@ export function DiffSurface({ chatId, params }: SurfaceProps) {
     // Without a measured body there is nothing to take a fraction of; the keyboard still works.
     if (event.button !== 0 || bodyPx <= 0) return;
     event.preventDefault();
+    // preventDefault also cancels the click focus, so focus the handle ourselves: the arrow keys then resize it.
+    (event.currentTarget as HTMLElement).focus({ preventScroll: true });
     stopDrag.current?.();
     const startY = event.clientY;
     // Start from the ceiling the user sees. A short list is shorter than its ceiling, and starting from its natural

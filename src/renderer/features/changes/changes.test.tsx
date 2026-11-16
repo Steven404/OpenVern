@@ -504,6 +504,14 @@ describe('measured file list', () => {
     expect(handle.getAttribute('aria-valuenow')).toBe('19');
   });
 
+  it('pressing the handle focuses it, so the arrow keys resize right after a click', async () => {
+    const { handle, nav } = await openMeasured();
+    fileRow(nav, 0).focus();
+    fireEvent.pointerDown(handle, { button: 0, clientY: 100 });
+    fireEvent.pointerUp(window, { clientY: 100 });
+    expect(document.activeElement).toBe(handle);
+  });
+
   it('drags the ceiling and writes storage once, on release', async () => {
     const { handle, nav } = await openMeasured();
     const setItem = vi.spyOn(Storage.prototype, 'setItem');
