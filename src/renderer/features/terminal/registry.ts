@@ -33,7 +33,37 @@ export class TerminalRegistry {
     }
     return entry;
   }
-  async attach(id: Id, bridge: TerminalBridge, options: TerminalOpenOptions): Promise<TerminalEntry> {
+  /** Every `attach` in flight per id, from its first step (a wait for a free slot included) until it settles. */
+  private attaching = new Map<Id, Set<Promise<TerminalEntry>>>();
+  attach(id: Id, bridge: TerminalBridge, options: TerminalOpenOptions): Promise<TerminalEntry> {
+    const attaching = this.attachNow(id, bridge, options);
+    let pending = this.attaching.get(id);
+    if (!pending) {
+      pending = new Set();
+      this.attaching.set(id, pending);
+    }
+    const tracked = pending;
+    tracked.add(attaching);
+    const settled = () => {
+      tracked.delete(attaching);
+      if (tracked.size === 0 && this.attaching.get(id) === tracked) this.attaching.delete(id);
+    };
+    attaching.then(settled, settled);
+    return attaching;
+  }
+  /**
+   * Resolves once every `attach` of `id` already under way has settled, its wait for a free slot (before the entry
+   * exists) included, then gives the entry with its `open` settled, if one is left. The draft hand-over waits on this
+   * so main moves the shell an attach is about to start, not the one before or none.
+   */
+  async settle(id: Id): Promise<TerminalEntry | undefined> {
+    for (let pending = this.attaching.get(id); pending?.size; pending = this.attaching.get(id)) {
+      await Promise.allSettled(pending);
+    }
+    await this.get(id)?.ready.catch(() => {});
+    return this.get(id);
+  }
+  private async attachNow(id: Id, bridge: TerminalBridge, options: TerminalOpenOptions): Promise<TerminalEntry> {
     if (options.restart && this.get(id)?.info?.status.state === 'exited') this.dispose(id);
     let entry = this.get(id);
     if (!entry) {
@@ -238,8 +268,10 @@ export class TerminalEntry {
     const detach = options.host ? this.mount(options.host) : undefined;
     const size = { cols: this.term.cols, rows: this.term.rows };
     detach?.();
+    // The id this open asks for. Any cleanup below is bound to it, never to `this.id` read after the await.
+    const id = this.id;
     const result = await this.bridge.open({
-      chatId: this.id,
+      chatId: id,
       cwd: options.cwd,
       ...(options.cwd === null && options.defaultFolder === 'documents' ? { defaultFolder: 'documents' } : {}),
       cols: options.info?.cols ?? size.cols,
@@ -248,7 +280,7 @@ export class TerminalEntry {
     });
     if (options.info && result.created) {
       this.dispose();
-      await this.bridge.close(this.id);
+      await this.bridge.close(id);
       throw new NoTerminalError();
     }
     if (result.created && !this.disposed) options.onCreated?.();
@@ -286,6 +318,37 @@ export class TerminalEntry {
     }
     if (this.resyncing) throw new Error('Terminal is resynchronising');
   }
+  /**
+   * Keeps recovery from asking main for the session until `resume` is called. The draft hand-over holds it while main
+   * renames the session: a recovery `open` sent under the draft id after main moved the shell would start a fresh one
+   * there. `settled` resolves once a recovery already under way (its `open` maybe sent) has finished. A recovery due
+   * meanwhile waits, and runs under the entry's id at that point once the last hold is resumed.
+   */
+  pauseRecovery(): { settled: Promise<void>; resume(): void } {
+    this.recoveryHolds++;
+    let resumed = false;
+    return {
+      settled: this.recovery ?? Promise.resolve(),
+      resume: () => {
+        if (resumed) return;
+        resumed = true;
+        this.recoveryHolds--;
+        if (this.recoveryHolds > 0 || !this.recoveryDeferred) return;
+        this.recoveryDeferred = false;
+        if (!this.disposed) this.runResync();
+      },
+    };
+  }
+  private recoveryHolds = 0;
+  private recoveryDeferred = false;
+  /** The recovery under way, from the timer firing until it ends (or hands over to the next attempt's timer). */
+  private recovery: Promise<void> | null = null;
+  private runResync(): void {
+    const run: Promise<void> = this.resync().finally(() => {
+      if (this.recovery === run) this.recovery = null;
+    });
+    this.recovery = run;
+  }
   private startResync(): void {
     if (this.disposed || this.resyncing) return;
     this.resyncing = true;
@@ -300,9 +363,7 @@ export class TerminalEntry {
     this.pending = [];
     this.pendingChars = 0;
     this.recoveryOverflow = false;
-    this.resyncTimer = setTimeout(() => {
-      void this.resync();
-    }, TERMINAL_RESYNC_PAUSE_MS);
+    this.resyncTimer = setTimeout(() => this.runResync(), TERMINAL_RESYNC_PAUSE_MS);
   }
   private async resync(): Promise<void> {
     try {
@@ -310,19 +371,34 @@ export class TerminalEntry {
       // No new live output is submitted during recovery, so the queue can catch up.
       await this.parse('');
       if (this.disposed) return;
+      if (this.recoveryHolds > 0) {
+        // The session is being moved: ask for it once the move is done, under the id it has then.
+        this.recoveryDeferred = true;
+        return;
+      }
       this.term.reset();
       this.bufferingReplay = true;
       this.replaying = true;
+      // Bound to the id asked for: after the await `this.id` could name another session.
+      const id = this.id;
       const result = await this.bridge.open({
-        chatId: this.id,
+        chatId: id,
         cwd: this.info.cwd,
         cols: this.info.cols,
         rows: this.info.rows,
       });
       if (this.disposed) return;
+      if (id !== this.id) {
+        // Renamed while the open was in flight: the reply is for the old id. End a shell it started there (never the
+        // one the entry now answers to) and recover again under the current id.
+        if (result.created) void this.bridge.close(id).catch(() => {});
+        this.replaying = false;
+        this.scheduleResync();
+        return;
+      }
       if (result.created) {
         this.dispose();
-        await this.bridge.close(this.id);
+        await this.bridge.close(id);
         return;
       }
       this.info = { ...result.info, status: this.exit ?? result.info.status };

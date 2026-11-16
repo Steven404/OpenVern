@@ -4,9 +4,14 @@
 
 import type { Id } from '@shared/types';
 
+/** The parts of a `TerminalEntry` the draft hand-over needs. */
+export interface LoadedTerminalEntry {
+  pauseRecovery(): { settled: Promise<void>; resume(): void };
+}
+
 /** The parts of `TerminalRegistry` the draft hand-over needs. */
 export interface LoadedTerminalRegistry {
-  get(id: Id): { ready: Promise<void> } | undefined;
+  settle(id: Id): Promise<LoadedTerminalEntry | undefined>;
   rename(from: Id, to: Id): boolean;
   dispose(id: Id): void;
 }

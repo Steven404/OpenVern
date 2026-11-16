@@ -11,15 +11,17 @@ import { getTerminalBridge } from './bridge';
 import { loadedTerminalRegistry } from './registry-handle';
 import { useTerminalUiStore } from './terminal-store';
 
-const ignore = () => {};
-
 export async function adoptDraftTerminal(chatId: Id): Promise<void> {
+  let pause: { settled: Promise<void>; resume(): void } | undefined;
   try {
     const bridge = getTerminalBridge();
     if (!bridge || chatId === DRAFT_CHAT_ID) return;
-    // A draft terminal still opening: let its `open` settle first, so main has the session to move (or has refused it).
-    const opening = loadedTerminalRegistry()?.get(DRAFT_CHAT_ID);
-    if (opening) await opening.ready.catch(ignore);
+    // A draft terminal still opening, or still waiting for a free slot before it opens: let it settle first, so main
+    // has the session to move (or has refused it).
+    const entry = await loadedTerminalRegistry()?.settle(DRAFT_CHAT_ID);
+    // No recovery `open` under the draft id while main moves the session; one already sent finishes first.
+    pause = entry?.pauseRecovery();
+    if (pause) await pause.settled;
     const moved = await bridge.adopt(DRAFT_CHAT_ID, chatId).catch(() => false);
     // Read again: the registry may have loaded meanwhile.
     const registry = loadedTerminalRegistry();
@@ -36,5 +38,8 @@ export async function adoptDraftTerminal(chatId: Id): Promise<void> {
     }
   } catch {
     // Never in the way of sending the message.
+  } finally {
+    // After the rename: a recovery held meanwhile asks for the session under the chat's id.
+    pause?.resume();
   }
 }

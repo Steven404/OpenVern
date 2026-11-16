@@ -189,6 +189,7 @@ export class FakeTerminalBridge implements TerminalBridge {
 
   private sessions = new Map<Id, FakeSession>();
   private gate: Promise<void> | null = null;
+  private adoptGate: Promise<void> | null = null;
   private readonly dataListeners = new Set<Listener<TerminalDataEvent>>();
   private readonly exitListeners = new Set<Listener<TerminalExitEvent>>();
 
@@ -200,6 +201,18 @@ export class FakeTerminalBridge implements TerminalBridge {
     });
     return () => {
       this.gate = null;
+      release();
+    };
+  }
+
+  /** Holds every `adopt` reply until the returned function is called. Main has already moved the session meanwhile. */
+  holdAdopts(): () => void {
+    let release: () => void = () => {};
+    this.adoptGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return () => {
+      this.adoptGate = null;
       release();
     };
   }
@@ -264,6 +277,12 @@ export class FakeTerminalBridge implements TerminalBridge {
   /** Like main: moves `from`'s session to `to` unless there is none or `to` has one; later events carry `to`. */
   async adopt(from: Id, to: Id): Promise<boolean> {
     this.adopts.push({ from, to });
+    const moved = this.move(from, to);
+    if (this.adoptGate) await this.adoptGate;
+    return moved;
+  }
+
+  private move(from: Id, to: Id): boolean {
     if (this.adoptMode === 'reject') throw new Error('terminal: invalid request');
     if (this.adoptMode === 'refuse') return false;
     const session = this.sessions.get(from);

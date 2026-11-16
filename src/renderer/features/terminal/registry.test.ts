@@ -367,6 +367,29 @@ describe('renaming the draft terminal to its chat', () => {
     expect(await registry.read('__draft__', bridge, {})).toEqual({ ok: false, reason: 'no_terminal' });
   });
 
+  it('binds a recovery reply to the id it asked for: a stray draft shell is ended, the moved one never', async () => {
+    vi.useFakeTimers();
+    const entry = await registry.attach('__draft__', bridge, { cwd: null });
+    vi.spyOn(entry.term, 'write').mockImplementationOnce(() => {
+      throw new Error('overflow');
+    });
+    bridge.emitData('__draft__', 'lost');
+    // Main moved the session; the recovery open under the draft id then starts a fresh shell there.
+    await bridge.adopt('__draft__', 'chat-1');
+    const release = bridge.holdOpens();
+    await vi.advanceTimersByTimeAsync(TERMINAL_RESYNC_PAUSE_MS);
+    expect(bridge.opens.at(-1)?.chatId).toBe('__draft__');
+    registry.rename('__draft__', 'chat-1');
+    release();
+    await vi.advanceTimersByTimeAsync(TERMINAL_RESYNC_PAUSE_MS * 2);
+
+    expect(bridge.closes).toEqual(['__draft__']);
+    expect(bridge.hasSession('chat-1')).toBe(true);
+    expect(entry.disposed).toBe(false);
+    expect(bridge.opens.at(-1)?.chatId).toBe('chat-1');
+    expect(entry.notice).toBeNull();
+  });
+
   it('does nothing when there is no emulator to move', () => {
     expect(registry.rename('__draft__', 'chat-1')).toBe(false);
     expect(registry.get('chat-1')).toBeUndefined();
