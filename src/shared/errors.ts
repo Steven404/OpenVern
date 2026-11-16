@@ -19,6 +19,7 @@ export type ErrorCode =
   | 'file_too_large'
   | 'path_invalid'
   | 'max_steps_reached'
+  | 'tool_loop_detected'
   | 'changes_stale';
 
 export interface ApiErrorInfo {
@@ -58,9 +59,15 @@ export const ERROR_DEFAULTS: Record<ErrorCode, { message: string; retryable: boo
   unsupported_file: { message: 'This file type is not supported. Attach text files or images.', retryable: false },
   file_too_large: { message: 'This file is too large.', retryable: false },
   path_invalid: { message: 'That folder does not exist or cannot be read.', retryable: false },
+  // Not retryable: Retry truncates back to the user message and reruns it, throwing away the turn's work.
   max_steps_reached: {
-    message: 'Stopped after too many steps in one turn. Reply to let it continue.',
-    retryable: true,
+    message: 'Stopped after too many steps in one turn. Reply "Continue" to let the model pick up where it left off.',
+    retryable: false,
+  },
+  tool_loop_detected: {
+    message:
+      'Stopped because the model kept repeating the same tool call with the same result. Reply "Continue" to let it keep going, or tell it what to do differently.',
+    retryable: false,
   },
   changes_stale: {
     message: 'The proposed edits changed while you were reviewing. Review them again.',
@@ -88,6 +95,7 @@ export const ERROR_STATUS: Record<ErrorCode, number> = {
   file_too_large: 413,
   path_invalid: 400,
   max_steps_reached: 400,
+  tool_loop_detected: 400,
   changes_stale: 409,
 };
 
