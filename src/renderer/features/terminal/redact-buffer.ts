@@ -106,32 +106,92 @@ export function redactBufferLines(lines: string[], full: boolean[], firstWrapped
   const plain = lines.map((line) => stripTerminalControls(line).replace(invisible, ''));
   const headers = plain.flatMap((line, index) => {
     const match = /-----(BEGIN|END)([ A-Z0-9]*PRIVATE KEY)-----/.exec(line);
-    return match ? [{ index, begin: match[1] === 'BEGIN', label: match[2] ?? '' }] : [];
+    if (!match) return [];
+    return [
+      { index, begin: match[1] === 'BEGIN', label: match[2] ?? '', gutter: gutterPattern(line.slice(0, match.index)) },
+    ];
   });
+  // A BEGIN and an END far apart are one block only when everything between them looks like a key. Otherwise they are
+  // two separate sightings (a `grep` near the top, a `tail` an hour later) and the output between them is not a key.
   const paired = new Set<number>();
-  const pending = new Map<string, number[]>();
+  const pending = new Map<string, (typeof headers)[number][]>();
   for (const header of headers) {
     const stack = pending.get(header.label) ?? [];
-    if (header.begin) stack.push(header.index);
-    else {
-      const begin = stack.pop();
-      if (begin !== undefined) {
-        paired.add(begin);
-        paired.add(header.index);
-      }
-    }
     pending.set(header.label, stack);
+    if (header.begin) {
+      stack.push(header);
+      continue;
+    }
+    const begin = stack.pop();
+    if (!begin) continue;
+    let blanks = 0;
+    let whole = true;
+    for (let j = begin.index + 1; j < header.index && whole; j++) {
+      const kind = keyLineKind(plain[j] ?? '', begin.gutter);
+      if (kind === 'blank') blanks++;
+      whole = kind !== 'other' && blanks <= 1;
+    }
+    // A short stretch is taken as one block whatever it holds: no key is longer, and hiding it is the safe mistake.
+    if (whole || header.index - begin.index - 1 <= KEY_BLOCK_MAX_LINES) {
+      paired.add(begin.index);
+      paired.add(header.index);
+      // Left as it is for the shared pattern, which redacts a complete block whole, gutters or not.
+    }
   }
   for (const header of headers) {
     if (paired.has(header.index)) continue;
     out[header.index] = OMITTED;
     const step = header.begin ? 1 : -1;
+    let blanks = 0;
     for (let j = header.index + step; j >= 0 && j < lines.length; j += step) {
-      const body = plain[j]?.trim() ?? '';
-      if (body.length < 4 || !/^[A-Za-z0-9+/]+={0,2}$/.test(body)) break;
+      const kind = keyLineKind(plain[j] ?? '', header.gutter);
+      // One blank line is part of an old-style encrypted key, after its `Proc-Type` and `DEK-Info` lines.
+      if (kind === 'other' || (kind === 'blank' && ++blanks > 1)) break;
       out[j] = OMITTED;
     }
   }
   if (firstWrapped) out[0] = (out[0] ?? '').replace(prefix, OMITTED);
   return out;
+}
+
+/**
+ * What stands in front of a key header on its line, as a pattern for the same thing on the neighbouring lines: a
+ * line-number gutter (`  12 `, `  12   │ `), a diff sign, or a `grep` file prefix (`keys/a.pem:3:`, which reads
+ * `keys/a.pem-4-` on its context lines). Digits match any digits and spaces any spaces, so line 9 and line 10 agree.
+ */
+function gutterPattern(before: string): RegExp | null {
+  if (before === '') return null;
+  const source = before
+    .replace(/[.*+?^${}()|[\]\\/-]/g, '\\$&')
+    .replace(/\d+/g, '\\d+')
+    .replace(/\s+/g, '\\s*')
+    .replace(/:/g, '[:-]');
+  return new RegExp(`^\\s*${source}`);
+}
+
+/** More lines than any private key has between its header lines (an 8192-bit RSA key has about 100). */
+const KEY_BLOCK_MAX_LINES = 120;
+
+/** Leading characters a program may draw before each line of a file: numbers, spaces, borders, diff and wrap signs. */
+const GENERIC_GUTTER = /^[\s\d│┃|:+\-▏▎▐>↪↳]*/;
+
+/**
+ * Whether a line next to a private-key header belongs to the key: `body` for base64-shaped text (with or without
+ * the header's gutter, or a generic one), `header` for the lines of an old-style encrypted key, `blank`, or `other`.
+ * Too generous is fine here: hiding a neighbouring line costs little, showing a key body does not.
+ */
+function keyLineKind(line: string, gutter: RegExp | null): 'body' | 'header' | 'blank' | 'other' {
+  const candidates = [line, line.replace(GENERIC_GUTTER, '')];
+  if (gutter) {
+    const stripped = line.replace(gutter, '');
+    candidates.push(stripped, stripped.replace(GENERIC_GUTTER, ''));
+  }
+  let blank = false;
+  for (const candidate of candidates) {
+    const text = candidate.trim();
+    if (text === '') blank = true;
+    else if (/^(?:Proc-Type|DEK-Info):/.test(text)) return 'header';
+    else if (text.length >= 4 && /^[A-Za-z0-9+/]+={0,2}$/.test(text)) return 'body';
+  }
+  return blank ? 'blank' : 'other';
 }

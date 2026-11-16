@@ -180,6 +180,65 @@ it('redacts only contiguous base64 next to orphan headers, and complete blocks w
   }
 });
 
+it('redacts the key body next to a lone header when every line carries a gutter or prefix', async () => {
+  const body = ['TUlJRXZRSUJBREFOQmdrcWhraUc5dzBCQVFF', 'RkFBU0NCS2N3Z2dTakFnRUFBb0lCQVFD', 'N1ZKVFV0OVVzOGNLalFE'];
+  const screens: Record<string, string[]> = {
+    'vim with line numbers': ['  1 -----BEGIN PRIVATE KEY-----', ...body.map((line, i) => `  ${i + 2} ${line}`)],
+    bat: ['   1   │ -----BEGIN PRIVATE KEY-----', ...body.map((line, i) => `   ${i + 2}   │ ${line}`)],
+    'cat -n across a digit boundary': [
+      '     9\t-----BEGIN PRIVATE KEY-----',
+      ...body.map((line, i) => `    ${i + 10}\t${line}`),
+    ],
+    'a deleted key in a diff': ['------BEGIN PRIVATE KEY-----', ...body.map((line) => `-${line}`)],
+    'grep with context': [
+      'keys/a.pem:1:-----BEGIN PRIVATE KEY-----',
+      ...body.map((line, i) => `keys/a.pem-${i + 2}-${line}`),
+    ],
+    'an old-style encrypted key': [
+      '-----BEGIN RSA PRIVATE KEY-----',
+      'Proc-Type: 4,ENCRYPTED',
+      'DEK-Info: AES-128-CBC,0123456789ABCDEF0123456789ABCDEF',
+      '',
+      ...body,
+    ],
+    'the end of a numbered key': [...body.map((line, i) => `  ${i + 7} ${line}`), ' 10 -----END PRIVATE KEY-----'],
+  };
+  for (const [name, rows] of Object.entries(screens)) {
+    await withScreen(['before npm test', ...rows, 'after npm test'].join('\r\n'), (term) => {
+      const text = readTerminalBuffer(term.buffer.active, info).text;
+      expect(text, name).toContain('before npm test');
+      expect(text, name).toContain('after npm test');
+      for (const line of body) expect(text, name).not.toContain(line);
+      expect(text, name).not.toContain('PRIVATE KEY');
+      expect(text, name).not.toContain('DEK-Info');
+    });
+  }
+});
+
+it('does not pair a header with an unrelated one far below it', async () => {
+  const work = Array.from({ length: 150 }, (_, i) => `work line ${i}`);
+  const content = [
+    'test/a.pem:1:-----BEGIN PRIVATE KEY-----',
+    ...work,
+    'QUJDQUJDQUJDQUJD',
+    '-----END PRIVATE KEY-----',
+    'done',
+  ];
+  await withScreen(
+    content.join('\r\n'),
+    (term) => {
+      const text = readTerminalBuffer(term.buffer.active, info, { startLine: 1, count: 200 }).text;
+      expect(text).toContain('work line 0');
+      expect(text).toContain('work line 149');
+      expect(text).toContain('done');
+      expect(text).not.toContain('PRIVATE KEY');
+      expect(text).not.toContain('QUJDQUJDQUJDQUJD');
+    },
+    80,
+    400,
+  );
+});
+
 it('resynchronises a real xterm buffer after a rejected write and reads subsequent parsed output', async () => {
   const registry = new TerminalRegistry();
   const bridge = new FakeTerminalBridge();
