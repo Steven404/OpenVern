@@ -15,9 +15,11 @@ no telemetry.
 - **Read access through tool calls.** In a project chat the model can list, read and search files. Each tool call is
   shown in the conversation.
 - **A terminal you type into.** A shell dock under the composer, one per chat, in the project folder (or your home
-  folder for a chat without a project). Open it from the right panel's Terminal row or with Ctrl+` (on macOS too). It
-  is not available on the new-chat screen or in the web build. The model can read the terminal through a
-  `read_terminal` tool, but it cannot type into it or run commands.
+  folder for a chat without a project). Open it from the right panel's Terminal row or with Ctrl+` (on macOS too),
+  in a chat or already on the new-chat screen, where it starts in the chosen project's folder or, with no project, in
+  your Documents folder. A terminal opened there moves into the chat when you send the first message, so the model can
+  read it, including what it printed before the chat existed. Not available in the web build. The model can read the
+  terminal through a `read_terminal` tool, but it cannot type into it or run commands.
 - **Proposed edits with review.** The model can propose creating, editing and deleting files. Nothing touches your
   disk until you apply. Review each file as a unified or split diff, accept or reject each hunk, then apply the
   accepted ones.
