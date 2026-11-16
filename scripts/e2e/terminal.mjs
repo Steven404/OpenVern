@@ -9,6 +9,10 @@
 //   6 hide + Ctrl+backtick shows the same shell and the same output
 //   7 another chat and back: the first chat's terminal still has its output
 //   8 End kills the shell (checked with `ps` on the pid `echo $$` reported), and a later read says "No terminal is open"
+//  10 on the New Chat screen, with the project chosen, the launcher opens a shell in the project folder; after
+//     `echo pre-chat-$((40+1))`, sending `[fake:terminal]` moves that same shell (same pid, same output) into the new
+//     chat and the model's read has pre-chat-41 (output from before the chat existed). Its no-project form (Documents)
+//     is not run here: it would start a shell in the real home's Documents folder.
 //   9 quitting the app leaves no shell of this test behind
 //
 // Real UI: everything the user would do — the launcher row, clicks, typing into the focused xterm, the mouse wheel
@@ -128,7 +132,7 @@ const projectBtn = (name) =>
   })`;
 
 /** Opens the right panel and the launcher, then clicks the Terminal row (plan §5 "Launcher row"). */
-async function openDockFromLauncher() {
+async function openDockFromLauncher(stepLabel = '1') {
   const pressed = await ev(
     `document.querySelector('button[aria-label="Toggle right panel"]')?.getAttribute('aria-pressed')`,
   );
@@ -137,7 +141,7 @@ async function openDockFromLauncher() {
   await click(`document.querySelector('button[aria-label="Open a panel"]')`, 'Open a panel');
   await waitFor(`!!document.querySelector('button[aria-keyshortcuts="T"]')`, 'launcher');
   const enabled = await ev(`!document.querySelector('button[aria-keyshortcuts="T"]').disabled`);
-  check('1 the launcher Terminal row is enabled in Electron', enabled === true);
+  check(`${stepLabel} the launcher Terminal row is enabled in Electron`, enabled === true);
   await click(byText('button[aria-keyshortcuts="T"]', 'Terminal'), 'Terminal row');
   await waitFor(`!!document.querySelector('[data-terminal-dock]')`, 'terminal dock');
   await waitFor(`!!document.querySelector('[data-testid="terminal-screen"] .xterm-rows')`, 'xterm screen');
@@ -521,6 +525,40 @@ try {
     );
     check('8 the model tells the user no terminal is open', assistant.includes('No terminal is open in this chat'));
     await shot('ended');
+  });
+
+  // ------------------------------------------------------------------ 10 a terminal opened before the chat exists
+  await step('10 pre-chat', async () => {
+    await gotoHash('#/new');
+    await waitFor(`document.body.innerText.includes('What are we building')`, 'new chat hero');
+    await chooseProject(NAME);
+    await openDockFromLauncher('10');
+    const header = await ev(`document.querySelector('[data-terminal-dock] header')?.innerText ?? ''`);
+    check('10 the New Chat dock starts in the project folder', header.includes(PROJECT_ROOT), header.trim());
+    const echoText = await runInTerminal('echo pre-chat-$((40+1))', 'pre-chat-41', 'pre-chat-41');
+    check('10 the New Chat terminal printed pre-chat-41', echoText.includes('pre-chat-41'));
+    const prePid = await readShellPid('OVPIDP');
+    check('10 the New Chat shell reported its pid', Number.isInteger(prePid), `pid=${prePid}`);
+
+    await send('[fake:terminal] what did I run before this chat?');
+    await waitFor(`location.hash.startsWith('#/chat/') && !(${hashIs(chatA)})`, 'the new chat opened');
+    await waitFor(`${isIdle}`, 'fake terminal turn in the new chat', 30000);
+    await waitForReadRow(1, 'ok');
+    const output = await readRowOutput(1);
+    check('10 the first read in the new chat has the pre-chat output', output.includes('pre-chat-41'));
+
+    await waitFor(`!!document.querySelector('[data-terminal-dock]')`, 'the dock moved into the chat', 10000);
+    await waitForTerminalQuiet();
+    const text = await readTerminalScrollback();
+    check('10 the chat’s dock shows the pre-chat output', text.includes('pre-chat-41'));
+    const chatPid = await readShellPid('OVPIDQ');
+    check('10 the chat has the same shell (same pid)', chatPid === prePid, `${prePid} → ${chatPid}`);
+    await shot('pre-chat');
+
+    // End it, so step 9 starts and quits a fresh shell as before.
+    await click(`document.querySelector('[aria-label="End terminal"]')`, 'End terminal');
+    await waitFor(`!document.querySelector('[data-terminal-dock]')`, 'dock closed by End', 5000);
+    check('10 End stops the moved shell', await waitForDead(prePid, 10000), `pid=${prePid}`);
   });
 } catch (err) {
   console.log(`ERROR ${err.stack}`);
