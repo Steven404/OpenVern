@@ -543,6 +543,20 @@ describe('read_terminal removes C1 and directional controls (review finding 4)',
     }
   });
 
+  it('redacts a stored key written straight after another token, with or without an invisible character between', async () => {
+    // `printf '%s' "$GITHUB_TOKEN" "$OPENROUTER_API_KEY"`: the GitHub pattern is greedy and would take the `sk`.
+    const github = `ghp_${'Zz91'.repeat(9)}`;
+    for (const between of ['', '\u200b', '\u202e']) {
+      const res = await run(
+        {},
+        ctx(answerFor([`${github}${between}${FAKE_OPENROUTER_KEY}`]), { knownSecrets: [FAKE_OPENROUTER_KEY] }),
+      );
+      expect(res.ok).toBe(true);
+      expect(res.output).not.toContain('abcdef12');
+      expect(res.output).not.toContain('Zz91');
+    }
+  });
+
   it('does not treat a key-like run inside an ordinary word as a key', async () => {
     const res = await run({}, ctx(answerFor(['my_ghp_abcdefghijklmnopqrstuvwxyz012345 and task-runner'])));
     expect(body(res.output)).toBe('my_ghp_abcdefghijklmnopqrstuvwxyz012345 and task-runner');

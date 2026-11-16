@@ -80,6 +80,9 @@ const TEXT_INVISIBLE_RE = new RegExp(`${TEXT_CONTROL_RE.source.slice(0, -1)}${ZE
 // The vendor patterns without the "not inside a longer word" rule, which `redactIgnoring` applies itself.
 const LOOSE_TOKEN_RE = new RegExp(SECRET_PATTERNS.map((p) => `(?:${p.source})`).join('|'), 'g');
 const WORD_CHAR_RE = /[A-Za-z0-9_-]/;
+/** As in the shared redactor: stored values shorter than this are ignored. */
+const MIN_KNOWN_LENGTH = 8;
+const STORED_KEY_SENTINEL = sentinel('stored-key');
 
 /**
  * Redacts `text` as if its invisible characters (`invisible`, a global regex of single characters) were not there,
@@ -104,6 +107,27 @@ function redactIgnoring(
   }
   stripped += text.slice(last);
 
+  // Stored keys first, as the shared redactor does: a vendor pattern is greedy, and a token written straight before a
+  // stored key (`ghp_…` + `sk-or-…`) would otherwise take the key's first characters into its own match.
+  let storedCount = 0;
+  for (const value of known ?? []) {
+    if (value.length < MIN_KNOWN_LENGTH) continue;
+    let rebuilt = '';
+    const moved = new Set<number>();
+    let start = 0;
+    for (let at = stripped.indexOf(value); at !== -1; at = stripped.indexOf(value, start)) {
+      for (const pos of removedBefore) if (pos >= start && pos <= at) moved.add(pos - start + rebuilt.length);
+      rebuilt += stripped.slice(start, at) + STORED_KEY_SENTINEL;
+      start = at + value.length;
+      storedCount++;
+    }
+    if (start === 0) continue;
+    for (const pos of removedBefore) if (pos >= start) moved.add(pos - start + rebuilt.length);
+    stripped = rebuilt + stripped.slice(start);
+    removedBefore.clear();
+    for (const pos of moved) removedBefore.add(pos);
+  }
+
   let out = '';
   let count = 0;
   let from = 0;
@@ -124,7 +148,7 @@ function redactIgnoring(
 
   // Stored keys (exact values), private-key blocks, and nothing new among the tokens already replaced.
   const rest = redactSecrets(out, { known });
-  return { text: rest.text, count: count + rest.count };
+  return { text: rest.text, count: storedCount + count + rest.count };
 }
 
 /**
