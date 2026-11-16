@@ -26,16 +26,17 @@ OpenVern is a desktop AI app: chat with an LLM about a local code project, with 
 
 - A project is a folder on disk the user adds; chats belong to a project (or to none).
 - The user picks a model per chat, attaches text files and images, can stop a streaming reply and retry a failed one.
-- Desktop window, minimum 1080×720. A right panel (Files, Terminal later, Diff) opens beside the conversation.
+- Desktop window, minimum 1080×720. A right panel (Files, Diff) opens beside the conversation. A terminal dock opens under the composer, one shell per chat.
 
 ## Capabilities and Constraints
 
 - **V0 (shipped):** read-only project access. Tools are sandboxed to the project root, skip ignored and secret-looking files (`.env`, keys) and cap file and result sizes.
 - **v0.2 (this release):** review mode. The agent proposes file creations, edits and deletions; the user reviews them as unified or split diffs, accepts or rejects each change, and only accepted changes are written. The model is told what happened at its next turn. A read-only Files panel; the model states which model it is. Still no commands and no undo after apply (use git).
+- **Shipped (terminal):** a terminal dock under the composer, with a shell in the project folder (or the home folder for a chat without one). The user types into it and runs commands. The model can read its text through a `read_terminal` tool, which needs no approval and shows as a tool call. The model cannot type into the terminal or run commands.
 - **Next, committed:** an auto mode beside that review mode. Edits are written as the model responds and stay viewable as diffs; only high-risk edits (and commands, once commands exist) are held for the user's approval before they run.
 - **Next, committed:** a light theme (only dark exists today).
-- **Not committed:** running commands, direct providers besides OpenRouter, branching or editing past messages, token/cost display, context compaction, chat search, MCP, Windows/macOS builds, auto-update, i18n.
-- Terminology: *project*, *chat*, *tool call*, *proposed edits*, *apply*, *review mode*, *auto mode*.
+- **Not committed:** the model running commands (the terminal is read-only for it), direct providers besides OpenRouter, branching or editing past messages, token/cost display, context compaction, chat search, MCP, Windows/macOS builds, auto-update, i18n.
+- Terminology: *project*, *chat*, *tool call*, *proposed edits*, *apply*, *review mode*, *auto mode*, *terminal*.
 
 ## Shipped Design
 

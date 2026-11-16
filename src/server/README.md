@@ -50,3 +50,18 @@ curl -s -H "$H" $API/chats/nope
 
 Stop the stream early with Ctrl+C (or `curl --max-time 0.2`): the run is aborted and the partial reply is saved
 with `status: "stopped"`.
+
+## Terminal reads
+
+The model reads a chat's terminal through the `read_terminal` tool, and only a client that can answer does so. Such a
+client sends `"terminal": true` in the body of `POST /api/chats/:id/messages` or `POST /api/chats/:id/retry`. The turn
+then offers the tool, if the model supports tools. When the model calls it, the stream sends a `terminal_read_request`
+event, and the client answers with `POST /api/chats/:id/terminal-reads/:requestId`, whose body is either
+`{"ok": true, "result": {...}}` or `{"ok": false, "reason": "no_terminal" | "unavailable"}`.
+
+- `204`: a waiting read took the answer.
+- `404`: unknown, expired, already answered, or for another chat.
+- `400`: a malformed body. Unknown properties are refused.
+- `413`: the body is above 8 MiB.
+
+A client that sends `"terminal": true` and never answers makes the read fail after 10 seconds.

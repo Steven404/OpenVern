@@ -14,6 +14,10 @@ no telemetry.
 - **Any OpenRouter model.** Pick a model per chat. For models that support reasoning, choose the reasoning effort.
 - **Read access through tool calls.** In a project chat the model can list, read and search files. Each tool call is
   shown in the conversation.
+- **A terminal you type into.** A shell dock under the composer, one per chat, in the project folder (or your home
+  folder for a chat without a project). Open it from the right panel's Terminal row or with Ctrl+` (on macOS too). It
+  is not available on the new-chat screen or in the web build. The model can read the terminal through a
+  `read_terminal` tool, but it cannot type into it or run commands.
 - **Proposed edits with review.** The model can propose creating, editing and deleting files. Nothing touches your
   disk until you apply. Review each file as a unified or split diff, accept or reject each hunk, then apply the
   accepted ones.
@@ -26,19 +30,39 @@ no telemetry.
 - **API key in the OS keyring.** The installed app encrypts the key with the macOS Keychain, or with KWallet/libsecret
   on Linux.
 
-OpenVern cannot run commands, and applied edits can't be undone from the app (use git).
+You can run commands in the terminal, but the model cannot. Applied edits can't be undone from the app (use git).
+
+## Limits
+
+- **Redaction matches patterns.** Before the model reads terminal output, and before a selection goes into the
+  composer, API keys, tokens and private-key blocks are replaced with `«redacted:…»`. Only recognisable patterns are
+  caught. A secret with no known prefix, a key shown without its prefix, a key file scrolled past both its BEGIN and
+  END lines in a pager, or text written to disguise a key can get through. Terminal output reaches the model as
+  untrusted data, not instructions.
+- **Shells outlive the dock.** Hiding the dock, switching chats and reloading the window all keep the shell running.
+  A reload brings back up to the last 2 MiB of its output. Ending the terminal, closing the window or quitting the app
+  hangs up the shell and force-stops it after one second. A job started with `nohup`, or one that ignores hang-up,
+  keeps running, as in Terminal.app.
+- **Size limits.** At most 8 terminals at once, each with 5,000 lines of scrollback. One app run can start at most 100
+  shells (a file-descriptor leak in `node-pty` on macOS makes this cap necessary); after that, restart the app. If the
+  shell is not reading, input beyond 1 MiB is dropped and the terminal says so, so a very large paste can be cut short.
+  The model reads at most 1,000 lines per call, and its output is capped at 50 KB.
 
 ## Installation
 
 There are no prebuilt downloads yet. You build the app from source and install it for your user. Both platforms need
 Node.js 22 or newer and npm 10 or newer.
 
+The terminal uses the native module `node-pty`, which `npm ci` builds. Install scripts must be allowed to run:
+`npm ci --ignore-scripts` breaks it.
+
 After installing, open OpenVern, go to Settings and paste your OpenRouter API key.
 
 ### Linux (x86_64)
 
-Requirements: `fuse2` to run the AppImage, and unprivileged user namespaces for Chromium's sandbox (enabled by default
-on Arch and CachyOS kernels).
+Requirements: `fuse2` to run the AppImage, unprivileged user namespaces for Chromium's sandbox (enabled by default on
+Arch and CachyOS kernels), and a C++ build toolchain for `node-pty`: Python 3, `make` and a C++ compiler. The Linux
+build of the terminal has not been verified yet.
 
 ```bash
 git clone https://github.com/Steven404/OpenVern.git && cd OpenVern
@@ -78,5 +102,6 @@ On first use macOS may ask two things:
 
 - A Keychain prompt for `OpenVern Safe Storage`, where the API key is encrypted. Choose **Always Allow** to avoid
   repeated prompts.
-- Permission to access Documents, Desktop or Downloads when a project is in one of those folders. If you deny it, turn
-  it on again in System Settings › Privacy & Security › Files & Folders.
+- Permission to access Documents, Desktop or Downloads when a project is in one of those folders, or when a command you
+  run in the terminal reads them. Terminal commands act with OpenVern's permissions, so the prompt can come from a
+  command you start there. If you deny it, turn it on again in System Settings › Privacy & Security › Files & Folders.
