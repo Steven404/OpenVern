@@ -5,11 +5,17 @@ const INVISIBLE =
   '\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u200b-\\u200f\\u2060\\ufeff\\u061c\\u202a-\\u202e\\u2066-\\u2069';
 const TOKEN = `[A-Za-z0-9_\\-${INVISIBLE}]`;
 const invisible = new RegExp(`[${INVISIBLE}\\n]`, 'g');
-const suffix = new RegExp(`${TOKEN}+$`);
 const prefix = new RegExp(`^${TOKEN}+`);
-const BORDER = '|\\u2500-\\u257f';
+// What programs draw beside the text: box-drawing borders, block elements (scrollbars, indent guides), and the
+// markers editors put at the start of a wrapped row (`showbreak`).
+const BORDER = '|\\u2500-\\u259f';
+const WRAP_MARK = '>\\u21aa\\u21b3\\u2026+\\\\';
+// A row's last token run, allowing a right-hand border or scrollbar column (and padding) after it.
+const TRAIL = `[ \\t${BORDER}]*`;
+const suffix = new RegExp(`(${TOKEN}+)${TRAIL}$`);
+const trailOnly = new RegExp(`^${TRAIL}$`);
 // End the gutter on a separator, never on a digit belonging to the secret itself.
-const margin = new RegExp(`^([ \\t0-9${BORDER}]*[ \\t${BORDER}])(${TOKEN}+)`);
+const margin = new RegExp(`^([ \\t0-9${BORDER}${WRAP_MARK}]*[ \\t${BORDER}${WRAP_MARK}])(${TOKEN}+)`);
 // Hints only: the shared vendor-pattern search below must still recognise a secret crossing the boundary.
 const VENDOR_PREFIXES = [
   'sk-',
@@ -47,11 +53,15 @@ export function redactBufferLines(lines: string[], full: boolean[], firstWrapped
   const out = [...lines];
   const spans = new Map<number, { start: number; end: number }[]>();
   for (let i = 0; i < lines.length - 1; i++) {
-    if (!full[i]) continue;
-    const tail = lines[i]?.match(suffix)?.[0];
-    if (!tail) continue;
-    let vendor = vendorCandidate(tail.replace(invisible, ''));
-    const pieces = [{ line: i, start: (lines[i]?.length ?? 0) - tail.length, text: tail }];
+    const tailMatch = lines[i]?.match(suffix);
+    const tail = tailMatch?.[1];
+    if (!tailMatch || !tail) continue;
+    const bareTail = tail.replace(invisible, '');
+    let vendor = vendorCandidate(bareTail);
+    // A row that is not full still continues below when an editor broke the line at a hyphen or underscore inside the
+    // key (vim's `linebreak`): `KEY=sk-or-v1-` on one row, padded with spaces, and the rest on the next.
+    if (!full[i] && !(vendor && /[-_]$/.test(bareTail))) continue;
+    const pieces = [{ line: i, start: tailMatch.index ?? 0, text: tail }];
     for (let j = i + 1; j < lines.length; j++) {
       const line = lines[j] ?? '';
       const gutter = vendor ? line.match(margin) : null;
@@ -60,7 +70,7 @@ export function redactBufferLines(lines: string[], full: boolean[], firstWrapped
       const start = gutter?.[1]?.length ?? 0;
       pieces.push({ line: j, start, text });
       vendor ||= vendorCandidate(text.replace(invisible, ''));
-      if (!full[j] || start + text.length !== line.length) break;
+      if (!full[j] || !trailOnly.test(line.slice(start + text.length))) break;
     }
     if (pieces.length < 2) continue;
     const run = pieces.map((piece) => piece.text).join('\n');
@@ -80,10 +90,17 @@ export function redactBufferLines(lines: string[], full: boolean[], firstWrapped
       return start < boundary && bare.length - unchangedEnd > boundary;
     });
     if (crosses) {
+      // Only the pieces the secret actually reaches: a word on a later row that merely followed it stays.
+      const changedEnd = bare.length - unchangedEnd;
+      let offset = 0;
       for (const piece of pieces) {
-        const ranges = spans.get(piece.line) ?? [];
-        ranges.push({ start: piece.start, end: piece.start + piece.text.length });
-        spans.set(piece.line, ranges);
+        const length = piece.text.replace(invisible, '').length;
+        if (offset < changedEnd && offset + length > start) {
+          const ranges = spans.get(piece.line) ?? [];
+          ranges.push({ start: piece.start, end: piece.start + piece.text.length });
+          spans.set(piece.line, ranges);
+        }
+        offset += length;
       }
     }
     i = (pieces.at(-1)?.line ?? i + 1) - 1;

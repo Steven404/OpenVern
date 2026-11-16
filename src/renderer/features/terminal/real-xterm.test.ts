@@ -136,6 +136,77 @@ for (const gutter of ['   1  ', '  │ ', '    ']) {
   }
 }
 
+it('redacts a key that an editor broke at a hyphen on a row that is not full (vim linebreak)', async () => {
+  const cols = 60;
+  const body = 'a'.repeat(64);
+  // `set wrap linebreak`: the row ends after `v1-` and is padded with spaces; the rest follows on the next rows.
+  for (const gutter of ['', '  1 ', '    ']) {
+    const output =
+      `${gutter}OPENROUTER_API_KEY=sk-or-v1-` +
+      `\x1b[2;1H${gutter}${body.slice(0, cols - gutter.length)}` +
+      `\x1b[3;1H${gutter}${body.slice(cols - gutter.length)}` +
+      '\x1b[4;1Hnext line';
+    await withScreen(
+      output,
+      (term) => {
+        const result = readTerminalBuffer(term.buffer.active, { ...info, cols });
+        expect(result.text, JSON.stringify(gutter)).not.toContain('aaaa');
+        expect(result.text).toContain('OPENROUTER_API_KEY=');
+        expect(result.text).toContain('next line');
+        expect(result.totalLines).toBe(4);
+      },
+      cols,
+    );
+  }
+});
+
+it('redacts a wrapped key behind a wrap marker, inside a bordered panel, and beside a scrollbar column', async () => {
+  const cols = 40;
+  const key = `sk-or-v1-${'a'.repeat(60)}`;
+  const layouts: Record<string, string[]> = {
+    // vim `showbreak`: continuation rows start with a marker.
+    'a showbreak arrow': [`KEY=${key.slice(0, 36)}`, `↪ ${key.slice(36)}`],
+    'a showbreak chevron': [`KEY=${key.slice(0, 36)}`, `>>> ${key.slice(36)}`],
+    // A boxed panel (lazygit, rich): a border on both sides of every row.
+    'a bordered panel': [`│ KEY=${key.slice(0, 32)} │`, `│ ${key.slice(32, 68)} │`, `│ ${key.slice(68).padEnd(36)} │`],
+    // A scrollbar drawn in the last column.
+    'a scrollbar column': [`KEY=${key.slice(0, 35)}▐`, `${key.slice(35).padEnd(39)}▐`],
+    // Indent guides before the continuation.
+    'an indent guide': [`KEY=${key.slice(0, 36)}`, `▏ ${key.slice(36)}`],
+  };
+  for (const [name, rows] of Object.entries(layouts)) {
+    const output = `${rows.map((row, i) => `\x1b[${i + 1};1H${row}`).join('')}\x1b[${rows.length + 1};1Hnext line`;
+    await withScreen(
+      output,
+      (term) => {
+        const result = readTerminalBuffer(term.buffer.active, { ...info, cols });
+        expect(result.text, name).not.toContain('aaaa');
+        expect(result.text, name).toContain('next line');
+        expect(result.totalLines, name).toBe(rows.length + 1);
+      },
+      cols,
+    );
+  }
+});
+
+it('leaves ordinary lines that end in a hyphen or sit inside borders unchanged', async () => {
+  const rows = [
+    'npm install --save-',
+    'dev-dependencies are listed below',
+    '│ src/renderer/features/terminal-dock │',
+    'see task-',
+    'runner for the rest',
+  ];
+  const output = rows.map((row, i) => `\x1b[${i + 1};1H${row}`).join('');
+  await withScreen(
+    output,
+    (term) => {
+      expect(readTerminalBuffer(term.buffer.active, { ...info, cols: 40 }).text).toBe(rows.join('\n'));
+    },
+    40,
+  );
+});
+
 it('leaves margin-adjacent commit hashes and base64 without a vendor prefix unchanged', async () => {
   for (const token of ['a'.repeat(40), 'QUJD'.repeat(10)]) {
     await withScreen(
