@@ -533,7 +533,14 @@ try {
     await waitFor(`document.body.innerText.includes('What are we building')`, 'new chat hero');
     await chooseProject(NAME);
     await openDockFromLauncher('10');
-    const header = await ev(`document.querySelector('[data-terminal-dock] header')?.innerText ?? ''`);
+    // The folder reaches the header a render after the rows appear, so wait for it rather than reading at once.
+    const headerJs = `(document.querySelector('[data-terminal-dock] header')?.innerText ?? '')`;
+    await waitFor(
+      `${headerJs}.includes(${JSON.stringify(PROJECT_ROOT)})`,
+      'New Chat dock header shows the folder',
+      10000,
+    ).catch(() => {});
+    const header = await ev(headerJs);
     check('10 the New Chat dock starts in the project folder', header.includes(PROJECT_ROOT), header.trim());
     const echoText = await runInTerminal('echo pre-chat-$((40+1))', 'pre-chat-41', 'pre-chat-41');
     check('10 the New Chat terminal printed pre-chat-41', echoText.includes('pre-chat-41'));
