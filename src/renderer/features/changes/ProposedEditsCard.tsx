@@ -4,9 +4,11 @@ import { cx } from '@renderer/components/ui';
 import { useUiStore } from '@renderer/stores/ui';
 import type { AppliedBatch, PendingChanges } from '@shared/types';
 import { Check } from 'lucide-react';
+import { type ReactNode, useId, useState } from 'react';
 import { DiffIcon } from '../right-panel/icons';
 import { openPanelSurface, useChatPanelState } from '../right-panel/panel-store';
 import { appliedLabel, plural, progressLabel, progressOf } from './diff';
+import { cardRows } from './list-split';
 import { PathLabel, StatusBadge, Totals } from './parts';
 import { useDecisions } from './review-store';
 
@@ -31,9 +33,14 @@ function CardShell({
   add: number;
   del: number;
   highlight: boolean;
-  rows: React.ReactNode;
-  footer: React.ReactNode;
+  rows: ReactNode[];
+  footer: ReactNode;
 }) {
+  // Long lists show a preview; the toggle is local to this card and not persisted.
+  const [expanded, setExpanded] = useState(false);
+  const listId = useId();
+  const { shown } = cardRows(rows.length, expanded);
+  const showToggle = rows.length > shown || expanded;
   return (
     <section
       aria-label={title}
@@ -47,7 +54,22 @@ function CardShell({
         <span className="flex-1" />
         <Totals add={add} del={del} />
       </div>
-      <ul className="m-0 flex list-none flex-col gap-px px-2 pb-2">{rows}</ul>
+      <ul id={listId} className={cx('m-0 flex list-none flex-col gap-px px-2', !showToggle && 'pb-2')}>
+        {rows.slice(0, shown)}
+      </ul>
+      {showToggle ? (
+        <div className="px-2 pt-0.5 pb-2">
+          <button
+            type="button"
+            aria-expanded={expanded}
+            aria-controls={listId}
+            onClick={() => setExpanded((v) => !v)}
+            className="inline-flex min-h-[30px] w-full cursor-pointer items-center justify-start rounded-[6px] border-0 bg-transparent px-2 text-[12.5px] text-text-muted hover:bg-overlay-row hover:text-text"
+          >
+            {expanded ? 'Show fewer' : `Show all ${rows.length} files`}
+          </button>
+        </div>
+      ) : null}
       <div className="flex flex-wrap items-center gap-2.5 border-t border-border bg-[#111630] py-2.5 pr-3 pl-4">
         {footer}
       </div>

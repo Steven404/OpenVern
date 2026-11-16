@@ -3,12 +3,12 @@ import { ApiError } from '@renderer/lib/api-client';
 import { makeFileChange, makeHunk, sampleProposal } from '@renderer/lib/mock-changes';
 import { queryKeys } from '@renderer/lib/query-keys';
 import { createRun, useRunsStore } from '@renderer/stores/runs';
-import { useUiStore } from '@renderer/stores/ui';
+import { readPersistedUi, STORAGE_KEYS, useUiStore } from '@renderer/stores/ui';
 import { LAYOUT } from '@shared/constants';
 import { errorInfo } from '@shared/errors';
-import type { PendingChanges } from '@shared/types';
+import type { AppliedBatch, PendingChanges } from '@shared/types';
 import { QueryClient } from '@tanstack/react-query';
-import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { usePanelStore } from '../right-panel/panel-store';
 import {
@@ -22,6 +22,7 @@ import {
   progressLabel,
   progressOf,
 } from './diff';
+import { AppliedEditsCard, ProposedEditsCard } from './ProposedEditsCard';
 import { effectiveDecisions, useReviewStore } from './review-store';
 
 beforeEach(() => {
@@ -203,6 +204,64 @@ describe('review pane', () => {
     return { ...seed, p };
   }
 
+  it('sizes the file list from a keyboard handle, saved globally', async () => {
+    const { p } = await openReview();
+    const handle = within(p).getByRole('separator', { name: 'Resize file list' });
+    expect(handle.getAttribute('aria-valuenow')).toBe('35');
+    fireEvent.keyDown(handle, { key: 'ArrowDown' });
+    expect(handle.getAttribute('aria-valuenow')).toBe('37');
+    expect(window.localStorage.getItem(STORAGE_KEYS.diffListRatio)).toBe('0.37');
+    fireEvent.keyDown(handle, { key: 'ArrowUp', shiftKey: true });
+    expect(handle.getAttribute('aria-valuenow')).toBe('27');
+    fireEvent.keyDown(handle, { key: 'End' });
+    expect(handle.getAttribute('aria-valuemax')).toBe('80');
+    expect(handle.getAttribute('aria-valuenow')).toBe('80');
+    fireEvent.keyDown(handle, { key: 'Home' });
+    expect(handle.getAttribute('aria-valuemin')).toBe('10');
+    expect(handle.getAttribute('aria-valuenow')).toBe('10');
+  });
+
+  it('resets the file list height on double-click', async () => {
+    const { p } = await openReview();
+    const handle = within(p).getByRole('separator', { name: 'Resize file list' });
+    fireEvent.keyDown(handle, { key: 'End' });
+    fireEvent.doubleClick(handle);
+    expect(handle.getAttribute('aria-valuenow')).toBe('35');
+    expect(window.localStorage.getItem(STORAGE_KEYS.diffListRatio)).toBe('0.35');
+  });
+
+  it('shows the stored file list height after a reload', async () => {
+    const { p } = await openReview();
+    const handle = within(p).getByRole('separator', { name: 'Resize file list' });
+    window.localStorage.setItem(STORAGE_KEYS.diffListRatio, '0.5');
+    act(() => useUiStore.setState(readPersistedUi()));
+    expect(handle.getAttribute('aria-valuenow')).toBe('50');
+  });
+
+  it('scrolls the current file row into view when the file changes', async () => {
+    const scrolled: Element[] = [];
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = vi.fn(function (this: Element) {
+      scrolled.push(this);
+    });
+    try {
+      const { p } = await openReview();
+      fireEvent.click(within(await card()).getByRole('button', { name: /constants\.ts/ }));
+      await waitFor(() =>
+        expect(
+          within(p)
+            .getByRole('button', { name: /constants\.ts/ })
+            .getAttribute('aria-current'),
+        ).toBe('true'),
+      );
+      const last = scrolled.at(-1);
+      expect(last?.getAttribute('aria-current')).toBe('true');
+      expect(last?.textContent).toContain('constants.ts');
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
+  });
+
   it('decides hunks, shows labels and applies the accepted ones', async () => {
     const { client, chat, p } = await openReview();
     const spy = vi.spyOn(client, 'applyChatChanges');
@@ -371,6 +430,62 @@ describe('review pane', () => {
     renderApp({ client, route: `/chat/${chat.id}` });
     // The panel is still open on the Diff tab.
     expect(await screen.findByText(/too large to show here/)).toBeTruthy();
+  });
+});
+
+describe('long file lists in the cards', () => {
+  const many = (n: number) =>
+    Array.from({ length: n }, (_, i) => makeFileChange(`src/gen/file-${i}.ts`, 'modify', [makeHunk(1, 1, '', ['+x'])]));
+  const pendingWith = (files: PendingChanges['files']): PendingChanges => ({
+    revision: 1,
+    messageId: 'm1',
+    files,
+    totalAdd: files.length,
+    totalDel: 0,
+  });
+  const liCount = (el: HTMLElement) => within(el).getAllByRole('listitem').length;
+
+  it('shows a preview of six files and expands to all of them', () => {
+    const files = many(12);
+    render(<ProposedEditsCard chatId="c" pending={pendingWith(files)} />);
+    const el = screen.getByTestId('changes-card');
+    expect(liCount(el)).toBe(6);
+    const toggle = within(el).getByRole('button', { name: 'Show all 12 files' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle.getAttribute('aria-controls')).toBe(within(el).getByRole('list').id);
+
+    fireEvent.click(toggle);
+    expect(liCount(el)).toBe(12);
+    const fewer = within(el).getByRole('button', { name: 'Show fewer' });
+    expect(fewer.getAttribute('aria-expanded')).toBe('true');
+    fireEvent.click(fewer);
+    expect(liCount(el)).toBe(6);
+  });
+
+  it('shows no toggle for a card with three files', () => {
+    render(<ProposedEditsCard chatId="c" pending={pendingWith(sampleProposal())} />);
+    const el = screen.getByTestId('changes-card');
+    expect(liCount(el)).toBe(3);
+    expect(within(el).queryByRole('button', { name: /^Show / })).toBeNull();
+  });
+
+  it('collapses the applied-edits card the same way', () => {
+    const files = many(12);
+    const batch: AppliedBatch = {
+      id: 'b1',
+      appliedAt: '2026-01-01T00:00:00.000Z',
+      messageId: 'm1',
+      written: files,
+      rejectedHunks: 0,
+      skippedHunks: 0,
+      conflicts: [],
+    };
+    render(<AppliedEditsCard chatId="c" batch={batch} />);
+    const el = screen.getByTestId('changes-card');
+    expect(liCount(el)).toBe(6);
+    fireEvent.click(within(el).getByRole('button', { name: 'Show all 12 files' }));
+    expect(liCount(el)).toBe(12);
+    expect(within(el).getByRole('button', { name: 'Show fewer' }).getAttribute('aria-expanded')).toBe('true');
   });
 });
 
