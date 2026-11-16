@@ -78,6 +78,12 @@ export const LAYOUT = {
   windowMinHeight: 720,
 } as const;
 
+/**
+ * The Diff surface's file list height as a fraction of the body below its header. The store owns the default (it
+ * seeds the stored value); the helpers in `list-split.ts` clamp against the measured body.
+ */
+export const LIST_RATIO_DEFAULT = 0.35;
+
 export const IMAGE_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'] as const;
 export type ImageMimeType = (typeof IMAGE_MIME_TYPES)[number];
 

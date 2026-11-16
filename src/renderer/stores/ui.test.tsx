@@ -1,7 +1,8 @@
 import { Dialog, DialogContent } from '@renderer/components/ui';
+import { LIST_RATIO_DEFAULT } from '@shared/constants';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { modalReturnFocus, useUiStore } from './ui';
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { modalReturnFocus, readPersistedUi, STORAGE_KEYS, useUiStore } from './ui';
 
 beforeAll(() => {
   globalThis.ResizeObserver ??= class {
@@ -72,6 +73,58 @@ async function closeDialog() {
   });
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
 }
+
+describe('diff list ratio (global, persisted)', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    useUiStore.setState({ diffListRatio: LIST_RATIO_DEFAULT });
+  });
+
+  it('defaults to 0.35 when nothing is stored', () => {
+    expect(readPersistedUi().diffListRatio).toBe(0.35);
+    expect(useUiStore.getState().diffListRatio).toBe(0.35);
+  });
+
+  it('reads a stored fraction', () => {
+    window.localStorage.setItem(STORAGE_KEYS.diffListRatio, '0.5');
+    expect(readPersistedUi().diffListRatio).toBe(0.5);
+  });
+
+  it('falls back to the default for a corrupt value and keeps an out-of-range one within [0, 1]', () => {
+    window.localStorage.setItem(STORAGE_KEYS.diffListRatio, 'garbage');
+    expect(readPersistedUi().diffListRatio).toBe(0.35);
+    window.localStorage.setItem(STORAGE_KEYS.diffListRatio, 'Infinity');
+    expect(readPersistedUi().diffListRatio).toBe(0.35);
+    window.localStorage.setItem(STORAGE_KEYS.diffListRatio, '5');
+    expect(readPersistedUi().diffListRatio).toBe(1);
+    window.localStorage.setItem(STORAGE_KEYS.diffListRatio, '-2');
+    expect(readPersistedUi().diffListRatio).toBe(0);
+  });
+
+  it('keeps a value the store cannot judge against the body, so a small window does not rewrite it', () => {
+    // 0.8 is too tall for a 400px body; the Diff surface clamps what it shows, the stored preference stays 0.8.
+    window.localStorage.setItem(STORAGE_KEYS.diffListRatio, '0.8');
+    expect(readPersistedUi().diffListRatio).toBe(0.8);
+  });
+
+  it('writes storage on set by default, but not with persist: false until commit', () => {
+    useUiStore.getState().setDiffListRatio(0.4, { persist: false });
+    expect(useUiStore.getState().diffListRatio).toBe(0.4);
+    expect(window.localStorage.getItem(STORAGE_KEYS.diffListRatio)).toBeNull();
+
+    useUiStore.getState().commitDiffListRatio();
+    expect(window.localStorage.getItem(STORAGE_KEYS.diffListRatio)).toBe('0.4');
+
+    useUiStore.getState().setDiffListRatio(0.6);
+    expect(window.localStorage.getItem(STORAGE_KEYS.diffListRatio)).toBe('0.6');
+  });
+
+  it('sanitizes a set value to [0, 1] before it is stored', () => {
+    useUiStore.getState().setDiffListRatio(5);
+    expect(useUiStore.getState().diffListRatio).toBe(1);
+    expect(window.localStorage.getItem(STORAGE_KEYS.diffListRatio)).toBe('1');
+  });
+});
 
 describe('app-level modal focus return', () => {
   it('returns focus to the menu trigger when opened from a menu item that then unmounts', async () => {

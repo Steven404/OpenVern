@@ -7,11 +7,18 @@ import { useApiClient } from '@renderer/lib/api-context';
 import { queryKeys } from '@renderer/lib/query-keys';
 import { useRunsStore } from '@renderer/stores/runs';
 import { useUiStore } from '@renderer/stores/ui';
-import { LAYOUT } from '@shared/constants';
+import { LAYOUT, LIST_RATIO_DEFAULT } from '@shared/constants';
 import type { DiffHunk, FileChange, PendingChanges } from '@shared/types';
 import { useQueryClient } from '@tanstack/react-query';
 import { ArrowRight, Check, ChevronsUpDown, Columns2, Rows3, X } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import {
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
 import { availablePanelWidth } from '../right-panel/layout';
 import { useChatChanges } from '../right-panel/queries';
 import type { SurfaceProps } from '../right-panel/surfaces';
@@ -30,10 +37,24 @@ import {
   progressLabel,
   progressOf,
 } from './diff';
+import { clampListRatio, DRAG_START_PX, listRatioBounds, ratioFromDrag, ratioFromKey } from './list-split';
 import { HunkLines, PathLabel, StatusBadge, Totals } from './parts';
 import { type DiffMode, useDecisions, useReviewStore, useReviewView } from './review-store';
 
 const STALE_MESSAGE = 'The proposed edits changed while you were reviewing. Review them again.';
+
+/**
+ * Scrolls `nav` the least it takes to bring `row` inside its visible box. Only `nav` moves: `scrollIntoView` would
+ * also scroll the ancestors (the header and the panel). Rects are viewport-relative, so the current scroll is included.
+ */
+function revealInList(nav: HTMLElement, row: HTMLElement): void {
+  const navRect = nav.getBoundingClientRect();
+  const top = navRect.top + nav.clientTop;
+  const bottom = top + nav.clientHeight;
+  const rowRect = row.getBoundingClientRect();
+  if (rowRect.top < top) nav.scrollTop -= top - rowRect.top;
+  else if (rowRect.bottom > bottom) nav.scrollTop += rowRect.bottom - bottom;
+}
 
 function useWindowWidth(): number {
   const [w, setW] = useState(() => (typeof window === 'undefined' ? 0 : window.innerWidth));
@@ -158,6 +179,94 @@ export function DiffSurface({ chatId, params }: SurfaceProps) {
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  // The file list's height is a ceiling: the list ratio of the body below the header (see list-split.ts). The body
+  // element is a state so the observer attaches when the body mounts (it is absent while there are no edits).
+  const diffListRatio = useUiStore((s) => s.diffListRatio);
+  const setDiffListRatio = useUiStore((s) => s.setDiffListRatio);
+  const commitDiffListRatio = useUiStore((s) => s.commitDiffListRatio);
+  const [bodyEl, setBodyEl] = useState<HTMLDivElement | null>(null);
+  const [bodyPx, setBodyPx] = useState(0);
+  // A drag reads the height through this ref, so it always uses the latest measure rather than the one at drag start.
+  const bodyPxRef = useRef(0);
+  const navRef = useRef<HTMLElement>(null);
+  const [dragging, setDragging] = useState(false);
+  const stopDrag = useRef<(() => void) | null>(null);
+  useEffect(() => () => stopDrag.current?.(), []);
+  // Layout effect: the first paint already uses the measured ceiling, not the percentage fallback.
+  useLayoutEffect(() => {
+    if (!bodyEl) return;
+    const update = () => {
+      const px = bodyEl.getBoundingClientRect().height;
+      bodyPxRef.current = px;
+      setBodyPx(px);
+    };
+    update();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(update);
+    observer.observe(bodyEl);
+    return () => observer.disconnect();
+  }, [bodyEl]);
+  useEffect(() => {
+    if (!dragging) return;
+    const { cursor, userSelect } = document.body.style;
+    document.body.style.cursor = 'row-resize';
+    document.body.style.userSelect = 'none';
+    return () => {
+      document.body.style.cursor = cursor;
+      document.body.style.userSelect = userSelect;
+    };
+  }, [dragging]);
+  // The rendered ratio is the stored preference clamped to the measured body. The store keeps the raw value, so a
+  // small window narrows what is shown without rewriting the preference.
+  const ratio = clampListRatio(diffListRatio, bodyPx);
+  const listBounds = listRatioBounds(bodyPx);
+  const ceilingPx = Math.round(ratio * bodyPx);
+  const listMaxHeight = bodyPx > 0 ? `${ceilingPx}px` : `${ratio * 100}%`;
+  const onListResizeStart = (event: ReactPointerEvent) => {
+    // Without a measured body there is nothing to take a fraction of; the keyboard still works.
+    if (event.button !== 0 || bodyPx <= 0) return;
+    event.preventDefault();
+    // preventDefault also cancels the click focus, so focus the handle ourselves: the arrow keys then resize it.
+    (event.currentTarget as HTMLElement).focus({ preventScroll: true });
+    stopDrag.current?.();
+    const startY = event.clientY;
+    // Start from the ceiling the user sees. A short list is shorter than its ceiling, and starting from its natural
+    // height would lower the ceiling on any small drag.
+    const naturalPx = navRef.current?.getBoundingClientRect().height ?? 0;
+    const startListPx = Math.max(naturalPx, ceilingPx);
+    let moved = false;
+    setDragging(true);
+    const move = (ev: PointerEvent) => {
+      const deltaY = ev.clientY - startY;
+      // A click or a jiggle is not a resize: the ratio changes only once the pointer has really moved.
+      if (!moved && Math.abs(deltaY) < DRAG_START_PX) return;
+      moved = true;
+      const body = bodyPxRef.current;
+      if (body <= 0) return;
+      setDiffListRatio(ratioFromDrag(startListPx, deltaY, body), { persist: false });
+    };
+    const up = () => {
+      if (moved) commitDiffListRatio();
+      setDragging(false);
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
+      stopDrag.current = null;
+    };
+    stopDrag.current = up;
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
+  };
+  const onListResizeKey = (event: ReactKeyboardEvent) => {
+    const next = ratioFromKey(ratio, event.key, event.shiftKey, bodyPx);
+    if (next === null) return;
+    event.preventDefault();
+    setDiffListRatio(next);
+  };
+  // Store the raw default: the render clamps it, and a short panel must not rewrite the preference.
+  const resetListRatio = () => setDiffListRatio(LIST_RATIO_DEFAULT);
+
   // Split needs a panel at least `splitMin` wide. The panel only widens on an explicit Split click (never on its
   // own), and only when the window has room; otherwise Split is disabled. `windowWidth` is 0 only before it is known.
   const maxWidth = availablePanelWidth(sidebarCollapsed, windowWidth);
@@ -188,6 +297,14 @@ export function DiffSurface({ chatId, params }: SurfaceProps) {
   // biome-ignore lint/correctness/useExhaustiveDependencies: scroll back to the top when the file changes
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
+  }, [cur?.path]);
+
+  // Keep the current file's row visible in a list that now scrolls on its own.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reveal the current row when the file changes
+  useEffect(() => {
+    const nav = navRef.current;
+    const row = nav?.querySelector<HTMLElement>('[aria-current="true"]');
+    if (nav && row) revealInList(nav, row);
   }, [cur?.path]);
 
   const conflicts = new Map(applied.at(-1)?.conflicts.map((c) => [c.path, c.reason]) ?? []);
@@ -290,97 +407,116 @@ export function DiffSurface({ chatId, params }: SurfaceProps) {
     <section aria-label="Review changes" className="flex min-h-0 flex-1 flex-col">
       {header}
 
-      <nav aria-label="Changed files" className="border-b border-border-header p-2.5">
-        <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
-          {files.map((f) => {
-            const st = fileState(f, decisions[f.path]);
-            const conflict = conflicts.get(f.path);
-            const isCur = f.path === cur?.path;
-            return (
-              <li key={f.path}>
-                <button
-                  type="button"
-                  aria-current={isCur}
-                  onClick={() => showFile(f.path)}
-                  className={cx(
-                    'flex min-h-9 w-full cursor-pointer items-center gap-2.5 rounded-[7px] border-0 px-2.5 text-left text-[13px] text-text-secondary hover:bg-overlay-row',
-                    isCur ? 'bg-surface-raised' : 'bg-transparent',
-                  )}
-                >
-                  <StatusBadge kind={f.kind} />
-                  <PathLabel path={f.path} />
-                  {conflict ? (
-                    <span className="whitespace-nowrap text-[12px] text-danger">{CONFLICT_LABEL[conflict]}</span>
-                  ) : (
-                    st.label && (
-                      <span
-                        className={cx(
-                          'whitespace-nowrap text-[12px]',
-                          st.tone === 'ok'
-                            ? 'text-diff-add-num'
-                            : st.tone === 'bad'
-                              ? 'text-diff-del-num'
-                              : 'text-text-muted',
-                        )}
-                      >
-                        {st.label}
-                      </span>
-                    )
-                  )}
-                  <span className="inline-flex min-w-16 justify-end">
-                    <Totals add={f.add} del={f.del} small />
-                  </span>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      </nav>
+      <div ref={setBodyEl} className="flex min-h-0 flex-1 flex-col">
+        <nav
+          ref={navRef}
+          aria-label="Changed files"
+          style={{ maxHeight: listMaxHeight }}
+          className="flex-none overflow-y-auto p-2.5 scrollbar-stable"
+        >
+          <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
+            {files.map((f) => {
+              const st = fileState(f, decisions[f.path]);
+              const conflict = conflicts.get(f.path);
+              const isCur = f.path === cur?.path;
+              return (
+                <li key={f.path}>
+                  <button
+                    type="button"
+                    aria-current={isCur}
+                    onClick={() => showFile(f.path)}
+                    className={cx(
+                      'flex min-h-9 w-full cursor-pointer items-center gap-2.5 rounded-[7px] border-0 px-2.5 text-left text-[13px] text-text-secondary hover:bg-overlay-row',
+                      isCur ? 'bg-surface-raised' : 'bg-transparent',
+                    )}
+                  >
+                    <StatusBadge kind={f.kind} />
+                    <PathLabel path={f.path} />
+                    {conflict ? (
+                      <span className="whitespace-nowrap text-[12px] text-danger">{CONFLICT_LABEL[conflict]}</span>
+                    ) : (
+                      st.label && (
+                        <span
+                          className={cx(
+                            'whitespace-nowrap text-[12px]',
+                            st.tone === 'ok'
+                              ? 'text-diff-add-num'
+                              : st.tone === 'bad'
+                                ? 'text-diff-del-num'
+                                : 'text-text-muted',
+                          )}
+                        >
+                          {st.label}
+                        </span>
+                      )
+                    )}
+                    <span className="inline-flex min-w-16 justify-end">
+                      <Totals add={f.add} del={f.del} small />
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </nav>
+        <hr
+          aria-orientation="horizontal"
+          aria-label="Resize file list"
+          aria-valuenow={Math.round(ratio * 100)}
+          aria-valuemin={Math.round(listBounds.min * 100)}
+          aria-valuemax={Math.round(listBounds.max * 100)}
+          tabIndex={0}
+          onPointerDown={onListResizeStart}
+          onKeyDown={onListResizeKey}
+          onDoubleClick={resetListRatio}
+          className="relative m-0 h-1.5 w-full flex-none cursor-row-resize touch-none border-0 bg-transparent before:absolute before:inset-x-0 before:top-1/2 before:h-px before:-translate-y-1/2 before:bg-border-header before:content-[''] hover:bg-border-control focus-visible:bg-border-control"
+        />
 
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto bg-code scrollbar-stable">
-        {cur && (
-          <>
-            <div className="sticky top-0 z-[1] flex items-center gap-2.5 border-b border-[#1a2142] bg-code px-4 py-2.5">
-              <span className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-text" title={cur.path}>
-                {cur.path}
-              </span>
-              <span className="whitespace-nowrap text-[12px] text-text-muted">{kindLabel(cur)}</span>
-            </div>
-            {cur.tooLarge || cur.hunks.length === 0 ? (
-              <p className="m-0 px-5 py-6 text-[13px] text-text-muted">
-                {cur.tooLarge
-                  ? 'This diff is too large to show here. It cannot be applied from the review pane.'
-                  : 'Nothing to show for this file.'}
-              </p>
-            ) : (
-              cur.hunks.map((h, i) => (
-                <HunkBlock
-                  key={h.id}
-                  chatId={chatId}
-                  pending={pending}
-                  file={cur}
-                  hunk={h}
-                  index={i}
-                  decisions={decisions}
-                  mode={effMode}
-                />
-              ))
-            )}
-            {next && (
-              <div className="flex justify-end p-4">
-                <button
-                  type="button"
-                  onClick={() => showFile(next.path)}
-                  className={cx(lineBtn, 'min-h-[34px] rounded-[8px] px-3 text-[13px] text-text-secondary')}
-                >
-                  Next file
-                  <ArrowRight aria-hidden="true" size={14} strokeWidth={2} />
-                </button>
+        <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto bg-code scrollbar-stable">
+          {cur && (
+            <>
+              <div className="sticky top-0 z-[1] flex items-center gap-2.5 border-b border-[#1a2142] bg-code px-4 py-2.5">
+                <span className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-text" title={cur.path}>
+                  {cur.path}
+                </span>
+                <span className="whitespace-nowrap text-[12px] text-text-muted">{kindLabel(cur)}</span>
               </div>
-            )}
-          </>
-        )}
-        <AppliedList batches={applied} mode={effMode} />
+              {cur.tooLarge || cur.hunks.length === 0 ? (
+                <p className="m-0 px-5 py-6 text-[13px] text-text-muted">
+                  {cur.tooLarge
+                    ? 'This diff is too large to show here. It cannot be applied from the review pane.'
+                    : 'Nothing to show for this file.'}
+                </p>
+              ) : (
+                cur.hunks.map((h, i) => (
+                  <HunkBlock
+                    key={h.id}
+                    chatId={chatId}
+                    pending={pending}
+                    file={cur}
+                    hunk={h}
+                    index={i}
+                    decisions={decisions}
+                    mode={effMode}
+                  />
+                ))
+              )}
+              {next && (
+                <div className="flex justify-end p-4">
+                  <button
+                    type="button"
+                    onClick={() => showFile(next.path)}
+                    className={cx(lineBtn, 'min-h-[34px] rounded-[8px] px-3 text-[13px] text-text-secondary')}
+                  >
+                    Next file
+                    <ArrowRight aria-hidden="true" size={14} strokeWidth={2} />
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+          <AppliedList batches={applied} mode={effMode} />
+        </div>
       </div>
 
       <footer className="flex flex-wrap items-center gap-2 border-t border-border py-3 pr-3.5 pl-5">
