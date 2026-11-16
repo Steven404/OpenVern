@@ -12,7 +12,13 @@
 //   `ok:false` "Interrupted" ToolMessage (with `tool_call` + `tool_result` events), so the stored chat is self-consistent.
 //   `history.ts` still synthesises "Interrupted" results for legacy/dangling calls.
 
-import { LIMITS, MAX_AGENT_STEPS, NEW_CHAT_TITLE, TREE_UNAVAILABLE_NOTICE } from '@shared/constants';
+import {
+  LIMITS,
+  MAX_AGENT_STEPS,
+  MAX_REPEATED_TOOL_STEPS,
+  NEW_CHAT_TITLE,
+  TREE_UNAVAILABLE_NOTICE,
+} from '@shared/constants';
 import { type ApiErrorInfo, errorInfo } from '@shared/errors';
 import type { AgentEvent } from '@shared/events';
 import type { TerminalReadRequest } from '@shared/terminal';
@@ -160,6 +166,40 @@ interface TrackedChanges extends ToolChanges {
 
 function interrupted(): { ok: false; output: string; summary: string } {
   return { ok: false, output: INTERRUPTED_OUTPUT, summary: 'Interrupted' };
+}
+
+/** Object keys sorted at every level (arrays keep their order), so the same arguments spelled differently compare equal. */
+function sortKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortKeys);
+  if (value !== null && typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.keys(obj)
+        .sort()
+        .map((key) => [key, sortKeys(obj[key])]),
+    );
+  }
+  return value;
+}
+
+/** Canonical form of a tool call's raw arguments; text that is not JSON is compared as typed (trimmed). */
+function canonicalArgs(argsJson: string): string {
+  try {
+    return JSON.stringify(sortKeys(JSON.parse(argsJson)));
+  } catch {
+    return argsJson.trim();
+  }
+}
+
+/**
+ * Identity of one step's tool calls and their results, for the stuck-loop guard. Calls are sorted, so a parallel step
+ * compares equal however the model ordered it. Text, timing and call ids are left out on purpose.
+ */
+function stepSignature(entries: { name: string; args: string; ok: boolean; output: string }[]): string {
+  return entries
+    .map((e) => JSON.stringify([e.name, canonicalArgs(e.args), e.ok, e.output]))
+    .sort()
+    .join('\n');
 }
 
 export function createAgentService(deps: AgentServiceDeps): AgentService {
@@ -342,7 +382,9 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
       readAttachment: (id) => attachments.readBytes(id),
     });
 
-    // S4.4: the loop.
+    // S4.4: the loop. The stuck-loop guard counts consecutive steps with the same signature (see `stepSignature`).
+    let lastSignature: string | undefined;
+    let repeats = 0;
     for (let step = 0; step < MAX_AGENT_STEPS; step++) {
       const messageId = crypto.randomUUID();
       await emit({ type: 'assistant_start', messageId, model });
@@ -421,6 +463,7 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
         });
       }
       const flattened: string[] = text.length > 0 ? [text] : [];
+      const entries: { name: string; args: string; ok: boolean; output: string }[] = [];
       for (const call of toolCalls) {
         stepChanges?.reset();
         const toolMessage = await runTool(call, messageId, tools, toolContext, emit, stepChanges);
@@ -430,6 +473,7 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
         if (staged) await emit({ type: 'changes_updated', messageId, changes: staged.summary });
         if (toolsOffered) history.push({ role: 'tool', toolCallId: call.id, content: toolMessage.output });
         else flattened.push(flattenToolCall(call, toolMessage));
+        entries.push({ name: call.name, args: call.argsJson, ok: toolMessage.ok, output: toolMessage.output });
       }
       if (!toolsOffered) {
         // No tool definitions were sent, so providers would reject tool content: replay it as plain text, as buildHistory does.
@@ -441,6 +485,14 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
         } else history.push({ role: 'assistant', text: merged, toolCalls: [] });
       }
       if (signal.aborted) return; // S4.5: stopped during/after the tools; results above are all persisted
+
+      const sig = stepSignature(entries);
+      repeats = sig === lastSignature ? repeats + 1 : 1;
+      lastSignature = sig;
+      if (repeats >= MAX_REPEATED_TOOL_STEPS) {
+        await emit({ type: 'error', error: errorInfo('tool_loop_detected') });
+        return;
+      }
     }
 
     await emit({ type: 'error', error: errorInfo('max_steps_reached') });

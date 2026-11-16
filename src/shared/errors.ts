@@ -19,6 +19,7 @@ export type ErrorCode =
   | 'file_too_large'
   | 'path_invalid'
   | 'max_steps_reached'
+  | 'tool_loop_detected'
   | 'changes_stale';
 
 export interface ApiErrorInfo {
@@ -62,6 +63,11 @@ export const ERROR_DEFAULTS: Record<ErrorCode, { message: string; retryable: boo
     message: 'Stopped after too many steps in one turn. Reply to let it continue.',
     retryable: true,
   },
+  tool_loop_detected: {
+    message:
+      'Stopped because the model kept repeating the same tool call with the same result. Reply with more guidance to continue.',
+    retryable: false,
+  },
   changes_stale: {
     message: 'The proposed edits changed while you were reviewing. Review them again.',
     retryable: false,
@@ -88,6 +94,7 @@ export const ERROR_STATUS: Record<ErrorCode, number> = {
   file_too_large: 413,
   path_invalid: 400,
   max_steps_reached: 400,
+  tool_loop_detected: 400,
   changes_stale: 409,
 };
 
