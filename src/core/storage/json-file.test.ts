@@ -98,6 +98,13 @@ describe('paths', () => {
     await ensureDataDir(root); // idempotent
   });
 
+  it('changesBlobDir sits next to the change store, one folder per chat', () => {
+    const paths = dataPaths('/data');
+    expect(paths.changesBlobDir('c1')).toBe(path.join('/data', 'changes', 'c1.blobs'));
+    expect(path.dirname(paths.changesBlobDir('c1'))).toBe(path.dirname(paths.changesFile('c1')));
+    expect(paths.changesBlobDir('c1')).not.toBe(paths.changesBlobDir('c2'));
+  });
+
   it('expands ~', () => {
     expect(expandHome('~')).toBe(os.homedir());
     expect(expandHome('~/code/x')).toBe(path.join(os.homedir(), 'code/x'));

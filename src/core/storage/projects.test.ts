@@ -260,3 +260,67 @@ describe('macOS access denials (AS-08)', () => {
     expect((await service.create({ rootPath: link })).rootPath).toBe(dir);
   });
 });
+
+describe('ProjectsService.list inGitRepo (A1)', () => {
+  const listed = async (storage: Awaited<ReturnType<typeof makeStorage>>['storage'], id: string) =>
+    (await storage.projects.list()).find((p) => p.id === id)?.inGitRepo;
+
+  it('is true for a .git folder at the project root', async () => {
+    const { storage } = await makeStorage();
+    const dir = await makeDir('repo');
+    await fs.mkdir(path.join(dir, '.git'));
+    expect(await listed(storage, (await storage.projects.create({ rootPath: dir })).id)).toBe(true);
+  });
+
+  it('is true for a .git file (worktree or submodule)', async () => {
+    const { storage } = await makeStorage();
+    const dir = await makeDir('wt');
+    await fs.writeFile(path.join(dir, '.git'), 'gitdir: /elsewhere/.git/worktrees/wt\n');
+    expect(await listed(storage, (await storage.projects.create({ rootPath: dir })).id)).toBe(true);
+  });
+
+  it('is true when .git is in an ancestor folder', async () => {
+    const { storage } = await makeStorage();
+    const outer = await makeDir('outer');
+    await fs.mkdir(path.join(outer, '.git'));
+    const inner = path.join(outer, 'packages', 'app');
+    await fs.mkdir(inner, { recursive: true });
+    expect(await listed(storage, (await storage.projects.create({ rootPath: inner })).id)).toBe(true);
+  });
+
+  it('is false with no .git anywhere up the tree', async () => {
+    const { storage } = await makeStorage();
+    const dir = await makeDir('plain');
+    // A sibling .git must not count.
+    await fs.mkdir(path.join(path.dirname(dir), '.git-sibling'));
+    expect(await listed(storage, (await storage.projects.create({ rootPath: dir })).id)).toBe(false);
+  });
+
+  it('is false (and does not throw) when an ancestor cannot be searched', async () => {
+    if (process.getuid?.() === 0) return; // root ignores permission bits
+    const { storage } = await makeStorage();
+    const outer = await makeDir('locked');
+    await fs.mkdir(path.join(outer, '.git'));
+    const inner = path.join(outer, 'inner');
+    await fs.mkdir(inner);
+    const project = await storage.projects.create({ rootPath: inner });
+    await fs.chmod(outer, 0o000); // lstat(<outer>/.git) now fails with EACCES
+    try {
+      expect(await listed(storage, project.id)).toBe(false);
+    } finally {
+      await fs.chmod(outer, 0o755);
+    }
+  });
+
+  it('is computed on every list, never stored', async () => {
+    const { storage } = await makeStorage();
+    const dir = await makeDir('flip');
+    const project = await storage.projects.create({ rootPath: dir });
+    expect(await listed(storage, project.id)).toBe(false);
+    await fs.mkdir(path.join(dir, '.git'));
+    expect(await listed(storage, project.id)).toBe(true);
+    await fs.rm(path.join(dir, '.git'), { recursive: true });
+    expect(await listed(storage, project.id)).toBe(false);
+    expect(await storage.projects.get(project.id)).not.toHaveProperty('inGitRepo');
+  });
+});

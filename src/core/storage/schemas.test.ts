@@ -61,3 +61,29 @@ describe('archived flag in the storage schemas', () => {
     expect(parsed).toHaveProperty('version', 1);
   });
 });
+
+describe('editMode in the storage schemas (A1)', () => {
+  const summary = { id: 'c', projectId: null, title: 't', model: 'm', createdAt: 'x', updatedAt: 'x' };
+
+  it('chatFileSchema: missing, malformed -> review; auto -> auto; nothing is rejected', () => {
+    const file = { version: 1, ...summary, messages: [] };
+    expect(chatFileSchema.parse(file).editMode).toBe('review');
+    for (const bad of ['bogus', 3, null, ['auto'], 'AUTO']) {
+      expect(chatFileSchema.parse({ ...file, editMode: bad }).editMode).toBe('review');
+    }
+    expect(chatFileSchema.parse({ ...file, editMode: 'auto' }).editMode).toBe('auto');
+    expect(chatFileSchema.parse({ ...file, editMode: 'review' }).editMode).toBe('review');
+  });
+
+  it('chatIndexSchema: missing, malformed -> review; auto -> auto', () => {
+    const parsed = chatIndexSchema.parse({
+      version: 1,
+      chats: [
+        { ...summary, id: 'a' },
+        { ...summary, id: 'b', editMode: 'nope' },
+        { ...summary, id: 'c', editMode: 'auto' },
+      ],
+    });
+    expect(parsed.chats.map((c) => c.editMode)).toEqual(['review', 'review', 'auto']);
+  });
+});

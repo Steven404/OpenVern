@@ -1191,3 +1191,156 @@ describe('ChatsService effort (F3)', () => {
     expect(logger.messages).toEqual([]);
   });
 });
+
+describe('ChatsService editMode (A1)', () => {
+  it('a new chat starts in review, in the return value, the file and the index; auto can be asked for', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const plain = await storage.chats.create({ projectId: null, model: 'm' });
+    const auto = await storage.chats.create({ projectId: null, model: 'm', editMode: 'auto' });
+    expect(plain.editMode).toBe('review');
+    expect(auto.editMode).toBe('auto');
+    const onDisk = JSON.parse(await fs.readFile(dataPaths(dataDir).chatFile(auto.id), 'utf8'));
+    expect(onDisk.editMode).toBe('auto');
+    const listed = await storage.chats.list();
+    expect(Object.fromEntries(listed.map((c) => [c.id, c.editMode]))).toEqual({
+      [plain.id]: 'review',
+      [auto.id]: 'auto',
+    });
+  });
+
+  it('a v0.3 chat file and index entry (no editMode) load as review without quarantine', async () => {
+    const { dataDir } = await makeStorage();
+    const paths = dataPaths(dataDir);
+    await fs.mkdir(paths.chatsDir, { recursive: true });
+    const file = handChat('old');
+    await fs.writeFile(paths.chatFile('old'), JSON.stringify(file));
+    const { version: _v, messages: _m, ...entry } = file;
+    await fs.writeFile(paths.chatsIndex, JSON.stringify({ version: 1, chats: [entry] }));
+
+    const logger = recordingLogger();
+    const fresh = await createStorage({ dataDir, secretStore: new MemorySecretStore(), logger });
+    expect((await fresh.chats.list())[0]).toMatchObject({ id: 'old', editMode: 'review' });
+    const loaded = await fresh.chats.get('old');
+    expect(loaded.editMode).toBe('review');
+    expect(loaded.messages.map((m) => m.id)).toEqual(['old-u', 'old-a']);
+    expect((await names(dataDir)).some((n) => n.includes('.corrupt-'))).toBe(false);
+    expect(logger.messages).toEqual([]);
+  });
+
+  it.each([['bogus'], [7], [null], [{}]])('a malformed editMode (%j) loads as review, file and index', async (bad) => {
+    const { dataDir } = await makeStorage();
+    const paths = dataPaths(dataDir);
+    await fs.mkdir(paths.chatsDir, { recursive: true });
+    const file = handChat('odd', { editMode: bad });
+    await fs.writeFile(paths.chatFile('odd'), JSON.stringify(file));
+    const { version: _v, messages: _m, ...entry } = file;
+    await fs.writeFile(paths.chatsIndex, JSON.stringify({ version: 1, chats: [entry] }));
+
+    const logger = recordingLogger();
+    const fresh = await createStorage({ dataDir, secretStore: new MemorySecretStore(), logger });
+    expect((await fresh.chats.list())[0]?.editMode).toBe('review');
+    const loaded = await fresh.chats.get('odd');
+    expect(loaded.editMode).toBe('review');
+    expect(loaded.messages.map((m) => m.id)).toEqual(['odd-u', 'odd-a']);
+    expect((await names(dataDir)).some((n) => n.includes('.corrupt-'))).toBe(false);
+    expect(logger.messages).toEqual([]);
+  });
+
+  it('a stored auto survives a rebuild of the index', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const chat = await storage.chats.create({ projectId: null, model: 'm', editMode: 'auto' });
+    await fs.rm(dataPaths(dataDir).chatsIndex);
+    const fresh = await createStorage({ dataDir, secretStore: new MemorySecretStore(), logger: recordingLogger() });
+    expect((await fresh.chats.list()).find((c) => c.id === chat.id)?.editMode).toBe('auto');
+  });
+
+  it('update({ editMode }) persists to file and index, does not bump updatedAt, and keeps other fields', async () => {
+    const { storage, dataDir } = await makeStorage();
+    const chat = await storage.chats.create({ projectId: null, model: 'm1' });
+    await storage.chats.appendMessage(chat.id, user('u1'));
+    const before = (await storage.chats.list())[0];
+    await new Promise((r) => setTimeout(r, 5));
+    const summary = await storage.chats.update(chat.id, { editMode: 'auto' });
+    expect(summary.editMode).toBe('auto');
+    expect(summary.updatedAt).toBe(before?.updatedAt);
+    const reread = await createStorage({ dataDir, secretStore: new MemorySecretStore(), logger: recordingLogger() });
+    const loaded = await reread.chats.get(chat.id);
+    expect(loaded.editMode).toBe('auto');
+    expect(loaded.updatedAt).toBe(before?.updatedAt);
+    expect(loaded.model).toBe('m1');
+    expect(loaded.messages.map((m) => m.id)).toEqual(['u1']);
+    expect((await reread.chats.list())[0]).toMatchObject({ editMode: 'auto', updatedAt: before?.updatedAt });
+    // And back; a patch without editMode leaves it alone.
+    expect((await storage.chats.update(chat.id, { title: 'T' })).editMode).toBe('auto');
+    expect((await storage.chats.update(chat.id, { editMode: 'review' })).editMode).toBe('review');
+  });
+
+  it('appends keep the mode', async () => {
+    const { storage } = await makeStorage();
+    const chat = await storage.chats.create({ projectId: null, model: 'm', editMode: 'auto' });
+    await storage.chats.appendMessage(chat.id, user('u1'));
+    expect((await storage.chats.get(chat.id)).editMode).toBe('auto');
+  });
+});
+
+describe('ChatsService.setChangesNote (A1)', () => {
+  async function chatWithTurns() {
+    const s = await makeStorage();
+    const chat = await s.storage.chats.create({ projectId: null, model: 'm' });
+    await s.storage.chats.appendMessage(chat.id, { ...user('u1', 'first'), changesNote: 'note one' });
+    await s.storage.chats.appendMessage(chat.id, assistant('a1'));
+    await s.storage.chats.appendMessage(chat.id, user('u2', 'second'));
+    return { ...s, chat };
+  }
+
+  it('replaces only that user message note, without bumping updatedAt or touching the index entry', async () => {
+    const { storage, chat, dataDir } = await chatWithTurns();
+    const before = await storage.chats.get(chat.id);
+    const indexBefore = await fs.readFile(dataPaths(dataDir).chatsIndex, 'utf8');
+    await new Promise((r) => setTimeout(r, 5));
+    await storage.chats.setChangesNote(chat.id, 'u2', 'retry note');
+    const after = await storage.chats.get(chat.id);
+    expect(after.updatedAt).toBe(before.updatedAt);
+    expect(after.messages.find((m) => m.id === 'u2')).toMatchObject({ text: 'second', changesNote: 'retry note' });
+    expect(after.messages.find((m) => m.id === 'u1')).toEqual(before.messages.find((m) => m.id === 'u1'));
+    expect(after.messages.find((m) => m.id === 'a1')).toEqual(before.messages.find((m) => m.id === 'a1'));
+    expect(after.messages).toHaveLength(3);
+    expect(await fs.readFile(dataPaths(dataDir).chatsIndex, 'utf8')).toBe(indexBefore);
+    // Replaces, not appends.
+    await storage.chats.setChangesNote(chat.id, 'u1', 'new one');
+    expect((await storage.chats.get(chat.id)).messages.find((m) => m.id === 'u1')).toMatchObject({
+      changesNote: 'new one',
+    });
+  });
+
+  it('undefined clears the note', async () => {
+    const { storage, chat } = await chatWithTurns();
+    await storage.chats.setChangesNote(chat.id, 'u1', undefined);
+    const u1 = (await storage.chats.get(chat.id)).messages.find((m) => m.id === 'u1');
+    expect(u1).toBeDefined();
+    expect(u1).not.toHaveProperty('changesNote');
+    expect(u1).toMatchObject({ text: 'first' });
+  });
+
+  it('is not_found for an unknown message, an assistant message and an unknown chat', async () => {
+    const { storage, chat } = await chatWithTurns();
+    const before = await storage.chats.get(chat.id);
+    await expect(storage.chats.setChangesNote(chat.id, 'nope', 'x')).rejects.toMatchObject({ code: 'not_found' });
+    await expect(storage.chats.setChangesNote(chat.id, 'a1', 'x')).rejects.toMatchObject({ code: 'not_found' });
+    await expect(storage.chats.setChangesNote('missing', 'u1', 'x')).rejects.toMatchObject({ code: 'not_found' });
+    await expect(storage.chats.setChangesNote('../x', 'u1', 'x')).rejects.toMatchObject({ code: 'not_found' });
+    expect(await storage.chats.get(chat.id)).toEqual(before);
+  });
+
+  it('keeps every message when it races appends', async () => {
+    const { storage, chat } = await chatWithTurns();
+    await Promise.all([
+      storage.chats.setChangesNote(chat.id, 'u2', 'n'),
+      storage.chats.appendMessage(chat.id, assistant('a2')),
+      storage.chats.appendMessage(chat.id, user('u3')),
+    ]);
+    const loaded = await storage.chats.get(chat.id);
+    expect(loaded.messages.map((m) => m.id).sort()).toEqual(['a1', 'a2', 'u1', 'u2', 'u3']);
+    expect(loaded.messages.find((m) => m.id === 'u2')).toMatchObject({ changesNote: 'n' });
+  });
+});

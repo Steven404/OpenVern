@@ -4,8 +4,10 @@ import { LIMITS } from '@shared/constants';
 import type { DiffHunk, FileChange, HunkDecision } from '@shared/types';
 import { describe, expect, it } from 'vitest';
 import { sampleProposal } from '../../renderer/lib/mock-changes';
+import { modeChangedNote, tooLargeToReviewText } from '../agent/edit-mode';
 import { ensureDataDir } from '../storage/paths';
 import { cleanupTempDirs, makeTempDir } from '../storage/test-helpers';
+import { sha256 } from './blobs';
 import { createChangesService } from './index';
 
 cleanupTempDirs();
@@ -474,5 +476,423 @@ describe('design sample (ReviewChanges)', () => {
     const p = await s.pending();
     await s.apply(p?.revision ?? 0, await s.allOf('accepted'));
     for (const [file, { next }] of Object.entries(expected)) expect(await s.read(file)).toBe(next);
+  });
+});
+
+// ------------------------------------------------------------------------------------------------ A1 additions
+
+const REVIEW = { mode: 'review', firstTurn: false } as const;
+
+describe('review: too-large proposals (A1)', () => {
+  /** `n` lines, all different from `lines(n, 'old')`. */
+  const bigPair = (n: number) => ({ old: `${lines(n, 'old').join('\n')}\n`, next: `${lines(n, 'new').join('\n')}\n` });
+
+  it('stage refuses a diff over the review limit with tooLargeToReviewText and stores nothing', async () => {
+    const s = await setup();
+    const n = LIMITS.diffMaxLinesPerFile / 2 + 1; // n removed + n added lines, no context
+    const { old, next } = bigPair(n);
+    await s.write('big.txt', old);
+    await expect(s.tools().stage('big.txt', next)).rejects.toMatchObject({
+      code: 'invalid_request',
+      message: tooLargeToReviewText('big.txt'),
+    });
+    expect(await s.pending()).toBeNull();
+    expect(await s.read('big.txt')).toBe(old);
+    expect(await s.tools().staged()).toEqual([]);
+  });
+
+  it('a diff exactly at the limit is still proposed', async () => {
+    const s = await setup();
+    const { old, next } = bigPair(LIMITS.diffMaxLinesPerFile / 2);
+    await s.write('big.txt', old);
+    const r = await s.tools().stage('big.txt', next);
+    expect(r.file?.tooLarge).toBeUndefined();
+    expect(r.file?.hunks.length).toBeGreaterThan(0);
+  });
+
+  it('refuses a new file with too many lines, too', async () => {
+    const s = await setup();
+    const text = `${lines(LIMITS.diffMaxLinesPerFile + 1, 'x').join('\n')}\n`;
+    await expect(s.tools().stage('new.txt', text)).rejects.toMatchObject({ code: 'invalid_request' });
+    expect(await s.pending()).toBeNull();
+  });
+
+  it('a refused second stage leaves the earlier proposal of that file and the revision untouched', async () => {
+    const s = await setup();
+    const { old, next } = bigPair(LIMITS.diffMaxLinesPerFile / 2 + 1);
+    await s.write('big.txt', old);
+    await s.write('other.txt', 'o\n');
+    await s.tools().stage('other.txt', 'o2\n');
+    const r1 = await s
+      .tools()
+      .stage('big.txt', `${old.split('\n')[0]} CHANGED\n${old.split('\n').slice(1).join('\n')}`);
+    const before = await s.pending();
+    await expect(s.tools().stage('big.txt', next)).rejects.toMatchObject({ message: tooLargeToReviewText('big.txt') });
+    expect(await s.pending()).toEqual(before);
+    expect(r1.file?.kind).toBe('modify');
+    expect((await s.tools().read('big.txt'))?.kind).toBe('staged');
+    const res = await s.apply(before?.revision ?? 0, await s.allOf('accepted'));
+    expect(res.batch.written.map((f) => f.path)).toEqual(['big.txt', 'other.txt']);
+  });
+});
+
+describe('review: legacy too-large pending files (A1)', () => {
+  /** A v0.3 store holding a pending file whose diff is too large to review (older builds could stage one). */
+  async function legacy(extra: { ok?: boolean } = {}) {
+    const s = await setup();
+    const n = LIMITS.diffMaxLinesPerFile / 2 + 1;
+    const old = `${lines(n, 'old').join('\n')}\n`;
+    await s.write('big.txt', old);
+    const files = [
+      {
+        path: 'big.txt',
+        baseHash: sha256(old),
+        baseContent: old,
+        content: `${lines(n, 'new').join('\n')}\n`,
+        lastMessageId: 'm',
+      },
+    ];
+    if (extra.ok) {
+      await s.write('ok.txt', 'a\n');
+      files.push({ path: 'ok.txt', baseHash: sha256('a\n'), baseContent: 'a\n', content: 'b\n', lastMessageId: 'm' });
+    }
+    await fs.mkdir(path.join(s.dataDir, 'changes'), { recursive: true });
+    await fs.writeFile(
+      path.join(s.dataDir, 'changes', `${CHAT}.json`),
+      JSON.stringify({ version: 1, revision: 4, messageId: 'm', files, snapshots: [], applied: [], events: [] }),
+    );
+    return { s, old };
+  }
+
+  it('apply reports too_large, writes nothing, and the note has the line', async () => {
+    const { s, old } = await legacy();
+    const p = await s.pending();
+    expect(p?.files[0]).toMatchObject({ path: 'big.txt', tooLarge: true, hunks: [] });
+    const res = await s.apply(p?.revision ?? 0, { 'big.txt': {} });
+    expect(res.batch.conflicts).toEqual([{ path: 'big.txt', reason: 'too_large' }]);
+    expect(res.batch.written).toEqual([]);
+    expect(res.batch.source).toBe('review');
+    expect(res.changes.applied).toHaveLength(1);
+    expect(res.changes.pending).toBeNull();
+    expect(res.changes.diskSeq).toBe(0); // nothing was written
+    expect(await s.read('big.txt')).toBe(old);
+    // The stored event keeps too_large out of `conflicts` (an older build's enum would fail on it).
+    const stored = JSON.parse(await fs.readFile(path.join(s.dataDir, 'changes', `${CHAT}.json`), 'utf8'));
+    expect(stored.events[0]).toMatchObject({ type: 'applied', conflicts: [], tooLarge: ['big.txt'] });
+    expect(await s.svc.takeNote(CHAT, REVIEW)).toBe(
+      [
+        '[OpenVern] Since your last reply the user reviewed your proposed edits:',
+        '- Not written, too large to review: big.txt',
+        'Nothing else is pending.',
+      ].join('\n'),
+    );
+  });
+
+  it('accepting everything still writes the other files; the too-large line follows the conflict lines', async () => {
+    const { s } = await legacy({ ok: true });
+    await s.write('conf.txt', 'a\n');
+    await s.tools().stage('conf.txt', 'b\n');
+    await s.write('conf.txt', 'changed meanwhile\n');
+    const p = await s.pending();
+    const res = await s.apply(p?.revision ?? 0, await s.allOf('accepted'));
+    expect(res.batch.written.map((f) => f.path)).toEqual(['ok.txt']);
+    expect(res.batch.conflicts).toEqual([
+      { path: 'big.txt', reason: 'too_large' },
+      { path: 'conf.txt', reason: 'changed_on_disk' },
+    ]);
+    expect(await s.read('ok.txt')).toBe('b\n');
+    expect(res.changes.diskSeq).toBe(1);
+    expect(await s.svc.takeNote(CHAT, REVIEW)).toBe(
+      [
+        '[OpenVern] Since your last reply the user reviewed your proposed edits:',
+        '- Written: ok.txt (1 of 1)',
+        '- Not written, changed on disk before apply: conf.txt',
+        '- Not written, too large to review: big.txt',
+        'Nothing else is pending.',
+      ].join('\n'),
+    );
+  });
+});
+
+describe('diskSeq (A1)', () => {
+  it('apply bumps it only when it wrote something', async () => {
+    const s = await setup();
+    expect((await s.svc.get(CHAT)).diskSeq).toBe(0);
+    await s.write('a.txt', 'a\n');
+    await s.write('c.txt', 'c\n');
+    await s.tools().stage('a.txt', 'b\n');
+    let p = await s.pending();
+    // All rejected: nothing written.
+    let res = await s.apply(p?.revision ?? 0, await s.allOf('rejected'));
+    expect(res.changes.diskSeq).toBe(0);
+    // Written.
+    await s.tools().stage('a.txt', 'b\n');
+    p = await s.pending();
+    res = await s.apply(p?.revision ?? 0, await s.allOf('accepted'));
+    expect(res.changes.diskSeq).toBe(1);
+    // Only a conflict: nothing written.
+    await s.tools().stage('c.txt', 'd\n');
+    await s.write('c.txt', 'outside\n');
+    p = await s.pending();
+    res = await s.apply(p?.revision ?? 0, await s.allOf('accepted'));
+    expect(res.batch.conflicts).toHaveLength(1);
+    expect(res.changes.diskSeq).toBe(1);
+    // Undecided: nothing written.
+    await s.tools().stage('a.txt', 'e\n');
+    p = await s.pending();
+    res = await s.apply(p?.revision ?? 0, {});
+    expect(res.changes.diskSeq).toBe(1);
+    // A file delete is a write too.
+    await s.tools().stage('a.txt', null);
+    p = await s.pending();
+    res = await s.apply(p?.revision ?? 0, await s.allOf('accepted'));
+    expect(res.changes.diskSeq).toBe(2);
+    expect((await s.svc.get(CHAT)).diskSeq).toBe(2);
+    // discard / snapshot / restore never move it.
+    await s.tools().stage('x.txt', 'x\n');
+    await s.svc.discard(CHAT);
+    expect((await s.svc.get(CHAT)).diskSeq).toBe(2);
+  });
+
+  it('staging alone does not bump it, and a refused stale apply does not either', async () => {
+    const s = await setup();
+    await s.tools().stage('a.txt', 'x\n');
+    const p = await s.pending();
+    await s.tools().stage('b.txt', 'y\n');
+    await expect(s.apply(p?.revision ?? 0, await s.allOf('accepted'))).rejects.toMatchObject({ code: 'changes_stale' });
+    expect((await s.svc.get(CHAT)).diskSeq).toBe(0);
+  });
+});
+
+describe('v0.3 stores (A1)', () => {
+  it('a store without any Auto field loads as Review history with diskSeq 0', async () => {
+    const s = await setup();
+    const batch = {
+      id: 'b1',
+      appliedAt: '2026-01-01T00:00:00.000Z',
+      messageId: 'm1',
+      written: [{ path: 'a.txt', kind: 'create', add: 1, del: 0, hunks: [] }],
+      rejectedHunks: 0,
+      skippedHunks: 0,
+      conflicts: [{ path: 'x.txt', reason: 'changed_on_disk' }],
+    };
+    await fs.mkdir(path.join(s.dataDir, 'changes'), { recursive: true });
+    await fs.writeFile(
+      path.join(s.dataDir, 'changes', `${CHAT}.json`),
+      JSON.stringify({
+        version: 1,
+        revision: 2,
+        messageId: 'm1',
+        files: [],
+        snapshots: [],
+        applied: [batch],
+        events: [],
+      }),
+    );
+    const got = await s.svc.get(CHAT);
+    expect(got.diskSeq).toBe(0);
+    expect(got.applied).toEqual([{ ...batch, source: 'review', undoable: false }]);
+    expect(got.applied[0]).not.toHaveProperty('turnId');
+    // Not quarantined, and still usable.
+    expect((await fs.readdir(path.join(s.dataDir, 'changes'))).some((n) => n.includes('.corrupt-'))).toBe(false);
+    await s.tools().stage('n.txt', 'x\n');
+    expect((await s.pending())?.files).toHaveLength(1);
+  });
+
+  it('a malformed lastMode loads as missing (Review) and does not quarantine the store', async () => {
+    const s = await setup();
+    await fs.mkdir(path.join(s.dataDir, 'changes'), { recursive: true });
+    const file = path.join(s.dataDir, 'changes', `${CHAT}.json`);
+    await fs.writeFile(
+      file,
+      JSON.stringify({
+        version: 1,
+        revision: 0,
+        messageId: '',
+        files: [],
+        snapshots: [],
+        applied: [],
+        events: [],
+        lastMode: 'bogus',
+      }),
+    );
+    expect(await s.svc.get(CHAT)).toEqual({ pending: null, applied: [], diskSeq: 0 });
+    expect(await s.svc.takeNote(CHAT, { mode: 'auto', firstTurn: false })).toBe(modeChangedNote('auto'));
+    expect((await fs.readdir(path.join(s.dataDir, 'changes'))).some((n) => n.includes('.corrupt-'))).toBe(false);
+  });
+});
+
+describe('takeNote (A1)', () => {
+  const storeWith = async (s: Awaited<ReturnType<typeof setup>>, extra: Record<string, unknown>) => {
+    await fs.mkdir(path.join(s.dataDir, 'changes'), { recursive: true });
+    await fs.writeFile(
+      path.join(s.dataDir, 'changes', `${CHAT}.json`),
+      JSON.stringify({
+        version: 1,
+        revision: 0,
+        messageId: '',
+        files: [],
+        snapshots: [],
+        applied: [],
+        events: [],
+        ...extra,
+      }),
+    );
+  };
+
+  it('is undefined when there is nothing to report, and the mode is recorded either way', async () => {
+    const s = await setup();
+    expect(await s.svc.takeNote(CHAT, { mode: 'review', firstTurn: false })).toBeUndefined();
+    expect(await s.svc.takeNote(CHAT, { mode: 'review', firstTurn: true })).toBeUndefined();
+    expect(await s.svc.takeNote(CHAT, { mode: 'auto', firstTurn: true })).toBeUndefined();
+    expect(await s.svc.takeNote(CHAT, { mode: 'auto', firstTurn: false })).toBeUndefined();
+  });
+
+  it('adds the mode line when the mode differs from the last noted mode; a store without one counts as Review', async () => {
+    const s = await setup();
+    // Missing lastMode = Review: Auto differs.
+    expect(await s.svc.takeNote(CHAT, { mode: 'auto', firstTurn: false })).toBe(
+      '[OpenVern] Edit mode changed since your last reply: Auto. Your edits are now written to disk as soon as each edit tool call succeeds, and the user can undo a whole turn.',
+    );
+    expect(await s.svc.takeNote(CHAT, { mode: 'auto', firstTurn: false })).toBeUndefined();
+    expect(await s.svc.takeNote(CHAT, { mode: 'review', firstTurn: false })).toBe(
+      '[OpenVern] Edit mode changed since your last reply: Review. Your edits are proposals again: nothing is written until the user applies them.',
+    );
+    expect(await s.svc.takeNote(CHAT, { mode: 'review', firstTurn: false })).toBeUndefined();
+  });
+
+  it('adds no mode line on the first turn, but records the mode for the next one', async () => {
+    const s = await setup();
+    expect(await s.svc.takeNote(CHAT, { mode: 'auto', firstTurn: true })).toBeUndefined();
+    expect(await s.svc.takeNote(CHAT, { mode: 'auto', firstTurn: false })).toBeUndefined();
+    expect(await s.svc.takeNote(CHAT, { mode: 'review', firstTurn: false })).toBe(modeChangedNote('review'));
+  });
+
+  it('the first turn still reports review events, without a mode line', async () => {
+    const s = await setup();
+    await s.tools().stage('a.txt', 'x\n');
+    await s.svc.discard(CHAT);
+    expect(await s.svc.takeNote(CHAT, { mode: 'auto', firstTurn: true })).toBe(
+      '[OpenVern] Since your last reply the user reviewed your proposed edits:\n- Discarded: a.txt (new file, not created)\nNothing else is pending.',
+    );
+  });
+
+  it('keeps the review block byte-identical when a mode line precedes it', async () => {
+    const s = await setup();
+    await s.tools().stage('a.txt', 'x\n');
+    await s.svc.discard(CHAT);
+    // The same text the existing "discards and notes it" test pins, after a blank line and the mode line.
+    expect(await s.svc.takeNote(CHAT, { mode: 'auto', firstTurn: false })).toBe(
+      `${modeChangedNote('auto')}\n\n[OpenVern] Since your last reply the user reviewed your proposed edits:\n- Discarded: a.txt (new file, not created)\nNothing else is pending.`,
+    );
+  });
+
+  it('the undo block lists restored files and every skip reason, de-duplicated across undos', async () => {
+    const s = await setup();
+    await storeWith(s, {
+      lastMode: 'auto',
+      undone: [
+        { restored: ['a.ts', 'b.ts'], skipped: [{ path: 'c.ts', reason: 'changed_since' }] },
+        {
+          restored: ['b.ts'],
+          skipped: [
+            { path: 'd.ts', reason: 'blocked' },
+            { path: 'e.ts', reason: 'unavailable' },
+            { path: 'c.ts', reason: 'changed_since' },
+          ],
+        },
+      ],
+    });
+    expect(await s.svc.takeNote(CHAT, { mode: 'auto', firstTurn: false })).toBe(
+      [
+        '[OpenVern] Since your last reply the user undid your edits from an earlier turn:',
+        '- Restored to their earlier content: a.ts, b.ts',
+        '- Not undone, changed since: c.ts',
+        '- Not undone, blocked: d.ts',
+        '- Not undone, original not available: e.ts',
+      ].join('\n'),
+    );
+    expect(await s.svc.takeNote(CHAT, { mode: 'auto', firstTurn: false })).toBeUndefined(); // cleared
+  });
+
+  it('the combined note is: mode line, review block, undo block, separated by a blank line', async () => {
+    const s = await setup();
+    await storeWith(s, { lastMode: 'review' });
+    await s.write('f.txt', 'one\n');
+    // A discarded proposal (review block).
+    await s.tools().stage('p.txt', 'p\n');
+    await s.svc.discard(CHAT);
+    // A user undo of an Auto turn (undo block).
+    const auto = s.svc.tools({
+      chatId: CHAT,
+      projectId: 'p',
+      projectRoot: s.root,
+      messageId: 'm',
+      turnId: 'tA',
+      mode: 'auto',
+    });
+    const bytes = await fs.readFile(path.join(s.root, 'f.txt'));
+    auto.noteRead('f.txt', bytes);
+    await auto.write('f.txt', 'two\n', { tool: 'write_file', baseHash: sha256(bytes) });
+    const batch = (await s.svc.get(CHAT)).applied[0];
+    await s.svc.undoBatch({ chatId: CHAT, projectId: 'p', projectRoot: s.root, batchId: batch?.id as string });
+    expect(await s.read('f.txt')).toBe('one\n');
+    expect(await s.svc.takeNote(CHAT, { mode: 'auto', firstTurn: false })).toBe(
+      [
+        modeChangedNote('auto'),
+        '',
+        '[OpenVern] Since your last reply the user reviewed your proposed edits:\n- Discarded: p.txt (new file, not created)\nNothing else is pending.',
+        '',
+        '[OpenVern] Since your last reply the user undid your edits from an earlier turn:\n- Restored to their earlier content: f.txt',
+      ].join('\n'),
+    );
+    expect(await s.svc.takeNote(CHAT, { mode: 'auto', firstTurn: false })).toBeUndefined();
+  });
+
+  it('review block with still-pending files keeps its closing line after a mode line', async () => {
+    const s = await setup();
+    await s.tools().stage('a.txt', 'x\n');
+    const p = await s.pending();
+    await s.apply(p?.revision ?? 0, await s.allOf('accepted'));
+    await s.tools().stage('b.txt', 'y\n');
+    const note = await s.svc.takeNote(CHAT, { mode: 'auto', firstTurn: false });
+    expect(note?.startsWith(`${modeChangedNote('auto')}\n\n[OpenVern] Since your last reply the user reviewed`)).toBe(
+      true,
+    );
+    expect(note?.endsWith('1 proposed file is still awaiting review. Your reads show your proposed versions.')).toBe(
+      true,
+    );
+  });
+});
+
+describe('removeForChat and the blob folder (A1)', () => {
+  it('deletes the store and the blob folder, forgets the read record, and is idempotent', async () => {
+    const s = await setup();
+    await s.write('a.txt', 'orig\n');
+    const auto = () =>
+      s.svc.tools({ chatId: CHAT, projectId: 'p', projectRoot: s.root, messageId: 'm', turnId: 't', mode: 'auto' });
+    const tc = auto();
+    const bytes = await fs.readFile(path.join(s.root, 'a.txt'));
+    tc.noteRead('a.txt', bytes);
+    await tc.write('a.txt', 'new\n', { tool: 'write_file', baseHash: sha256(bytes) });
+    const blobDir = path.join(s.dataDir, 'changes', `${CHAT}.blobs`);
+    expect(await fs.readdir(blobDir)).toEqual([sha256('orig\n')]);
+    // Another chat's folder is not touched.
+    const other = path.join(s.dataDir, 'changes', 'other.blobs');
+    await fs.mkdir(other);
+    await fs.writeFile(path.join(other, 'x'), 'x');
+
+    await s.svc.removeForChat(CHAT);
+    await expect(fs.stat(blobDir)).rejects.toThrow();
+    await expect(fs.stat(path.join(s.dataDir, 'changes', `${CHAT}.json`))).rejects.toThrow();
+    expect(await fs.readdir(other)).toEqual(['x']);
+    expect(await s.svc.get(CHAT)).toEqual({ pending: null, applied: [], diskSeq: 0 });
+    await s.svc.removeForChat(CHAT); // idempotent
+    // The record went with the chat: the (now unrecorded) file needs a read again.
+    const bytes2 = await fs.readFile(path.join(s.root, 'a.txt'));
+    await expect(auto().write('a.txt', 'x\n', { tool: 'write_file', baseHash: sha256(bytes2) })).rejects.toMatchObject({
+      code: 'conflict',
+    });
+    await expect(s.svc.removeForChat('../x')).rejects.toMatchObject({ code: 'not_found' });
   });
 });
