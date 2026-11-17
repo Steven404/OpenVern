@@ -327,6 +327,7 @@ export interface HarnessOptions {
   script: FakeScript;
   models?: ModelInfo[];
   tools?: Tool[];
+  getProjectTools?: AgentServiceDeps['getProjectTools'];
   /** Create the chat inside the demo project (default) or as a loose chat. */
   project?: boolean;
   chatModel?: string;
@@ -384,7 +385,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     projects,
     models,
     provider,
-    getProjectTools: () => tools,
+    getProjectTools: opts.getProjectTools ?? (() => tools),
     ...(opts.changes ? { changes: opts.changes } : {}),
     ...(opts.terminalReads ? { terminalReads: opts.terminalReads } : {}),
     ...(terminalTools ? { getTerminalTools: () => terminalTools } : {}),

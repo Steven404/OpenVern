@@ -83,6 +83,16 @@ describe('FakeProvider test markers', () => {
     expect(Date.now() - t0).toBeGreaterThanOrEqual(330);
   });
 
+  it.each(['write', 'delete'])('[fake:%s] reads its target before changing it', async (marker) => {
+    const p = createFakeProvider({ delayMs: 0 });
+    const tool = { name: `${marker}_file`, description: '', parameters: { type: 'object' } };
+    const events = await run(p, userReq(`[fake:${marker}=src/example.txt]`, { tools: [readFile, tool] }));
+    const call = events.find((e): e is Extract<ProviderEvent, { type: 'tool_call' }> => e.type === 'tool_call');
+    expect(call?.call.name).toBe('read_file');
+    if (!call) throw new Error('missing tool call');
+    expect(JSON.parse(call.call.argsJson)).toEqual({ path: 'src/example.txt' });
+  });
+
   it('[fake:read=<path>] makes the first tool call read that path', async () => {
     const p = createFakeProvider({ delayMs: 0 });
     const events = await run(p, userReq('look [fake:read=../outside.txt]', { tools: [readFile] }));
