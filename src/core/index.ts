@@ -56,7 +56,13 @@ export async function createCore(deps: CoreDeps): Promise<Core> {
   const deniedFiles = deniedRoots.map((r) => dataPaths(r).secrets);
   const cacheFile = dataPaths(dataReal).modelsCache;
   const models = createModelCatalog({ provider, cacheFile });
-  const changes = createChangesService({ dataDir: dataReal, sandbox: { deniedRoots, deniedFiles } });
+  const changes = createChangesService({
+    dataDir: dataReal,
+    sandbox: { deniedRoots, deniedFiles },
+    // Lets `get`, `apply` and `discard` mark an auto batch written into another project than the chat's current one
+    // as not undoable. A chat that can't be read counts as having no project (nothing undoable).
+    chatProjectId: (chatId) => chats.get(chatId).then((chat) => chat.projectId),
+  });
   const terminalReads = createTerminalReadBroker();
   const agent = createAgentService({
     version: deps.version,
@@ -66,7 +72,7 @@ export async function createCore(deps: CoreDeps): Promise<Core> {
     projects,
     models,
     provider,
-    getProjectTools: () => getProjectTools({ deniedRoots, deniedFiles }),
+    getProjectTools: (opts) => getProjectTools({ deniedRoots, deniedFiles, ...opts }),
     getKnownSecrets: async () => {
       const key = await settings.getApiKey();
       return key ? [key] : [];

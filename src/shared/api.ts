@@ -2,7 +2,7 @@
 // All routes are under `/api`, JSON unless noted, and require `X-OpenVern-Client: 1`.
 
 import { z } from 'zod';
-import { LIMITS, REASONING_EFFORTS } from './constants';
+import { EDIT_MODES, LIMITS, REASONING_EFFORTS } from './constants';
 import { TERMINAL, type TerminalReadAnswer } from './terminal';
 import type { AppliedBatch, ChatChanges } from './types';
 
@@ -33,6 +33,8 @@ export const ROUTES = {
   homeFileAttach: '/home/files/attach',
   chatChanges: '/chats/:id/changes',
   chatChangesApply: '/chats/:id/changes/apply',
+  /** POST, no body (none or `{}` accepted): undo one auto batch. → `UndoBatchResponse`. */
+  chatBatchUndo: '/chats/:id/changes/batches/:batchId/undo',
   /** POST: the client's answer to a `terminal_read_request`. 204 when a waiting request took it; 404 when unknown,
    * expired or already answered. */
   chatTerminalRead: '/chats/:id/terminal-reads/:requestId',
@@ -48,6 +50,7 @@ const id = z.string().min(1);
 const modelId = z.string().trim().min(1);
 /** F3: `null` is Default (no `reasoning` field); omitted means "keep what the chat already has". */
 const reasoningEffort = z.enum(REASONING_EFFORTS);
+const editMode = z.enum(EDIT_MODES);
 
 /** `PUT /settings/openrouter-key` */
 export const setOpenRouterKeyBody = z.object({ apiKey: z.string().trim().min(1) });
@@ -64,13 +67,20 @@ export const createProjectBody = z.object({
 /** `PATCH /projects/:id` */
 export const renameProjectBody = z.object({ name: z.string().trim().min(1).max(200) });
 /** `POST /chats` */
-export const createChatBody = z.object({ projectId: id.nullable(), model: modelId });
+export const createChatBody = z.object({
+  projectId: id.nullable(),
+  model: modelId,
+  /** Omitted = 'review'. */
+  editMode: editMode.optional(),
+});
 /** `PATCH /chats/:id` */
 export const updateChatBody = z.object({
   title: z.string().trim().min(1).max(200).optional(),
   projectId: id.nullable().optional(),
   /** Any chat can be archived; a move keeps the flag. */
   archived: z.boolean().optional(),
+  /** Allowed while a run is active: the agent reads the mode once at turn start, so it applies from the next turn. */
+  editMode: editMode.optional(),
 });
 /** `POST /chats/:id/messages` → `text/event-stream` of `AgentEvent` */
 export const sendMessageBody = z
@@ -105,6 +115,8 @@ export interface ApplyChangesResponse {
   batch: AppliedBatch;
   changes: ChatChanges;
 }
+/** `POST /chats/:id/changes/batches/:batchId/undo`: no fields; an empty body or `{}` is accepted. */
+export const undoBatchBody = z.object({});
 /** `POST /chats/:id/changes/batches/:batchId/undo`. */
 export interface UndoBatchResponse {
   batch: AppliedBatch; // with `undo` set

@@ -86,12 +86,16 @@ function editMarkers(text: string): { kind: 'edit' | 'write' | 'delete'; path: s
 }
 
 const FAKE_READ_PREFIX = 'call_fake_read_';
+/** Reads before a write or delete. Not followed by an edit, unlike `FAKE_READ_PREFIX` reads. */
+const FAKE_PREREAD_PREFIX = 'call_fake_preread_';
 const callId = (prefix: string, i: number) => `${prefix}${i}_${crypto.randomUUID()}`;
 
 /**
- * Scripted edit turn (G2.6). Step 1 (last message from the user): read every `edit` path and `write`/`delete` right
- * away, all in one assistant message. Step 2 (the reads came back): `edit_file` each read file by appending a marker
- * comment to its first non-empty line. Step 3: the default final answer. Returns null when no edit tool is offered.
+ * Scripted edit turn. Step 1 (last message from the user), all in one assistant message, in marker order: read every
+ * `edit` path; read every `write` / `delete` path and then write or delete it right away (the read lets Auto
+ * overwrite or delete an existing file, which needs a read in the chat first; reading a new file just fails). Step 2
+ * (the `edit` reads came back): `edit_file` each read file by appending a marker comment to its first non-empty line.
+ * Step 3: the default final answer. Returns null when no edit tool is offered.
  */
 function editScript(req: ProviderRequest, text: string): FakeStep[] | null {
   const offered = new Set(req.tools?.map((t) => t.name));
@@ -108,8 +112,12 @@ function editScript(req: ProviderRequest, text: string): FakeStep[] | null {
     if (markers.length === 0) return null;
     const steps: FakeStep[] = [...textDeltas("I'll propose those changes.")];
     markers.forEach((m, i) => {
-      if (m.kind === 'edit') steps.push(call(FAKE_READ_PREFIX, i, 'read_file', { path: m.path }));
-      else if (m.kind === 'write') {
+      if (m.kind === 'edit') {
+        steps.push(call(FAKE_READ_PREFIX, i, 'read_file', { path: m.path }));
+        return;
+      }
+      steps.push(call(FAKE_PREREAD_PREFIX, i, 'read_file', { path: m.path }));
+      if (m.kind === 'write') {
         steps.push(
           call('call_fake_write_', i, 'write_file', { path: m.path, content: `// created by the fake provider\n` }),
         );
@@ -188,9 +196,10 @@ const SLOW_DELTA_MS = 120;
  * - `[fake:flaky]`: the first call for that message fails with a retryable `provider_error`, later ones succeed;
  * - `[fake:read=<path>]`: the first tool call reads `<path>` instead of `README.md` (e.g. `../x` or `.env`, to
  *   exercise the sandbox through the whole stack).
- * - `[fake:edit=<path>]`, `[fake:write=<path>]`, `[fake:delete=<path>]`: when the edit tools are offered, propose that
- *   change (`edit` reads the file and appends a comment to its first non-empty line; `write` creates/overwrites with a
- *   one-line comment). Several markers make one scripted turn that proposes several files.
+ * - `[fake:edit=<path>]`, `[fake:write=<path>]`, `[fake:delete=<path>]`: when the edit tools are offered, make that
+ *   change (proposed in Review, written in Auto). `edit` reads the file, then appends a comment to its first non-empty
+ *   line in the next step; `write` reads the path, then creates or overwrites it with a one-line comment; `delete`
+ *   reads the path, then deletes it. Several markers make one scripted turn that changes several files.
  * - `[fake:terminal]`: when `read_terminal` is offered, call it once (no arguments), then answer with the first line
  *   of its result verbatim (e.g. "No terminal is open in this chat. …").
  * Title requests (`maxTokens` set) ignore the markers.

@@ -99,6 +99,10 @@ export function createReadFileTool(opts: SandboxOptions = {}): Tool {
           if (ctx.signal.aborted) return abortedResult(summary);
           return fail(`Cannot read ${relPath}: ${(e as NodeJS.ErrnoException).code ?? 'unknown error'}`, summary);
         }
+        // What this chat has now seen of the file on disk (a proposal's text above is not recorded). In Auto, a later
+        // overwrite or delete is refused unless the file still has these bytes. A binary file counts as seen too: the
+        // model was told what it is.
+        ctx.changes?.noteRead(res.rel, buf);
 
         if (buf.subarray(0, BINARY_SNIFF_BYTES).includes(0)) {
           return fail(`Binary file: ${relPath} cannot be displayed as text.`, summary);

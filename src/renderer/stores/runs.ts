@@ -132,7 +132,8 @@ export function reduceRun(run: RunState, ev: RunEvent): RunState {
       return { ...run, messages, streamingId: ev.messageId };
     }
     case 'changes_updated':
-      // The card reads the `chatChanges` query; `consume` invalidates it when this event arrives.
+    case 'auto_batch_updated':
+      // The cards read the `chatChanges` query; `consume` invalidates it when these events arrive.
       return run;
     case 'terminal_read_request':
       // No state: `consume` relays it to the bridge and posts the answer back (see `relayTerminalRead`).
@@ -346,7 +347,7 @@ export const useRunsStore = create<RunsState>()((set, get) => {
         apply(chatId, token, ev);
         if (ev.type === 'terminal_read_request') void relayTerminalRead(deps, chatId, ev);
         if (ev.type === 'chat_updated') patchChatSummary(deps.queryClient, ev.chat);
-        if (ev.type === 'changes_updated') {
+        if (ev.type === 'changes_updated' || ev.type === 'auto_batch_updated') {
           void deps.queryClient.invalidateQueries({ queryKey: queryKeys.chatChanges(chatId) });
         }
       }

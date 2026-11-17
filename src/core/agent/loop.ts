@@ -10,7 +10,8 @@
 // - Stop/error while streaming: tool calls the model had already completed are NOT persisted on that message (they never
 //   ran). Stop while tools run: the in-flight tool and every not-yet-started call of that message get a persisted
 //   `ok:false` "Interrupted" ToolMessage (with `tool_call` + `tool_result` events), so the stored chat is self-consistent.
-//   `history.ts` still synthesises "Interrupted" results for legacy/dangling calls.
+//   `history.ts` still synthesises "Interrupted" results for legacy/dangling calls. A tool call that wrote to disk
+//   (Auto) keeps its real result even when Stop arrived meanwhile.
 
 import {
   LIMITS,
@@ -24,9 +25,11 @@ import type { AgentEvent } from '@shared/events';
 import type { TerminalReadRequest } from '@shared/terminal';
 import type {
   AssistantMessage,
+  BatchUndo,
   ChangeSummary,
   Chat,
   ChatSummary,
+  EditMode,
   Id,
   Project,
   ToolCall,
@@ -56,7 +59,7 @@ import type {
   RunTurnInput,
   TerminalReadBroker,
 } from '../types';
-import { EDIT_TOOL_NAMES } from './edit-mode';
+import { EDIT_TOOL_NAMES, retryUndoNote, retryUndoNotice } from './edit-mode';
 import { buildHistory, flattenToolCall, INTERRUPTED_OUTPUT } from './history';
 import { buildIdentity } from './identity';
 import { buildSystemPrompt } from './system-prompt';
@@ -142,31 +145,48 @@ export function toChatSummary(chat: ChatSummary | Chat): ChatSummary {
   };
 }
 
-/** Wraps a `ToolChanges` to notice when a tool call staged something (the loop then emits `changes_updated`). */
-function trackStaging(inner: ToolChanges): TrackedChanges {
-  let last: { summary: ChangeSummary | null } | undefined;
+/**
+ * Wraps a `ToolChanges` to notice what a tool call did: staged something (the loop then emits `changes_updated`) or
+ * wrote to disk (`auto_batch_updated`, and the result is kept even after Stop).
+ */
+function trackChanges(inner: ToolChanges): TrackedChanges {
+  let staged: { summary: ChangeSummary | null } | undefined;
+  let written: { batchId: Id } | undefined;
   return {
     mode: inner.mode,
     read: (p) => inner.read(p),
     staged: () => inner.staged(),
-    write: (p, content, opts) => inner.write(p, content, opts),
     noteRead: (p, bytes) => inner.noteRead(p, bytes),
     async stage(p, content) {
       const result = await inner.stage(p, content);
-      last = { summary: result.summary };
+      staged = { summary: result.summary };
+      return result;
+    },
+    async write(p, content, opts) {
+      const result = await inner.write(p, content, opts);
+      // `batchId` is null only when nothing changed on disk.
+      if (result.batchId !== null) written = { batchId: result.batchId };
       return result;
     },
     reset: () => {
-      last = undefined;
+      staged = undefined;
+      written = undefined;
     },
-    lastStage: () => last,
+    lastStage: () => staged,
+    lastWrite: () => written,
   };
 }
 
 interface TrackedChanges extends ToolChanges {
+  /** Called before each tool call. */
   reset(): void;
   lastStage(): { summary: ChangeSummary | null } | undefined;
+  /** The current tool call changed a project file (Auto). */
+  lastWrite(): { batchId: Id } | undefined;
 }
+
+/** `extra` appended to a user message's existing note, as its own block. */
+const appendNote = (note: string | undefined, extra: string): string => (note ? `${note}\n\n${extra}` : extra);
 
 function interrupted(): { ok: false; output: string; summary: string } {
   return { ok: false, output: INTERRUPTED_OUTPUT, summary: 'Interrupted' };
@@ -256,14 +276,31 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
   async function execute(input: RunTurnInput, signal: AbortSignal, emit: Emit, state: RunState): Promise<void> {
     const { chatId, model } = input;
     let chat = await chats.get(chatId);
+    // MODE READ ONCE PER TURN (invariant): the edit mode is taken from this read and used for the whole run: the tool
+    // descriptions, the system prompt, the note and the write path. A PATCH during the run is stored but applies
+    // from the next turn; reading it again mid-run could tell the model its edits are proposals while they are
+    // written to disk, or the other way round.
+    const editMode: EditMode = chat.editMode;
 
+    let project: Project | undefined;
+    if (chat.projectId) {
+      try {
+        project = await projects.get(chat.projectId);
+      } catch (err) {
+        // A vanished project makes this a loose chat; anything else is a real failure.
+        if (!(err instanceof CoreError && err.code === 'not_found')) throw err;
+      }
+    }
+
+    /** What a retry undid before starting over, for the notice on its first assistant message. */
+    let retryUndo: BatchUndo | undefined;
     // S4.3: persist the new user message (binding its attachments) or truncate for a retry.
     if (input.newUserMessage) {
       const { text, attachmentIds } = input.newUserMessage;
       const refs = attachmentIds.length > 0 ? await attachments.bindToChat(attachmentIds, chatId) : [];
       const firstTurn = !chat.messages.some((m) => m.role === 'user');
       const changesNote = chat.projectId
-        ? await deps.changes?.takeNote(chatId, { mode: 'review', firstTurn })
+        ? await deps.changes?.takeNote(chatId, { mode: editMode, firstTurn })
         : undefined;
       const message: UserMessage = {
         id: crypto.randomUUID(),
@@ -285,8 +322,32 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
       if (lastUser?.role !== 'user') {
         throw new CoreError('invalid_request', 'There is no message to retry in this chat.');
       }
+      // RETRY UNDOES BEFORE RESTORE (invariant): first the files the previous attempt wrote (Auto) go back to how the
+      // turn found them, whatever mode this retry runs in; only then does the pending set go back to its state at
+      // the turn's start. The retry must start from the project as it was before the turn, and an undo that throws
+      // stops the retry before the proposals change, so they never sit on top of files the attempt left behind.
+      const undone =
+        project && deps.changes
+          ? await deps.changes.prepareRetry({
+              chatId,
+              projectId: project.id,
+              projectRoot: project.rootPath,
+              turnId: lastUser.id,
+              mode: editMode,
+            })
+          : null;
       if (chat.projectId) await deps.changes?.restore(chatId, lastUser.id);
       state.modified = true;
+      if (undone) {
+        await emit({ type: 'auto_batch_updated', batchId: undone.batchId });
+        retryUndo = undone.undo;
+        if (undone.undo.skipped.length > 0) {
+          // The model must know which files still hold the previous attempt's edits; stored on the user message, so
+          // a later replay of the history says the same.
+          await chats.setChangesNote(chatId, lastUser.id, appendNote(lastUser.changesNote, retryUndoNote(undone.undo)));
+          chat = await chats.get(chatId);
+        }
+      }
     }
     // The user message that started this turn; auto batches are keyed by it.
     const turnId = chat.messages.findLast((m) => m.role === 'user')?.id ?? '';
@@ -310,21 +371,12 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
       modelInfo.supportsReasoning === true && effort !== null && modelInfo.reasoningEfforts?.includes(effort)
         ? effort
         : undefined;
-    let project: Project | undefined;
-    if (chat.projectId) {
-      try {
-        project = await projects.get(chat.projectId);
-      } catch (err) {
-        // A vanished project makes this a loose chat; anything else is a real failure.
-        if (!(err instanceof CoreError && err.code === 'not_found')) throw err;
-      }
-    }
     const canEdit = !!(project && modelInfo.supportsTools && deps.changes); // v0.2 G2.4
     const editNames: readonly string[] = EDIT_TOOL_NAMES;
     const projectTools: OfferedTool[] =
       project && modelInfo.supportsTools
         ? deps
-            .getProjectTools()
+            .getProjectTools({ editMode })
             .filter((t) => canEdit || !editNames.includes(t.spec.name)) // S4.8
             .map((t) => projectTool(t, project.rootPath))
         : [];
@@ -361,18 +413,24 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
         .catch(() => undefined); // the prompt is fine without it
       const outcome = await Promise.race([built, gaveUp]);
       if (signal.aborted) {
-        await stopBeforeModel(chatId, model, emit, state);
+        await stopBeforeModel(chatId, model, emit, state, retryUndo ? retryUndoNotice(retryUndo) : undefined);
         return;
       }
       if (treeSignal.aborted || outcome === 'gave_up') treeTimedOut = true;
       else tree = outcome;
     }
+    // UI-only notice on the run's first assistant message: the tree timeout, then what a retry undid.
+    const firstNotice =
+      [treeTimedOut ? TREE_UNAVAILABLE_NOTICE : undefined, retryUndo ? retryUndoNotice(retryUndo) : undefined]
+        .filter((n): n is string => n !== undefined)
+        .join(' ') || undefined;
     const system = buildSystemPrompt({
       identity: buildIdentity(modelInfo, deps.version ?? '0.0.0'),
       now: now(),
       ...(project ? { project: { name: project.name, rootPath: project.rootPath } } : {}),
       hasTools: projectTools.length > 0,
       canEdit,
+      editMode,
       terminal: (terminal?.tools.length ?? 0) > 0,
       ...(tree !== undefined ? { tree } : {}),
       ...(treeTimedOut ? { treeUnavailable: true } : {}),
@@ -398,17 +456,17 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
     for (let step = 0; step < MAX_AGENT_STEPS; step++) {
       const messageId = crypto.randomUUID();
       await emit({ type: 'assistant_start', messageId, model });
-      // One per assistant step: edits staged by this step's tool calls are attributed to its message.
+      // One per assistant step: edits staged or written by this step's tool calls are attributed to its message.
       const stepChanges =
         canEdit && project && deps.changes
-          ? trackStaging(
+          ? trackChanges(
               deps.changes.tools({
                 chatId,
                 projectId: project.id,
                 projectRoot: project.rootPath,
                 messageId,
                 turnId,
-                mode: 'review',
+                mode: editMode,
               }),
             )
           : undefined;
@@ -457,7 +515,7 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
         ...(failure?.status === 'error' ? { error: failure.error } : {}),
         ...(usage ? { usage } : {}),
         ...(providerMeta !== undefined ? { providerMeta } : {}),
-        ...(step === 0 && treeTimedOut ? { notice: TREE_UNAVAILABLE_NOTICE } : {}),
+        ...(step === 0 && firstNotice !== undefined ? { notice: firstNotice } : {}),
       };
       await chats.appendMessage(chatId, assistant);
       state.modified = true;
@@ -490,6 +548,8 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
         await emit({ type: 'tool_result', message: toolMessage });
         const staged = stepChanges?.lastStage();
         if (staged) await emit({ type: 'changes_updated', messageId, changes: staged.summary });
+        const written = stepChanges?.lastWrite();
+        if (written) await emit({ type: 'auto_batch_updated', batchId: written.batchId });
         if (toolsOffered) history.push({ role: 'tool', toolCallId: call.id, content: toolMessage.output });
         else flattened.push(flattenToolCall(call, toolMessage));
         entries.push({ name: call.name, args: call.argsJson, ok: toolMessage.ok, output: toolMessage.output });
@@ -518,7 +578,13 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
   }
 
   /** Stop before any model call: records the same empty `stopped` assistant message a stop at stream start does. */
-  async function stopBeforeModel(chatId: Id, model: string, emit: Emit, state: RunState): Promise<void> {
+  async function stopBeforeModel(
+    chatId: Id,
+    model: string,
+    emit: Emit,
+    state: RunState,
+    notice: string | undefined,
+  ): Promise<void> {
     const messageId = crypto.randomUUID();
     await emit({ type: 'assistant_start', messageId, model });
     const assistant: AssistantMessage = {
@@ -529,6 +595,7 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
       text: '',
       toolCalls: [],
       status: 'stopped',
+      ...(notice !== undefined ? { notice } : {}),
     };
     await chats.appendMessage(chatId, assistant);
     state.modified = true;
@@ -542,7 +609,7 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
     tools: OfferedTool[],
     ctx: ChatToolContext,
     emit: Emit,
-    changes?: ToolChanges,
+    changes?: TrackedChanges,
   ): Promise<ToolMessage> {
     const { signal } = ctx;
     const knownSecrets = ctx.knownSecrets ?? [];
@@ -575,7 +642,10 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
       }
       try {
         const result = await tool.run(args, ctx, changes);
-        // A result that arrives after a stop is replaced, so what is stored never depends on a race.
+        // STOP NEVER HIDES A WRITE (invariant): a call that changed a project file keeps its real result even when
+        // Stop arrived meanwhile, so the stored history (and the model, on the next turn) says what reached the disk.
+        // Any other result that arrives after a stop is replaced, so what is stored never depends on a race.
+        if (changes?.lastWrite()) return result;
         return signal.aborted ? interrupted() : result;
       } catch {
         // `Tool.run` must not throw; if it does, report it to the model without leaking details.
