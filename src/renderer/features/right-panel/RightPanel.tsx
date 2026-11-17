@@ -93,6 +93,8 @@ export function RightPanel({ chatId, projectId }: { chatId: Id; projectId: Id | 
   const onResizeStart = (event: ReactPointerEvent) => {
     if (event.button !== 0) return;
     event.preventDefault();
+    // preventDefault also cancels the click focus, so focus the handle ourselves: the arrow keys then resize it.
+    (event.currentTarget as HTMLElement).focus({ preventScroll: true });
     stopDrag.current?.();
     const startX = event.clientX;
     const startW = width;

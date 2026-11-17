@@ -19,6 +19,7 @@ export const PRELOAD_TERMINAL_IPC = {
   open: 'openvern:terminal:open',
   list: 'openvern:terminal:list',
   close: 'openvern:terminal:close',
+  adopt: 'openvern:terminal:adopt',
   write: 'openvern:terminal:write',
   resize: 'openvern:terminal:resize',
   data: 'openvern:terminal:data',
@@ -41,6 +42,7 @@ const terminal: TerminalBridge = {
   write: (chatId, data) => ipcRenderer.send(IPC.write, chatId, data),
   resize: (chatId, cols, rows) => ipcRenderer.send(IPC.resize, chatId, cols, rows),
   close: (chatId): Promise<void> => ipcRenderer.invoke(IPC.close, chatId),
+  adopt: (draftId, chatId): Promise<boolean> => ipcRenderer.invoke(IPC.adopt, draftId, chatId),
   onData: (listener) => subscribe<TerminalDataEvent>(IPC.data, listener),
   onExit: (listener) => subscribe<TerminalExitEvent>(IPC.exit, listener),
 };

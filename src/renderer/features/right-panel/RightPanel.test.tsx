@@ -5,6 +5,7 @@ import { readPersistedUi, STORAGE_KEYS } from '@renderer/stores/ui';
 import { LAYOUT } from '@shared/constants';
 import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useTerminalUiStore } from '../terminal/terminal-store';
 import { FakeTerminalBridge, installTerminalBridge, resetTerminalFakes, Terminal } from '../terminal/test-fakes';
 import { usePanelStore } from './panel-store';
 
@@ -297,6 +298,8 @@ describe('Terminal row in the desktop app', () => {
   let bridge: FakeTerminalBridge;
   beforeEach(() => {
     bridge = new FakeTerminalBridge();
+    window.sessionStorage.clear();
+    useTerminalUiStore.setState({ openDocks: {}, focusRequests: {}, draftProjectId: undefined });
     terminalRegistry.disposeAll();
     resetTerminalFakes();
     installTerminalBridge(bridge);
@@ -352,13 +355,44 @@ describe('Terminal row in the desktop app', () => {
     expect(within(panel()).queryByRole('tab', { name: 'Terminal' })).toBeNull();
   });
 
-  it('is disabled on the new-chat screen, which has no chat to attach a shell to', async () => {
+  it('is enabled on the new-chat screen and says the shell opens in Documents without a project', async () => {
     renderApp({ route: '/new' });
     await screen.findByRole('heading', { name: 'What are we building?' });
     await openLauncher();
-    expect(terminalRow().disabled).toBe(true);
-    expect(terminalRow().textContent).toContain('Available once the chat has started');
+    expect(terminalRow().disabled).toBe(false);
+    expect(terminalRow().textContent).toContain('Open a shell in your Documents folder');
+    fireEvent.click(terminalRow());
+    expect(await screen.findByRole('region', { name: 'Terminal' })).toBeTruthy();
+    expect(useTerminalUiStore.getState().openDocks.__draft__).toBe(true);
+    await waitFor(() => expect(bridge.opens).toHaveLength(1));
+    expect(bridge.opens[0]).toMatchObject({ chatId: '__draft__', cwd: null, defaultFolder: 'documents' });
+  });
+
+  it('says the shell opens in the project folder on the new-chat screen with a project', async () => {
+    const { client, project } = await seededClient();
+    renderApp({ client, route: `/new?project=${project.id}` });
+    await screen.findByRole('heading', { name: 'What are we building?' });
+    await openLauncher();
+    expect(terminalRow().disabled).toBe(false);
+    expect(terminalRow().textContent).toContain('Open a shell in the project folder');
     fireEvent.keyDown(within(panel()).getByRole('heading', { name: 'Open a panel' }), { key: 't' });
+    expect(await screen.findByRole('region', { name: 'Terminal' })).toBeTruthy();
+    await waitFor(() => expect(bridge.opens).toHaveLength(1));
+    expect(bridge.opens[0]).toStrictEqual(expect.objectContaining({ chatId: '__draft__', cwd: project.rootPath }));
+    expect(bridge.opens[0]?.defaultFolder).toBeUndefined();
+  });
+});
+
+describe('Terminal row in the web build', () => {
+  it('stays disabled on the new-chat screen without the desktop bridge', async () => {
+    installTerminalBridge(null);
+    renderApp({ route: '/new' });
+    await screen.findByRole('heading', { name: 'What are we building?' });
+    openPanel();
+    fireEvent.click(within(panel()).getByRole('button', { name: 'Open a panel' }));
+    const row = within(panel()).getByRole('button', { name: /Terminal/ }) as HTMLButtonElement;
+    expect(row.disabled).toBe(true);
+    expect(row.textContent).toContain('Available in the desktop app');
     expect(screen.queryByRole('region', { name: 'Terminal' })).toBeNull();
   });
 });
@@ -391,7 +425,8 @@ describe('panel width', () => {
     expect(window.localStorage.getItem(STORAGE_KEYS.rightPanelWidth)).toBe(String(LAYOUT.panelFiles + 100));
     expect(readPersistedUi().rightPanelWidth).toBe(LAYOUT.panelFiles + 100);
 
-    handle.focus();
+    // Pressing the handle focuses it, so the arrow keys resize right after a drag.
+    expect(document.activeElement).toBe(handle);
     fireEvent.keyDown(handle, { key: 'ArrowRight' });
     expect(aside.style.width).toBe(`${LAYOUT.panelFiles + 100 - 16}px`);
   });

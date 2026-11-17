@@ -1,3 +1,4 @@
+import { DRAFT_CHAT_ID } from '@shared/constants';
 import type { ChatSummary, ReasoningEffort } from '@shared/types';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -12,6 +13,7 @@ import { resolveDefaultModel } from '../composer/models';
 import { useModels, useProjects, useRunDeps, useSettings } from '../composer/queries';
 import { RightPanelToggle } from '../right-panel';
 import { DRAFT_PANEL_CHAT_ID, usePanelStore } from '../right-panel/panel-store';
+import { adoptDraftTerminal } from '../terminal/adopt-draft';
 import { ProjectChip } from './ProjectChip';
 
 /** `#/new`: hero, new composer and the project chip. Preselects the project in `?project=<id>`. */
@@ -65,6 +67,9 @@ export function NewChatScreen() {
       );
       void queryClient.invalidateQueries({ queryKey: queryKeys.chats });
       void queryClient.invalidateQueries({ queryKey: queryKeys.projects });
+      // A terminal opened here moves into the chat before the first run, so the model can read it (and the chat shows
+      // it). Never throws, and does nothing without the desktop bridge.
+      await adoptDraftTerminal(chat.id);
       // The panel's tabs follow the draft into the new chat, so the next New chat starts clean.
       usePanelStore.getState().moveChat(DRAFT_PANEL_CHAT_ID, chat.id);
       // The run lives in the store, so it keeps going after this screen unmounts.
@@ -93,7 +98,7 @@ export function NewChatScreen() {
             projectId={projectId}
             onSend={onSend}
             autoFocus
-            sinkKey={DRAFT_PANEL_CHAT_ID}
+            sinkKey={DRAFT_CHAT_ID}
             projectSlot={<ProjectChip projects={projects} value={projectId} onChange={onProjectChange} />}
           />
         </div>

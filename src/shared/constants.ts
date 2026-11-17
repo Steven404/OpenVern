@@ -9,7 +9,15 @@ export const APP_ID = 'dev.stefanos.openvern';
 /** Picked from openrouter.ai/models on 2026-10-31: current Claude Sonnet with tools + image input. */
 export const DEFAULT_MODEL = 'anthropic/claude-sonnet-5.5';
 export const NEW_CHAT_TITLE = 'New chat';
-export const MAX_AGENT_STEPS = 25; // model calls per user turn
+/**
+ * Stands in for a chat id on the New Chat screen, before the chat exists: the right panel's state and the terminal
+ * started there are kept under it, then moved to the chat on its first send. Never a real chat id (those are UUIDs).
+ */
+export const DRAFT_CHAT_ID = '__draft__';
+/** Model calls per user turn. A cost backstop only: a stuck loop is stopped earlier by `MAX_REPEATED_TOOL_STEPS`. */
+export const MAX_AGENT_STEPS = 100;
+/** Stop a turn when this many consecutive steps make the same tool calls and get the same results. */
+export const MAX_REPEATED_TOOL_STEPS = 6;
 /** F1: OpenRouter is the only provider; the Context popover shows this label. */
 export const PROVIDER_LABEL = 'OpenRouter';
 
@@ -74,6 +82,12 @@ export const LAYOUT = {
   windowMinWidth: 1080,
   windowMinHeight: 720,
 } as const;
+
+/**
+ * The Diff surface's file list height as a fraction of the body below its header. The store owns the default (it
+ * seeds the stored value); the helpers in `list-split.ts` clamp against the measured body.
+ */
+export const LIST_RATIO_DEFAULT = 0.35;
 
 export const IMAGE_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'] as const;
 export type ImageMimeType = (typeof IMAGE_MIME_TYPES)[number];

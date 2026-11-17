@@ -45,6 +45,7 @@ function makeManager(over: Partial<TerminalManagerDeps> = {}): Harness {
     },
     shell: () => SHELL,
     homeDir: () => '/home/me',
+    documentsDir: () => '/home/me/Documents',
     isDirectory: () => true,
     events: { data: (event) => data.push(event), exit: (event) => exits.push(event) },
     isOwnChild: () => true,
@@ -166,6 +167,7 @@ describe('TerminalManager.open', () => {
       },
       shell: () => SHELL,
       homeDir: () => '/home/me',
+      documentsDir: () => null,
       isDirectory: () => true,
       events: { data: () => {}, exit: () => {} },
       isOwnChild: () => true,
@@ -268,6 +270,7 @@ describe('TerminalManager limits', () => {
       },
       shell: () => SHELL,
       homeDir: () => '/home/me',
+      documentsDir: () => null,
       isDirectory: () => true,
       events: { data: () => {}, exit: () => {} },
       isOwnChild: () => true,
@@ -369,6 +372,206 @@ describe('TerminalManager starting folder', () => {
     await harness.manager.open(open('chat-1', '/project/../project'));
     expect(checked).toStrictEqual(['/project']);
     expect(harness.spawns[0]?.options.cwd).toBe('/project');
+  });
+
+  it('starts in Documents when asked for it with no folder', async () => {
+    const checked: string[] = [];
+    const harness = makeManager({
+      isDirectory: (path) => {
+        checked.push(path);
+        return true;
+      },
+    });
+    await harness.manager.open({ ...open('__draft__'), defaultFolder: 'documents' });
+    expect(checked).toStrictEqual(['/home/me/Documents']);
+    expect(harness.spawns[0]?.options.cwd).toBe('/home/me/Documents');
+  });
+
+  it('resolves the Documents path before the directory check', async () => {
+    const checked: string[] = [];
+    const harness = makeManager({
+      documentsDir: () => '/home/me/x/../Documents',
+      isDirectory: (path) => {
+        checked.push(path);
+        return path === '/home/me/Documents';
+      },
+    });
+    await harness.manager.open({ ...open('__draft__'), defaultFolder: 'documents' });
+    expect(checked).toStrictEqual(['/home/me/Documents']);
+    expect(harness.spawns[0]?.options.cwd).toBe('/home/me/Documents');
+  });
+
+  it('falls back to home when Documents is unknown, throws, is relative, empty or not a directory', async () => {
+    const cases: Array<Partial<TerminalManagerDeps>> = [
+      { documentsDir: () => null },
+      {
+        documentsDir: () => {
+          throw new Error('getPath failed');
+        },
+      },
+      { documentsDir: () => 'Documents' },
+      { documentsDir: () => '' },
+      { isDirectory: (path) => path !== '/home/me/Documents' },
+    ];
+    for (const over of cases) {
+      const harness = makeManager(over);
+      await harness.manager.open({ ...open('__draft__'), defaultFolder: 'documents' });
+      expect(harness.spawns[0]?.options.cwd).toBe('/home/me');
+    }
+  });
+
+  it('still starts in home with no folder and no defaultFolder, without looking up Documents', async () => {
+    let asked = 0;
+    const harness = makeManager({
+      documentsDir: () => {
+        asked += 1;
+        return '/home/me/Documents';
+      },
+    });
+    await harness.manager.open(open('chat-1', null));
+    expect(harness.spawns[0]?.options.cwd).toBe('/home/me');
+    expect(asked).toBe(0);
+  });
+
+  it('ignores defaultFolder when attaching to an existing session', async () => {
+    const harness = makeManager();
+    await harness.manager.open(open('__draft__', null));
+    const again = await harness.manager.open({ ...open('__draft__'), defaultFolder: 'documents' });
+    expect(again).toMatchObject({ created: false, info: { cwd: '/home/me' } });
+    expect(harness.spawns).toHaveLength(1);
+  });
+});
+
+describe('TerminalManager.adopt', () => {
+  it('moves a running session to the chat: has, list and later events use the new id', async () => {
+    const harness = makeManager();
+    await harness.manager.open({ ...open('__draft__'), defaultFolder: 'documents' });
+    ptyAt(harness, 0).emitData('before\r\n');
+
+    expect(harness.manager.adopt('__draft__', 'chat-1')).toBe(true);
+    expect(harness.manager.has('__draft__')).toBe(false);
+    expect(harness.manager.has('chat-1')).toBe(true);
+    expect(harness.manager.list()).toStrictEqual([
+      {
+        chatId: 'chat-1',
+        shell: 'zsh',
+        cwd: '/home/me/Documents',
+        cols: 80,
+        rows: 24,
+        status: { state: 'running' },
+      },
+    ]);
+
+    ptyAt(harness, 0).emitData('after\r\n');
+    ptyAt(harness, 0).emitExit(0);
+    expect(harness.data).toStrictEqual([
+      { chatId: '__draft__', seq: 1, data: 'before\r\n' },
+      { chatId: 'chat-1', seq: 2, data: 'after\r\n' },
+    ]);
+    expect(harness.exits).toStrictEqual([{ chatId: 'chat-1', status: { state: 'exited', exitCode: 0, signal: null } }]);
+  });
+
+  it('write, resize and close work under the new id and do nothing under the old one', async () => {
+    const harness = makeManager({ killGraceMs: 10_000 });
+    await harness.manager.open(open('__draft__'));
+    harness.manager.adopt('__draft__', 'chat-1');
+    const pty = ptyAt(harness, 0);
+
+    harness.manager.write('__draft__', 'nope\r');
+    harness.manager.resize('__draft__', 100, 30);
+    await harness.manager.close('__draft__');
+    expect(pty.writes).toStrictEqual([]);
+    expect(pty.resizes).toStrictEqual([]);
+    expect(pty.calls).toStrictEqual([]);
+
+    harness.manager.write('chat-1', 'ls\r');
+    harness.manager.resize('chat-1', 100, 30);
+    expect(pty.writes).toStrictEqual(['ls\r']);
+    expect(pty.resizes).toStrictEqual([{ cols: 100, rows: 30 }]);
+
+    const closed = harness.manager.close('chat-1');
+    expect(pty.calls).toStrictEqual(['SIGHUP']);
+    pty.emitExit(0, 1);
+    await closed;
+    expect(harness.manager.liveCount).toBe(0);
+  });
+
+  it('an open of the chat attaches with the same replay and seq; an open of the draft starts a fresh shell', async () => {
+    const harness = makeManager();
+    await harness.manager.open(open('__draft__', '/project'));
+    ptyAt(harness, 0).emitData('one\r\n');
+    ptyAt(harness, 0).emitData('two\r\n');
+    harness.manager.adopt('__draft__', 'chat-1');
+
+    const attached = await harness.manager.open(open('chat-1'));
+    expect(attached).toMatchObject({
+      created: false,
+      replay: 'one\r\ntwo\r\n',
+      seq: 2,
+      info: { chatId: 'chat-1', cwd: '/project' },
+    });
+
+    const fresh = await harness.manager.open(open('__draft__'));
+    expect(fresh).toMatchObject({ created: true, replay: '', seq: 0, info: { chatId: '__draft__' } });
+    expect(harness.spawns).toHaveLength(2);
+  });
+
+  it('refuses, changing nothing, when the chat already has a session', async () => {
+    const harness = makeManager();
+    await harness.manager.open(open('__draft__'));
+    await harness.manager.open(open('chat-1'));
+    ptyAt(harness, 0).emitData('draft\r\n');
+    ptyAt(harness, 1).emitData('chat\r\n');
+
+    expect(harness.manager.adopt('__draft__', 'chat-1')).toBe(false);
+    expect(harness.manager.list().map((info) => info.chatId)).toStrictEqual(['__draft__', 'chat-1']);
+    expect(await harness.manager.open(open('__draft__'))).toMatchObject({ created: false, replay: 'draft\r\n' });
+    expect(await harness.manager.open(open('chat-1'))).toMatchObject({ created: false, replay: 'chat\r\n' });
+    expect(harness.ptys.map((pty) => pty.calls)).toStrictEqual([[], []]);
+  });
+
+  it('refuses when there is nothing to move, including a draft shell that is being closed', async () => {
+    const harness = makeManager({ killGraceMs: 10_000 });
+    expect(harness.manager.adopt('__draft__', 'chat-1')).toBe(false);
+
+    await harness.manager.open(open('__draft__'));
+    const closing = harness.manager.close('__draft__');
+    expect(harness.manager.adopt('__draft__', 'chat-1')).toBe(false);
+    expect(harness.manager.has('chat-1')).toBe(false);
+    ptyAt(harness, 0).emitExit(0, 1);
+    await closing;
+  });
+
+  it('refuses moving a session onto its own id', async () => {
+    const harness = makeManager();
+    await harness.manager.open(open('__draft__'));
+    expect(harness.manager.adopt('__draft__', '__draft__')).toBe(false);
+    expect(harness.manager.has('__draft__')).toBe(true);
+  });
+
+  it('moves an exited session with its status and output', async () => {
+    const harness = makeManager();
+    await harness.manager.open(open('__draft__'));
+    ptyAt(harness, 0).emitData('bye\r\n');
+    ptyAt(harness, 0).emitExit(3);
+
+    expect(harness.manager.adopt('__draft__', 'chat-1')).toBe(true);
+    expect(await harness.manager.open(open('chat-1'))).toMatchObject({
+      created: false,
+      replay: 'bye\r\n',
+      info: { chatId: 'chat-1', status: { state: 'exited', exitCode: 3, signal: null } },
+    });
+  });
+
+  it('never spawns: the session and spawn counts are unchanged', async () => {
+    const harness = makeManager();
+    await harness.manager.open(open('__draft__'));
+    await harness.manager.open(open('other'));
+    const before = { live: harness.manager.liveCount, spawned: harness.manager.spawnCount };
+
+    harness.manager.adopt('__draft__', 'chat-1');
+    expect({ live: harness.manager.liveCount, spawned: harness.manager.spawnCount }).toStrictEqual(before);
+    expect(harness.spawns).toHaveLength(2);
   });
 });
 
@@ -514,6 +717,7 @@ describe('TerminalManager.close and lifetime', () => {
       },
       shell: () => SHELL,
       homeDir: () => '/home/me',
+      documentsDir: () => null,
       isDirectory: () => true,
       events: { data: () => {}, exit: () => {} },
       isOwnChild: (pid) => pid !== 7,

@@ -1,6 +1,6 @@
 import type { ModelInfo } from '@shared/types';
 import { Command } from 'cmdk';
-import { Check, ChevronDown } from 'lucide-react';
+import { Brain, Check, ChevronDown, KeyRound } from 'lucide-react';
 import { useState } from 'react';
 import { Button, Popover, PopoverContent, PopoverTrigger, Spinner } from '../../components/ui';
 import { formatContext } from './format';
@@ -51,14 +51,16 @@ export function ModelPicker({
 
   if (noKey) {
     return (
-      <Button variant="ghost" className={triggerClass} onClick={onAddKey}>
-        Add API key
+      <Button variant="ghost" className={triggerClass} onClick={onAddKey} aria-label="Add API key" title="Add API key">
+        <KeyRound aria-hidden="true" size={16} strokeWidth={1.75} className="@xl/toolbar:hidden" />
+        <span className="hidden @xl/toolbar:inline">Add API key</span>
       </Button>
     );
   }
 
   const current = models?.find((m) => m.id === value);
-  const label = loading && !models ? 'Loading models…' : modelName(current, value);
+  const loadingModels = loading && !models;
+  const label = loadingModels ? 'Loading models…' : modelName(current, value);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -69,8 +71,16 @@ export function ModelPicker({
           aria-label={`Model: ${label}`}
           title={current ? current.name : value}
         >
-          <span className="max-w-[220px] truncate">{label}</span>
-          {loading && !models ? <Spinner size={13} /> : <ChevronDown aria-hidden="true" size={14} strokeWidth={2} />}
+          {/* Narrow toolbar: icon only. Wide toolbar: the label and chevron (or spinner) below. */}
+          {loadingModels ? (
+            <Spinner size={13} className="@xl/toolbar:hidden" />
+          ) : (
+            <Brain aria-hidden="true" size={16} strokeWidth={1.75} className="@xl/toolbar:hidden" />
+          )}
+          <span className="hidden @xl/toolbar:inline-flex items-center gap-1.5">
+            <span className="max-w-[220px] truncate">{label}</span>
+            {loadingModels ? <Spinner size={13} /> : <ChevronDown aria-hidden="true" size={14} strokeWidth={2} />}
+          </span>
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" side="top" className="w-[min(420px,calc(100vw-32px))] overflow-hidden p-0">

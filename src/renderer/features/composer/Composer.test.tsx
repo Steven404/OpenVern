@@ -495,11 +495,11 @@ describe('effort picker (F3)', () => {
     expect(items[0]?.getAttribute('aria-checked')).toBe('true');
   });
 
-  it('the trigger title is "Reasoning effort" and the menu is described by the hint', async () => {
+  it('the trigger title is "Reasoning effort: Default" and the menu is described by the hint', async () => {
     const { api, chat } = await setup();
     renderWithProviders(<ReplyComposer chat={chat} />, { api });
     const trigger = await screen.findByRole('button', { name: /^Effort:/ });
-    expect(trigger.getAttribute('title')).toBe('Reasoning effort');
+    expect(trigger.getAttribute('title')).toBe('Reasoning effort: Default');
 
     openEffortMenu();
     const menu = await screen.findByRole('menu');
@@ -706,5 +706,52 @@ describe('effort picker per model (F3 follow-up)', () => {
     // The clamp is not a choice: it never writes lastEffort, and the stored setting is still High.
     expect(update.mock.calls.filter(([patch]) => 'lastEffort' in patch)).toEqual([]);
     expect((await api.getSettings()).lastEffort).toBe('high');
+  });
+});
+
+// The toolbar goes icon-only when narrow (CSS container queries). jsdom does not evaluate those, so these tests
+// pin the structure: each icon is in the trigger and hidden from assistive tech, and the name carries the text.
+describe('compact composer toolbar', () => {
+  it('the model trigger keeps its name and carries a Brain icon hidden from assistive tech', async () => {
+    const { api, chat } = await setup();
+    renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    const trigger = await screen.findByRole('button', { name: `Model: ${VISION}` });
+    const icon = trigger.querySelector('svg.lucide-brain');
+    expect(icon).not.toBeNull();
+    expect(icon?.getAttribute('aria-hidden')).toBe('true');
+  });
+
+  it('the effort trigger is named "Effort: <level>", carries a Dumbbell icon, and titles the full label', async () => {
+    const { api, chat } = await setup();
+    renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    await screen.findByRole('button', { name: /^Effort:/ });
+    await chooseEffort('High');
+    const trigger = await screen.findByRole('button', { name: 'Effort: High' });
+    expect(trigger.querySelector('svg.lucide-dumbbell')?.getAttribute('aria-hidden')).toBe('true');
+    expect(trigger.getAttribute('title')).toBe('Reasoning effort: High');
+
+    await chooseEffort(/^Default/);
+    const reset = await screen.findByRole('button', { name: 'Effort: Default' });
+    expect(reset.getAttribute('title')).toBe('Reasoning effort: Default');
+  });
+
+  it('the toolbar row is a non-wrapping container and the labels switch on its width', async () => {
+    const { api, chat } = await setup();
+    renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    const model = await screen.findByRole('button', { name: `Model: ${VISION}` });
+    const row = model.closest('.\\@container\\/toolbar');
+    expect(row).not.toBeNull();
+    expect(row?.classList.contains('flex-nowrap')).toBe(true);
+    expect(model.querySelector('svg.lucide-brain')?.getAttribute('class')).toContain('@xl/toolbar:hidden');
+    const effort = screen.getByRole('button', { name: /^Effort:/ });
+    expect(effort.querySelector('svg.lucide-dumbbell')?.getAttribute('class')).toContain('@xl/toolbar:hidden');
+    expect(effort.querySelector('span.hidden')?.className).toContain('@xl/toolbar:inline');
+  });
+
+  it('without a key the trigger is named "Add API key" and carries a KeyRound icon', async () => {
+    const { api, chat } = await setup({ keyConfigured: false });
+    renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    const trigger = await screen.findByRole('button', { name: 'Add API key' });
+    expect(trigger.querySelector('svg.lucide-key-round')).not.toBeNull();
   });
 });

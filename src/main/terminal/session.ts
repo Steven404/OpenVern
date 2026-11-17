@@ -52,7 +52,8 @@ export interface SessionReplay {
 }
 
 export class TerminalSession {
-  readonly chatId: Id;
+  /** Changes only through `rekey`, when the New Chat screen's session moves to its chat. */
+  private id: Id;
   private readonly pty: PtyProcess;
   private readonly shell: string;
   private readonly cwd: string;
@@ -84,7 +85,7 @@ export class TerminalSession {
   });
 
   constructor(options: SessionOptions) {
-    this.chatId = options.chatId;
+    this.id = options.chatId;
     this.pty = options.pty;
     this.shell = options.shell;
     this.cwd = options.cwd;
@@ -100,6 +101,19 @@ export class TerminalSession {
       this.pty.onData((data) => this.output(data)),
       this.pty.onExit(({ exitCode, signal }) => this.handleExit(exitCode, signal ?? null)),
     ];
+  }
+
+  /** The chat the session belongs to. Every data and exit event, and `info()`, carry it. */
+  get chatId(): Id {
+    return this.id;
+  }
+
+  /**
+   * Files the session under another chat (the manager moving the New Chat screen's session to its chat). Events
+   * sent from here on carry the new id; the replay, `seq` and the shell are unchanged.
+   */
+  rekey(chatId: Id): void {
+    this.id = chatId;
   }
 
   get pid(): number {

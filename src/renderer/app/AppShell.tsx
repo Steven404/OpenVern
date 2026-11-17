@@ -39,8 +39,10 @@ export function AppShell() {
   const panelOpen = useUiStore((s) => s.rightPanelOpen);
   const currentChatId = useCurrentChatId();
   const panelTarget = useRightPanelTarget();
-  // The terminal dock is the chat column's bottom strip (a chat's terminal; the new-chat screen has none).
-  const terminal = useTerminalDock(currentChatId);
+  // The terminal dock is the chat column's bottom strip: the chat's terminal, or on the New Chat screen the draft one
+  // (`DRAFT_CHAT_ID`, which `useRightPanelTarget` already gives there), moved into the chat on its first send.
+  const terminalKey = panelTarget?.chatId;
+  const terminal = useTerminalDock(terminalKey);
   const storedDockHeight = useTerminalUiStore((s) => s.dockHeight);
   useCloseDeletedTerminals();
 
@@ -102,7 +104,7 @@ export function AppShell() {
           </IconButton>
         )}
         <Outlet />
-        {currentChatId && terminal.open ? (
+        {terminalKey && terminal.open ? (
           // The fallback is the dock's own height, so loading the chunk does not jump the conversation.
           <Suspense
             fallback={
@@ -116,7 +118,7 @@ export function AppShell() {
               />
             }
           >
-            <TerminalDock key={currentChatId} chatId={currentChatId} />
+            <TerminalDock key={terminalKey} chatId={terminalKey} />
           </Suspense>
         ) : null}
       </main>

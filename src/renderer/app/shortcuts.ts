@@ -14,7 +14,10 @@ export interface GlobalShortcutHandlers {
   toggleSidebar(): void;
   /** `Ctrl+]`. Undefined where there is no right panel. */
   toggleRightPanel?: () => void;
-  /** `Ctrl+backtick`: show or hide the terminal dock. Undefined where there is no terminal (web build, new-chat screen). */
+  /**
+   * `Ctrl+backtick`: show or hide the terminal dock (a chat's, or the New Chat screen's draft one). Undefined where
+   * there is no terminal (the web build, or a screen that is neither).
+   */
   toggleTerminal?: () => void;
 }
 

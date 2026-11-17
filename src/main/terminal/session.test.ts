@@ -59,6 +59,24 @@ function makeSession(options: SessionOverrides = {}): Harness {
   return harness as Harness;
 }
 
+describe('TerminalSession.rekey', () => {
+  it('changes the chat id in info() and in every later data and exit event, keeping seq and replay', () => {
+    const { pty, session, data, exits } = makeSession();
+    pty.emitData('one');
+    session.rekey('chat-2');
+    expect(session.chatId).toBe('chat-2');
+    expect(session.info().chatId).toBe('chat-2');
+    pty.emitData('two');
+    pty.emitExit(0);
+    expect(data).toStrictEqual([
+      { chatId: 'chat-1', seq: 1, data: 'one' },
+      { chatId: 'chat-2', seq: 2, data: 'two' },
+    ]);
+    expect(exits).toStrictEqual([{ chatId: 'chat-2', status: { state: 'exited', exitCode: 0, signal: null } }]);
+    expect(session.replay()).toStrictEqual({ replay: 'onetwo', replayTruncated: false, seq: 2 });
+  });
+});
+
 describe('TerminalSession output', () => {
   it('forwards output unmodified, with seq increasing by exactly one per event', () => {
     const { pty, session, data } = makeSession();

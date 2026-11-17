@@ -1,7 +1,7 @@
 // Global UI state (owned by S6; seeded by the orchestrator so S7 can open modals without depending on S6 code).
 // S6 added the sidebar / expansion fields below but kept the original names.
 
-import { LAYOUT } from '@shared/constants';
+import { LAYOUT, LIST_RATIO_DEFAULT } from '@shared/constants';
 import type { Id } from '@shared/types';
 import { create } from 'zustand';
 
@@ -10,6 +10,7 @@ export const STORAGE_KEYS = {
   expandedProjects: 'openvern.expandedProjects',
   rightPanelOpen: 'openvern.rightPanelOpen',
   rightPanelWidth: 'openvern.rightPanelWidth',
+  diffListRatio: 'openvern.diffListRatio',
 } as const;
 
 /** Hard cap so a bad stored value cannot cover the window. The layout also clamps to the space beside the chat. */
@@ -24,6 +25,22 @@ function readPanelWidth(): number {
   const raw = readStorage(STORAGE_KEYS.rightPanelWidth);
   if (raw === null) return LAYOUT.panelFiles;
   return clampPanelWidth(Number(raw));
+}
+
+/**
+ * The store only sanitizes a list ratio: a non-finite value becomes the default, anything else is kept within [0, 1].
+ * It never clamps to the body height, which it cannot know. The Diff surface clamps to the measured body when it
+ * renders, so a small window never rewrites the stored preference.
+ */
+function sanitizeListRatio(ratio: number): number {
+  if (!Number.isFinite(ratio)) return LIST_RATIO_DEFAULT;
+  return Math.min(1, Math.max(0, ratio));
+}
+
+function readListRatio(): number {
+  const raw = readStorage(STORAGE_KEYS.diffListRatio);
+  if (raw === null) return LIST_RATIO_DEFAULT;
+  return sanitizeListRatio(Number(raw));
 }
 
 function readStorage(key: string): string | null {
@@ -45,7 +62,7 @@ function writeStorage(key: string, value: string): void {
 /** Persisted slice of the UI state. Exported so tests can simulate a reload. */
 export function readPersistedUi(): Pick<
   UiState,
-  'sidebarCollapsed' | 'expandedProjects' | 'rightPanelOpen' | 'rightPanelWidth'
+  'sidebarCollapsed' | 'expandedProjects' | 'rightPanelOpen' | 'rightPanelWidth' | 'diffListRatio'
 > {
   let expandedProjects: Record<Id, true> = {};
   try {
@@ -63,6 +80,7 @@ export function readPersistedUi(): Pick<
     expandedProjects,
     rightPanelOpen: readStorage(STORAGE_KEYS.rightPanelOpen) === '1',
     rightPanelWidth: readPanelWidth(),
+    diffListRatio: readListRatio(),
   };
 }
 
@@ -122,6 +140,16 @@ export interface UiState {
   /** Writes the current width to storage. */
   commitRightPanelWidth(): void;
 
+  /**
+   * Diff surface: the file list's height as a fraction of the body below its header. Global, not per chat. Persisted
+   * (`openvern.diffListRatio`). Kept raw (only sanitized to [0, 1]); the Diff surface clamps it to the measured body.
+   */
+  diffListRatio: number;
+  /** Sanitizes to [0, 1]. Writes storage unless `persist: false` (mid-drag); then call `commitDiffListRatio` once. */
+  setDiffListRatio(ratio: number, options?: { persist?: boolean }): void;
+  /** Writes the current ratio to storage. */
+  commitDiffListRatio(): void;
+
   /** Expanded project rows in the sidebar (D5), by project id. Persisted (`openvern.expandedProjects`). */
   expandedProjects: Record<Id, true>;
   toggleProject(id: Id): void;
@@ -164,6 +192,12 @@ export const useUiStore = create<UiState>()((set, get) => ({
     set({ rightPanelWidth });
   },
   commitRightPanelWidth: () => writeStorage(STORAGE_KEYS.rightPanelWidth, String(get().rightPanelWidth)),
+  setDiffListRatio: (ratio, options) => {
+    const diffListRatio = sanitizeListRatio(ratio);
+    if (options?.persist !== false) writeStorage(STORAGE_KEYS.diffListRatio, String(diffListRatio));
+    set({ diffListRatio });
+  },
+  commitDiffListRatio: () => writeStorage(STORAGE_KEYS.diffListRatio, String(get().diffListRatio)),
 
   toggleProject: (id) => (get().expandedProjects[id] ? get().collapseProject(id) : get().expandProject(id)),
   expandProject: (id) => {

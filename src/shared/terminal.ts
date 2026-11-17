@@ -55,10 +55,18 @@ export interface TerminalInfo {
   status: TerminalStatus;
 }
 
+/** Where a shell starts when no folder is given: home, or `~/Documents` (home when that is missing). */
+export type TerminalDefaultFolder = 'home' | 'documents';
+
 export interface TerminalOpenRequest {
   chatId: Id;
-  /** null = home */
+  /** null = `defaultFolder` */
   cwd: string | null;
+  /**
+   * Read only when `cwd` is null; absent = home. Main resolves the folder itself, so no path crosses IPC for it. Any
+   * other value, or one sent with a string `cwd`, makes main refuse the whole request.
+   */
+  defaultFolder?: TerminalDefaultFolder;
   cols: number;
   rows: number;
   /**
@@ -147,6 +155,12 @@ export interface TerminalBridge {
   resize(chatId: Id, cols: number, rows: number): void;
   /** Ends the shell and forgets the session. Resolves when there is none. */
   close(chatId: Id): Promise<void>;
+  /**
+   * Moves the New Chat screen's session (`draftId`, always `DRAFT_CHAT_ID`) to the chat just created from it, with its
+   * replay and `seq`. True when a session moved; false when there was nothing to move or `chatId` already has a
+   * session (then neither is touched). Never starts a shell. Later data and exit events carry `chatId`.
+   */
+  adopt(draftId: Id, chatId: Id): Promise<boolean>;
   onData(listener: (e: TerminalDataEvent) => void): () => void;
   onExit(listener: (e: TerminalExitEvent) => void): () => void;
 }
@@ -155,6 +169,7 @@ export const TERMINAL_IPC = {
   open: 'openvern:terminal:open', // invoke
   list: 'openvern:terminal:list', // invoke
   close: 'openvern:terminal:close', // invoke
+  adopt: 'openvern:terminal:adopt', // invoke
   write: 'openvern:terminal:write', // send
   resize: 'openvern:terminal:resize', // send
   data: 'openvern:terminal:data', // main → renderer

@@ -321,3 +321,86 @@ it('retries a failed recovery attach, and never replays a reply arriving after E
   expect(Terminal.last().writes).toEqual(writes);
   expect(open).toHaveBeenCalledTimes(2);
 });
+
+describe('renaming the draft terminal to its chat', () => {
+  it('keeps the same emulator and draws events that carry the new id, not the old one', async () => {
+    const entry = await registry.attach('__draft__', bridge, { cwd: null, defaultFolder: 'documents' });
+    expect(bridge.opens[0]).toMatchObject({ chatId: '__draft__', cwd: null, defaultFolder: 'documents' });
+    bridge.emitData('__draft__', 'before ');
+    expect(await bridge.adopt('__draft__', 'chat-1')).toBe(true);
+    expect(registry.rename('__draft__', 'chat-1')).toBe(true);
+
+    expect(entry.id).toBe('chat-1');
+    expect(entry.info.chatId).toBe('chat-1');
+    expect(registry.get('chat-1')).toBe(entry);
+    expect(registry.get('__draft__')).toBeUndefined();
+    bridge.emitData('chat-1', 'after', 2);
+    bridge.emitData('__draft__', 'stray', 3);
+    expect(Terminal.last().writes).toEqual(['before ', 'after']);
+    bridge.emitExit('chat-1', { state: 'exited', exitCode: 0, signal: null });
+    expect(entry.info.status.state).toBe('exited');
+    // Attaching under the chat id reuses it: no second open, no second emulator.
+    expect(await registry.attach('chat-1', bridge, { cwd: null })).toBe(entry);
+    expect(bridge.opens).toHaveLength(1);
+    expect(Terminal.instances).toHaveLength(1);
+  });
+
+  it('sends typing and resizes under the new id', async () => {
+    await registry.attach('__draft__', bridge, { cwd: '/project' });
+    await bridge.adopt('__draft__', 'chat-1');
+    registry.rename('__draft__', 'chat-1');
+    Terminal.last().type('ls\r');
+    Terminal.last().resize(100, 30);
+    expect(bridge.writes).toEqual([{ chatId: 'chat-1', data: 'ls\r' }]);
+    expect(bridge.resizes).toEqual([{ chatId: 'chat-1', cols: 100, rows: 30 }]);
+  });
+
+  it('answers a read under the new id, and none under the old one', async () => {
+    await registry.attach('__draft__', bridge, { cwd: null });
+    bridge.emitData('__draft__', 'pre-chat-41');
+    await bridge.adopt('__draft__', 'chat-1');
+    registry.rename('__draft__', 'chat-1');
+    expect(await registry.read('chat-1', bridge, {})).toMatchObject({
+      ok: true,
+      result: { text: 'pre-chat-41', info: { chatId: 'chat-1' } },
+    });
+    expect(await registry.read('__draft__', bridge, {})).toEqual({ ok: false, reason: 'no_terminal' });
+  });
+
+  it('binds a recovery reply to the id it asked for: a stray draft shell is ended, the moved one never', async () => {
+    vi.useFakeTimers();
+    const entry = await registry.attach('__draft__', bridge, { cwd: null });
+    vi.spyOn(entry.term, 'write').mockImplementationOnce(() => {
+      throw new Error('overflow');
+    });
+    bridge.emitData('__draft__', 'lost');
+    // Main moved the session; the recovery open under the draft id then starts a fresh shell there.
+    await bridge.adopt('__draft__', 'chat-1');
+    const release = bridge.holdOpens();
+    await vi.advanceTimersByTimeAsync(TERMINAL_RESYNC_PAUSE_MS);
+    expect(bridge.opens.at(-1)?.chatId).toBe('__draft__');
+    registry.rename('__draft__', 'chat-1');
+    release();
+    await vi.advanceTimersByTimeAsync(TERMINAL_RESYNC_PAUSE_MS * 2);
+
+    expect(bridge.closes).toEqual(['__draft__']);
+    expect(bridge.hasSession('chat-1')).toBe(true);
+    expect(entry.disposed).toBe(false);
+    expect(bridge.opens.at(-1)?.chatId).toBe('chat-1');
+    expect(entry.notice).toBeNull();
+  });
+
+  it('does nothing when there is no emulator to move', () => {
+    expect(registry.rename('__draft__', 'chat-1')).toBe(false);
+    expect(registry.get('chat-1')).toBeUndefined();
+  });
+
+  it('reports onCreated only for an attach that started a new shell', async () => {
+    const created: string[] = [];
+    await registry.attach('a', bridge, { cwd: null, onCreated: () => created.push('a') });
+    bridge.seed('b');
+    await registry.attach('b', bridge, { cwd: null, onCreated: () => created.push('b') });
+    await registry.attach('a', bridge, { cwd: null, onCreated: () => created.push('a again') });
+    expect(created).toEqual(['a']);
+  });
+});

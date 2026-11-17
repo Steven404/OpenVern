@@ -4,12 +4,13 @@
 // new-chat screen's state over to the chat created from it.
 
 import { useUiStore } from '@renderer/stores/ui';
+import { DRAFT_CHAT_ID } from '@shared/constants';
 import type { Id } from '@shared/types';
 import { create } from 'zustand';
 import type { SurfaceId } from './surfaces';
 
 /** Panel state for the new-chat screen, which has no chat id yet. */
-export const DRAFT_PANEL_CHAT_ID = '__draft__';
+export const DRAFT_PANEL_CHAT_ID = DRAFT_CHAT_ID;
 
 /** What the panel body shows. `launcher` is the "Open a panel" list. */
 export type PanelTarget = { type: 'launcher' } | { type: 'surface'; id: SurfaceId } | { type: 'file'; path: string };

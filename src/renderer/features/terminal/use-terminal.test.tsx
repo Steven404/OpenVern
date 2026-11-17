@@ -335,3 +335,37 @@ describe('useTerminal: input, resize and unmount', () => {
     expect(bridge.hasSession(CHAT)).toBe(true);
   });
 });
+
+/** The dock for one project's folder: `onCreated` records that project, as the New Chat dock does. */
+function Folder({
+  cwd,
+  onCreated,
+  bridge,
+  into,
+}: {
+  cwd: string;
+  onCreated: () => void;
+  bridge: FakeTerminalBridge;
+  into: { current: TerminalHandle | null };
+}) {
+  const terminal = useTerminal(CHAT, { cwd, onCreated, bridge });
+  into.current = terminal;
+  return <div ref={terminal.containerRef} />;
+}
+
+describe('useTerminal: the shell a new callback claims', () => {
+  it('reports a new shell to the callback rendered with the folder it started in, not a later one', async () => {
+    const bridge = new FakeTerminalBridge();
+    const into: { current: TerminalHandle | null } = { current: null };
+    const created: string[] = [];
+    const release = bridge.holdOpens();
+    const view = render(<Folder cwd="/a" onCreated={() => created.push('a')} bridge={bridge} into={into} />);
+    // The project changes while the shell started in /a is still opening.
+    view.rerender(<Folder cwd="/b" onCreated={() => created.push('b')} bridge={bridge} into={into} />);
+    release();
+    await waitFor(() => expect(into.current?.phase).toBe('running'));
+
+    expect(bridge.opens.map((open) => open.cwd)).toEqual(['/a']);
+    expect(created).toEqual(['a']);
+  });
+});

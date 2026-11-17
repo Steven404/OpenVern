@@ -2,10 +2,13 @@
 // chat, with a 32 px header, xterm below it, and a drag handle on the top edge. Height lives in `terminal-store.ts`.
 //
 // The dock never owns the shell. It mounts an xterm instance for the chat and detaches it on unmount; the session in
-// main keeps running until End (`close`) or the chat is deleted.
+// main keeps running until End (`close`) or the chat is deleted. On the New Chat screen the dock shows the draft
+// terminal (`DRAFT_CHAT_ID`), which moves into the chat on its first send (`./adopt-draft.ts`).
 
 import { useChats, useProjects } from '@renderer/app/queries';
 import { Button, IconButton } from '@renderer/components/ui';
+import { NEW_CHAT_PROJECT_PARAM } from '@renderer/lib/routes';
+import { DRAFT_CHAT_ID } from '@shared/constants';
 import { TERMINAL, type TerminalBridge, type TerminalInfo } from '@shared/terminal';
 import type { Id } from '@shared/types';
 import { ChevronDown, MessageSquarePlus, Power } from 'lucide-react';
@@ -18,6 +21,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { useSearchParams } from 'react-router';
 import { focusComposer } from '../composer/focus';
 import { insertComposerText } from '../composer/text-sink';
 import { getTerminalBridge } from './bridge';
@@ -66,11 +70,41 @@ export function availableDockHeight(section: HTMLElement | null): number | null 
   return Math.max(TERMINAL.dockMinHeight, Math.floor(columnHeight - usedAbove - DOCK_CONVERSATION_MIN_HEIGHT));
 }
 
+/** Shown under the New Chat screen's terminal once the project chip no longer matches the folder it started in. */
+export const DRAFT_FOLDER_NOTICE = 'Started in another folder. End it to open one in this folder.';
+
+/** Where the New Chat screen's terminal starts, or that the dock must wait before it can tell. */
+export type DraftTerminalTarget =
+  | { state: 'waiting' }
+  | { state: 'ready'; projectId: Id | null; cwd: string | null; defaultFolder?: 'documents' };
+
+/**
+ * The New Chat screen's terminal: the project in `?project=` starts it in that project's folder; no project starts it
+ * in Documents, which main resolves (the renderer never sends that path). A project param waits for the projects list,
+ * and for one refetch when the list doesn't have it (a project created a moment ago), so the shell never opens in
+ * Documents for a project that is about to appear. Only an id still missing after that counts as no project, as on
+ * the chip (`resolveNewChatProject`).
+ */
+export function draftTerminalTarget(
+  param: string | null,
+  projects: readonly { id: Id; rootPath: string }[] | undefined,
+  refetchedMissing: boolean,
+): DraftTerminalTarget {
+  const documents: DraftTerminalTarget = { state: 'ready', projectId: null, cwd: null, defaultFolder: 'documents' };
+  if (param === null) return documents;
+  if (projects === undefined) return { state: 'waiting' };
+  const project = projects.find((p) => p.id === param);
+  if (project) return { state: 'ready', projectId: project.id, cwd: project.rootPath };
+  return refetchedMissing ? documents : { state: 'waiting' };
+}
+
 export function TerminalDock({ chatId }: { chatId: Id }) {
+  return chatId === DRAFT_CHAT_ID ? <DraftTerminalDock /> : <ChatTerminalDock chatId={chatId} />;
+}
+
+/** A chat's dock: the shell starts in the chat's project folder, or home. */
+function ChatTerminalDock({ chatId }: { chatId: Id }) {
   const bridge = getTerminalBridge();
-  const storedHeight = useTerminalUiStore((s) => s.dockHeight);
-  const setDockHeight = useTerminalUiStore((s) => s.setDockHeight);
-  const commitDockHeight = useTerminalUiStore((s) => s.commitDockHeight);
   const closeDock = useTerminalUiStore((s) => s.closeDock);
 
   const chats = useChats();
@@ -84,6 +118,123 @@ export function TerminalDock({ chatId }: { chatId: Id }) {
   const needsProject = typeof projectId === 'string';
   const projectFailed = needsProject && projects.isError && projects.data === undefined;
   const ready = projectId !== undefined && (!needsProject || projects.data !== undefined);
+
+  const hide = useCallback(() => {
+    closeDock(chatId);
+    focusComposer();
+  }, [chatId, closeDock]);
+
+  // Without the preload bridge there is no shell to show (the web build, or Electron before T1 lands).
+  if (!bridge) return null;
+
+  let body: ReactNode;
+  if (chatMissing) {
+    body = (
+      <DockNote
+        message="This chat doesn't exist or was deleted, so there is no terminal to open."
+        onRetry={() => void chats.refetch()}
+        onHide={hide}
+      />
+    );
+  } else if (chats.isError && chats.data === undefined) {
+    body = (
+      <DockNote
+        message={dockLoadError("Couldn't load your chats.", chats.error)}
+        onRetry={() => void chats.refetch()}
+        onHide={hide}
+      />
+    );
+  } else if (projectFailed) {
+    body = (
+      <DockNote
+        message={dockLoadError("Couldn't load the project folder.", projects.error)}
+        onRetry={() => void projects.refetch()}
+        onHide={hide}
+      />
+    );
+  } else if (ready) {
+    const cwd = projectId === null ? null : (projects.data?.find((p) => p.id === projectId)?.rootPath ?? null);
+    body = <TerminalPanel chatId={chatId} cwd={cwd} bridge={bridge} />;
+  } else {
+    body = <DockNote message="Loading the terminal…" busy onHide={hide} />;
+  }
+
+  return <DockFrame>{body}</DockFrame>;
+}
+
+/**
+ * The New Chat screen's dock (`DRAFT_CHAT_ID`). There is no chat to look up yet: the folder comes from the project
+ * chip (`?project=`). The shell keeps the folder it started in when the chip changes; the dock then says so.
+ */
+function DraftTerminalDock() {
+  const chatId = DRAFT_CHAT_ID;
+  const bridge = getTerminalBridge();
+  const closeDock = useTerminalUiStore((s) => s.closeDock);
+  const draftProjectId = useTerminalUiStore((s) => s.draftProjectId);
+  const setDraftProject = useTerminalUiStore((s) => s.setDraftProject);
+  const [params] = useSearchParams();
+  const param = params.get(NEW_CHAT_PROJECT_PARAM);
+  const projects = useProjects();
+
+  // A project param the loaded list lacks gets one refetch of its own before it counts as no project. Tracked by the
+  // param whose refetch has finished, so a refetch still in flight keeps the dock waiting.
+  const [refetchedFor, setRefetchedFor] = useState<string | null>(null);
+  const missing = param !== null && projects.data !== undefined && !projects.data.some((p) => p.id === param);
+  const { refetch } = projects;
+  useEffect(() => {
+    if (!missing || param === null || refetchedFor === param) return;
+    let cancelled = false;
+    void refetch().finally(() => {
+      if (!cancelled) setRefetchedFor(param);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [missing, param, refetchedFor, refetch]);
+
+  const target = draftTerminalTarget(param, projects.data, refetchedFor === param);
+  const projectFailed = param !== null && projects.isError && projects.data === undefined;
+
+  const hide = useCallback(() => {
+    closeDock(DRAFT_CHAT_ID);
+    focusComposer();
+  }, [closeDock]);
+
+  if (!bridge) return null;
+
+  let body: ReactNode;
+  if (projectFailed) {
+    body = (
+      <DockNote
+        message={dockLoadError("Couldn't load the project folder.", projects.error)}
+        onRetry={() => void projects.refetch()}
+        onHide={hide}
+      />
+    );
+  } else if (target.state === 'ready') {
+    const { projectId } = target;
+    body = (
+      <TerminalPanel
+        chatId={chatId}
+        cwd={target.cwd}
+        defaultFolder={target.defaultFolder}
+        bridge={bridge}
+        onCreated={() => setDraftProject(projectId)}
+        folderNotice={draftProjectId !== undefined && draftProjectId !== projectId ? DRAFT_FOLDER_NOTICE : null}
+      />
+    );
+  } else {
+    body = <DockNote message="Loading the terminal…" busy onHide={hide} />;
+  }
+
+  return <DockFrame>{body}</DockFrame>;
+}
+
+/** The dock's frame: the section with its measured height, and the drag handle on its top edge. */
+function DockFrame({ children }: { children: ReactNode }) {
+  const storedHeight = useTerminalUiStore((s) => s.dockHeight);
+  const setDockHeight = useTerminalUiStore((s) => s.setDockHeight);
+  const commitDockHeight = useTerminalUiStore((s) => s.commitDockHeight);
 
   const sectionRef = useRef<HTMLElement | null>(null);
   const [spaceLimit, setSpaceLimit] = useState<number | null>(null);
@@ -124,6 +275,8 @@ export function TerminalDock({ chatId }: { chatId: Id }) {
   const onResizeStart = (event: ReactPointerEvent) => {
     if (event.button !== 0) return;
     event.preventDefault();
+    // preventDefault also cancels the click focus, so focus the handle ourselves: the arrow keys then resize it.
+    (event.currentTarget as HTMLElement).focus({ preventScroll: true });
     stopDrag.current?.();
     const startY = event.clientY;
     // Drag what is on screen, not the stored preference the free-height clamp may have cut down.
@@ -168,46 +321,6 @@ export function TerminalDock({ chatId }: { chatId: Id }) {
     }
   };
 
-  const hide = useCallback(() => {
-    closeDock(chatId);
-    focusComposer();
-  }, [chatId, closeDock]);
-
-  // Without the preload bridge there is no shell to show (the web build, or Electron before T1 lands).
-  if (!bridge) return null;
-
-  let body: ReactNode;
-  if (chatMissing) {
-    body = (
-      <DockNote
-        message="This chat doesn't exist or was deleted, so there is no terminal to open."
-        onRetry={() => void chats.refetch()}
-        onHide={hide}
-      />
-    );
-  } else if (chats.isError && chats.data === undefined) {
-    body = (
-      <DockNote
-        message={dockLoadError("Couldn't load your chats.", chats.error)}
-        onRetry={() => void chats.refetch()}
-        onHide={hide}
-      />
-    );
-  } else if (projectFailed) {
-    body = (
-      <DockNote
-        message={dockLoadError("Couldn't load the project folder.", projects.error)}
-        onRetry={() => void projects.refetch()}
-        onHide={hide}
-      />
-    );
-  } else if (ready) {
-    const cwd = projectId === null ? null : (projects.data?.find((p) => p.id === projectId)?.rootPath ?? null);
-    body = <TerminalPanel chatId={chatId} cwd={cwd} bridge={bridge} />;
-  } else {
-    body = <DockNote message="Loading the terminal…" busy onHide={hide} />;
-  }
-
   return (
     <section
       ref={sectionRef}
@@ -228,7 +341,7 @@ export function TerminalDock({ chatId }: { chatId: Id }) {
         onKeyDown={onResizeKey}
         className="absolute top-0 left-0 z-20 m-0 h-1.5 w-full cursor-row-resize touch-none border-0 bg-transparent hover:bg-border-control focus-visible:bg-border-control"
       />
-      {body}
+      {children}
     </section>
   );
 }
@@ -277,8 +390,24 @@ function DockNote({
   );
 }
 
-function TerminalPanel({ chatId, cwd, bridge }: { chatId: Id; cwd: string | null; bridge: TerminalBridge }) {
-  const terminal = useTerminal(chatId, { cwd, bridge });
+function TerminalPanel({
+  chatId,
+  cwd,
+  defaultFolder,
+  bridge,
+  onCreated,
+  folderNotice = null,
+}: {
+  chatId: Id;
+  cwd: string | null;
+  defaultFolder?: 'documents';
+  bridge: TerminalBridge;
+  /** Called when opening started a new shell. */
+  onCreated?: () => void;
+  /** A line under the terminal about its folder (the New Chat screen's chip changed after it started). */
+  folderNotice?: string | null;
+}) {
+  const terminal = useTerminal(chatId, { cwd, defaultFolder, bridge, onCreated });
   const closeDock = useTerminalUiStore((s) => s.closeDock);
   const focusRequested = useTerminalUiStore((s) => s.focusRequests[chatId] === true);
   const { phase, info, error, hasSelection, containerRef, notice } = terminal;
@@ -351,6 +480,14 @@ function TerminalPanel({ chatId, cwd, bridge }: { chatId: Id; cwd: string | null
             className="m-0 shrink-0 border-t border-border-header px-3 py-1.5 text-[12.5px] text-text-secondary"
           >
             {notice}
+          </p>
+        ) : null}
+        {folderNotice ? (
+          <p
+            role="status"
+            className="m-0 shrink-0 border-t border-border-header px-3 py-1.5 text-[12.5px] text-text-secondary"
+          >
+            {folderNotice}
           </p>
         ) : null}
         {phase === 'error' ? (
