@@ -117,6 +117,16 @@ describe('terminal dock: opening and the header', () => {
     fireEvent.keyDown(handle, { key: 'ArrowDown', shiftKey: true });
     expect(Number(handle.getAttribute('aria-valuenow'))).toBe(Math.max(TERMINAL.dockMinHeight, before + 16 - 48));
   });
+
+  it('pressing the height handle focuses it, so the arrow keys resize right after a click', async () => {
+    await renderChat();
+    await openDock();
+    await waitFor(() => expect(document.activeElement).toBe(Terminal.last().textarea));
+    const handle = screen.getByRole('separator', { name: 'Resize terminal' });
+    fireEvent.pointerDown(handle, { button: 0, clientY: 300 });
+    fireEvent.pointerUp(window, { clientY: 300 });
+    expect(document.activeElement).toBe(handle);
+  });
 });
 
 describe('terminal dock: Hide, End and the session', () => {

@@ -275,6 +275,8 @@ function DockFrame({ children }: { children: ReactNode }) {
   const onResizeStart = (event: ReactPointerEvent) => {
     if (event.button !== 0) return;
     event.preventDefault();
+    // preventDefault also cancels the click focus, so focus the handle ourselves: the arrow keys then resize it.
+    (event.currentTarget as HTMLElement).focus({ preventScroll: true });
     stopDrag.current?.();
     const startY = event.clientY;
     // Drag what is on screen, not the stored preference the free-height clamp may have cut down.

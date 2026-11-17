@@ -425,7 +425,8 @@ describe('panel width', () => {
     expect(window.localStorage.getItem(STORAGE_KEYS.rightPanelWidth)).toBe(String(LAYOUT.panelFiles + 100));
     expect(readPersistedUi().rightPanelWidth).toBe(LAYOUT.panelFiles + 100);
 
-    handle.focus();
+    // Pressing the handle focuses it, so the arrow keys resize right after a drag.
+    expect(document.activeElement).toBe(handle);
     fireEvent.keyDown(handle, { key: 'ArrowRight' });
     expect(aside.style.width).toBe(`${LAYOUT.panelFiles + 100 - 16}px`);
   });
