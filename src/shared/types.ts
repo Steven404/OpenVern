@@ -13,6 +13,8 @@ export interface Project {
 }
 export interface ProjectListItem extends Project {
   chatCount: number;
+  /** A `.git` directory or file exists in the project folder or one of its ancestors. Computed on every list. */
+  inGitRepo: boolean;
 }
 
 /**
@@ -37,6 +39,9 @@ export interface ChatUsage {
  */
 export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
+/** How the model's edits reach the disk in a chat. New chats start in 'review'. A change applies from the next turn. */
+export type EditMode = 'review' | 'auto';
+
 export interface ChatSummary {
   id: Id;
   projectId: Id | null; // null = loose chat ("Chats" section), no tools
@@ -49,6 +54,8 @@ export interface ChatSummary {
   usage: ChatUsage;
   /** Effort of the latest turn; null = the model's own setting (F3). */
   effort: ReasoningEffort | null;
+  /** 'auto': the edit tools write to disk as they run. The agent reads it once, at the start of each turn. */
+  editMode: EditMode;
 }
 export interface Chat extends ChatSummary {
   messages: Message[];
@@ -187,7 +194,20 @@ export interface PendingChanges {
   totalDel: number;
 }
 
-export type ApplyConflictReason = 'changed_on_disk' | 'deleted_on_disk' | 'exists_on_disk' | 'blocked';
+export type ApplyConflictReason = 'changed_on_disk' | 'deleted_on_disk' | 'exists_on_disk' | 'blocked' | 'too_large';
+
+export type UndoSkipReason =
+  | 'changed_since' // the file is no longer byte-identical to what the turn left
+  | 'blocked' // the sandbox refuses the path now, or the write failed
+  | 'unavailable'; // the stored original is missing
+
+export interface BatchUndo {
+  at: IsoDate;
+  /** 'user': the Undo button. 'retry': a retry of the turn undid it first. */
+  by: 'user' | 'retry';
+  restored: string[]; // sorted paths
+  skipped: { path: string; reason: UndoSkipReason }[];
+}
 
 export interface AppliedBatch {
   id: Id;
@@ -197,11 +217,23 @@ export interface AppliedBatch {
   rejectedHunks: number;
   skippedHunks: number; // undecided at apply time
   conflicts: { path: string; reason: ApplyConflictReason }[];
+  /** 'review': the user applied proposals. 'auto': what the model wrote during one turn in Auto. */
+  source: 'review' | 'auto';
+  /** Auto: the user message that started the turn. */
+  turnId?: Id;
+  /** Auto: not undone, within the kept turns, and its project is still the chat's project. Always false for review. */
+  undoable: boolean;
+  undo?: BatchUndo;
 }
+// For an auto batch: `appliedAt` = time of its latest write; `messageId` = the assistant message of its first write
+// (places the card in the turn); `written` = one FileChange per file, from before the turn's first write to after its
+// last; `rejectedHunks` / `skippedHunks` = 0; `conflicts` = [] (refusals are tool errors, not conflicts).
 
 export interface ChatChanges {
   pending: PendingChanges | null;
   applied: AppliedBatch[]; // oldest first
+  /** Bumps whenever this chat changed project files: apply, auto write, undo. The Files panel refreshes on it. */
+  diskSeq: number;
 }
 
 /** The light form used by stream events and the card (no hunks). */

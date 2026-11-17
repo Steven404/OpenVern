@@ -1,7 +1,7 @@
 // Tool interface (plan §4.7). Implementations live in S3.
 
 import type { TerminalReadAnswer, TerminalReadRequest } from '@shared/terminal';
-import type { ChangeKind, ChangeSummary, FileChange } from '@shared/types';
+import type { ChangeKind, ChangeSummary, EditMode, FileChange, Id } from '@shared/types';
 import type { ToolSpec } from '../providers/types';
 
 /** What every tool gets, in any chat. Tools that need nothing from a project (`read_terminal`) take only this. */
@@ -20,12 +20,35 @@ export interface ToolContext extends ChatToolContext {
   changes?: ToolChanges;
 }
 
+export type EditToolName = 'edit_file' | 'write_file' | 'delete_file';
+
 export interface ToolChanges {
+  /** The edit mode of the running turn. */
+  readonly mode: EditMode;
   /** null = not staged, read the disk. */
   read(relPath: string): Promise<{ kind: 'staged'; content: string } | { kind: 'deleted' } | null>;
   staged(): Promise<{ path: string; kind: ChangeKind }[]>;
-  /** content null = delete. Validates (plan §3.3) and returns the new summary (null when the set became empty). */
+  /**
+   * Review only (throws in Auto). content null = delete. Validates the path and content, refuses a change whose diff would be
+   * too large to review, and returns the new summary (null when the set became empty).
+   */
   stage(relPath: string, content: string | null): Promise<{ file: FileChange | null; summary: ChangeSummary | null }>;
+  /**
+   * Auto only (throws in Review). Writes now, after the sandbox, race and stale-read checks; throws `CoreError` with a
+   * model-facing message when refused. `baseHash`: sha256 of the bytes the tool based the change on ('' = the file
+   * did not exist). `file`: this write's own diff (null = no change). `batchId`: the turn's auto batch (null when
+   * nothing changed).
+   */
+  write(
+    relPath: string,
+    content: string | null,
+    opts: { tool: EditToolName; baseHash: string },
+  ): Promise<{ file: FileChange | null; batchId: Id | null }>;
+  /**
+   * `read_file` returned this file from disk: remember these bytes as what the chat last saw of it. `relPath` is the
+   * path as the sandbox resolved it (its on-disk spelling).
+   */
+  noteRead(relPath: string, bytes: Uint8Array): void;
 }
 
 export interface ToolResult {

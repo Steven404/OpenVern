@@ -1,7 +1,7 @@
 // zod schemas for the files in plan §3.5. Message-level validation is deliberately loose so that a small
 // shape drift never makes a whole chat unreadable; the TypeScript types are the real contract.
 
-import { REASONING_EFFORTS } from '@shared/constants';
+import { EDIT_MODES, REASONING_EFFORTS } from '@shared/constants';
 import type { AssistantMessage, Chat, ChatSummary, ChatUsage, Message, Project, Usage } from '@shared/types';
 import { z } from 'zod';
 import type { StoredAttachment } from '../types';
@@ -122,6 +122,9 @@ const chatSummaryShape = {
   usage: usageSchema.catch(() => emptyUsage()),
   // F3: `.catch(null)` keeps a malformed effort from quarantining the whole chat; missing = Default.
   effort: reasoningEffortSchema.catch(null),
+  // `.catch`: a chat written before edit modes existed, or a malformed value, loads as Review (the safe mode)
+  // instead of quarantining the file.
+  editMode: z.enum(EDIT_MODES).catch('review'),
 };
 const chatSummarySchema: z.ZodType<ChatSummary> = z.object(chatSummaryShape);
 export const chatIndexSchema = z.object({
@@ -175,5 +178,6 @@ export function summarize(chat: ChatRecord): ChatSummary {
     archived: chat.archived,
     usage: withUsage(chat).usage,
     effort: chat.effort,
+    editMode: chat.editMode,
   };
 }

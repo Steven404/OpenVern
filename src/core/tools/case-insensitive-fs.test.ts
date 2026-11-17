@@ -19,8 +19,9 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import type { HunkDecision, PendingChanges } from '@shared/types';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { acceptAll, createChangesService } from '../changes';
+import { createChangesService } from '../changes';
 import { defaultDataDirRoots } from '../index';
 import { createProjectFilesService } from '../project-files';
 import { isHomeDeniedRel } from '../project-files/home-deny';
@@ -36,6 +37,13 @@ import {
 } from './sandbox';
 import type { ToolContext } from './types';
 import { walk } from './walk';
+
+/** Accepts every hunk of a pending set (the decision map the Apply button sends with everything accepted). */
+function acceptAll(pending: Pick<PendingChanges, 'files'>): Record<string, Record<string, HunkDecision>> {
+  const out: Record<string, Record<string, HunkDecision>> = {};
+  for (const f of pending.files) out[f.path] = Object.fromEntries(f.hunks.map((h) => [h.id, 'accepted' as const]));
+  return out;
+}
 
 // Removes every dir made by `makeStorage` / `makeTempDir` after each test (they live outside `root`).
 cleanupTempDirs();
@@ -105,7 +113,14 @@ async function realContext(projectRoot: string, label: string, sandbox?: Sandbox
   const dataDir = path.join(root, `${label}-data`);
   await mkdir(dataDir, { recursive: true });
   const svc = createChangesService({ dataDir, sandbox });
-  const changes = svc.tools({ chatId: label, projectRoot, messageId: 'm' });
+  const changes = svc.tools({
+    chatId: label,
+    projectId: 'p',
+    projectRoot,
+    messageId: 'm',
+    turnId: 'u',
+    mode: 'review',
+  });
   const ctx: ToolContext = { projectRoot, signal: new AbortController().signal, changes };
   return { svc, changes, ctx };
 }
@@ -308,7 +323,14 @@ describe('T3 a not-yet-existing denied root (B13)', () => {
     const denied = path.join(proj, 'apply-data');
     // Staged while the root was not denied, so this test reaches apply even once staging rejects the variant.
     const open = createChangesService({ dataDir });
-    const openTools = open.tools({ chatId: 'apply', projectRoot: proj, messageId: 'm' });
+    const openTools = open.tools({
+      chatId: 'apply',
+      projectId: 'p',
+      projectRoot: proj,
+      messageId: 'm',
+      turnId: 'u',
+      mode: 'review',
+    });
     await openTools.stage('APPLY-DATA/new.txt', 'dummy\n');
     await openTools.stage('apply-ok.txt', 'control\n');
     const pending = (await open.get('apply')).pending;
@@ -711,7 +733,14 @@ async function exerciseDeniedRoot(sc: DeniedScenario): Promise<void> {
   const dataDir = path.join(root, `${b}-data`);
   await mkdir(dataDir);
   const open = createChangesService({ dataDir });
-  const openTools = open.tools({ chatId: b, projectRoot: sc.projectRoot, messageId: 'm' });
+  const openTools = open.tools({
+    chatId: b,
+    projectId: 'p',
+    projectRoot: sc.projectRoot,
+    messageId: 'm',
+    turnId: 'u',
+    mode: 'review',
+  });
   await openTools.stage(sc.target, 'owned dummy\n');
   await openTools.stage('control-after.txt', 'control\n');
   const late = (await open.get(b)).pending;

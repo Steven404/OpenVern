@@ -54,6 +54,24 @@ async function resolveProjectRoot(
   }
 }
 
+/**
+ * True when a `.git` directory or file (worktrees and submodules use a file) exists in `root` or one of its ancestors.
+ * Any error on the way counts as "not found" for that folder, so an unreadable ancestor never throws.
+ */
+async function inGitRepo(root: string): Promise<boolean> {
+  let dir = root;
+  for (;;) {
+    const found = await fs.lstat(path.join(dir, '.git')).then(
+      () => true,
+      () => false,
+    );
+    if (found) return true;
+    const parent = path.dirname(dir);
+    if (parent === dir) return false;
+    dir = parent;
+  }
+}
+
 const byName = (a: Project, b: Project) =>
   a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }) || a.createdAt.localeCompare(b.createdAt);
 
@@ -77,7 +95,10 @@ export function createProjectsService(opts: ProjectsServiceOptions): ProjectsSer
       for (const chat of chats) {
         if (chat.projectId) counts.set(chat.projectId, (counts.get(chat.projectId) ?? 0) + 1);
       }
-      return projects.sort(byName).map((p) => ({ ...p, chatCount: counts.get(p.id) ?? 0 }));
+      const sorted = projects.sort(byName);
+      // Computed on every list (never stored): a folder can gain or lose its repository at any time.
+      const git = await Promise.all(sorted.map((p) => inGitRepo(p.rootPath)));
+      return sorted.map((p, i) => ({ ...p, chatCount: counts.get(p.id) ?? 0, inGitRepo: git[i] ?? false }));
     },
 
     get: find,

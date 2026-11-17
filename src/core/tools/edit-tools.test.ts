@@ -26,7 +26,14 @@ beforeEach(() => {
   ctx = {
     projectRoot: fx.root,
     signal: new AbortController().signal,
-    changes: changesSvc.tools({ chatId: 'c1', projectRoot: fx.root, messageId: 'm1' }),
+    changes: changesSvc.tools({
+      chatId: 'c1',
+      projectId: 'p',
+      projectRoot: fx.root,
+      messageId: 'm1',
+      turnId: 'u',
+      mode: 'review',
+    }),
   };
 });
 
@@ -247,11 +254,16 @@ describe('sandbox (all edit tools)', () => {
     const failing: ToolContext = {
       ...ctx,
       changes: {
+        mode: 'review',
         read: async () => null,
         staged: async () => [],
         stage: async () => {
           throw new CoreError('invalid_request', 'Too many proposed files.');
         },
+        write: async () => {
+          throw new Error('not used');
+        },
+        noteRead: () => {},
       },
     };
     const r = await writeFile({ path: 'a.txt', content: 'x' }, failing);

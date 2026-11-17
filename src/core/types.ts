@@ -2,14 +2,16 @@
 // Service signatures were locked by the V0 orchestrator before wave 2 so S1/S2/S4/S5 build against the
 // same shapes. Errors: services throw `CoreError` (./errors.ts); providers throw `ProviderError`.
 
-import type { ApplyChangesResponse } from '@shared/api';
+import type { ApplyChangesResponse, UndoBatchResponse } from '@shared/api';
 import type { AgentEvent } from '@shared/events';
 import type { TerminalReadAnswer, TerminalReadRequest } from '@shared/terminal';
 import type {
   AttachmentRef,
+  BatchUndo,
   Chat,
   ChatChanges,
   ChatSummary,
+  EditMode,
   HomeFileListing,
   HunkDecision,
   Id,
@@ -75,11 +77,11 @@ export interface ChatsService {
   list(): Promise<ChatSummary[]>;
   /** Throws `CoreError('not_found')`. */
   get(id: Id): Promise<Chat>;
-  /** Title `NEW_CHAT_TITLE`, no messages. Throws `not_found` if `projectId` is unknown. */
-  create(input: { projectId: Id | null; model: string }): Promise<Chat>;
+  /** Title `NEW_CHAT_TITLE`, no messages, `editMode` default 'review'. Throws `not_found` if `projectId` is unknown. */
+  create(input: { projectId: Id | null; model: string; editMode?: EditMode }): Promise<Chat>;
   /**
-   * Bumps `updatedAt` only when `model` or `effort` changes (renames, moves and archive changes don't reorder the
-   * sidebar). `archived` applies to any chat, in a project or not. Only `archived` changes the flag: moving a chat
+   * Bumps `updatedAt` only when `model` or `effort` changes (renames, moves, archive and edit-mode changes don't
+   * reorder the sidebar). `archived` applies to any chat, in a project or not. Only `archived` changes the flag: moving a chat
    * between projects, or to and from `projectId: null`, keeps it.
    */
   update(
@@ -90,8 +92,14 @@ export interface ChatsService {
       model?: string;
       archived?: boolean;
       effort?: ReasoningEffort | null;
+      editMode?: EditMode;
     },
   ): Promise<ChatSummary>;
+  /**
+   * Replaces one user message's `changesNote` (`undefined` removes it); a retry adds what it couldn't undo. Doesn't
+   * bump `updatedAt`. Throws `not_found` when the chat has no user message with that id.
+   */
+  setChangesNote(chatId: Id, messageId: Id, note: string | undefined): Promise<void>;
   /** Deletes the chat file and its index entry (attachments are removed by the caller). */
   remove(id: Id): Promise<void>;
   /** Appends and bumps `updatedAt`. Returns the new summary. */
@@ -190,14 +198,28 @@ export interface Core {
 
 export interface ChangesService {
   get(chatId: Id): Promise<ChatChanges>;
-  /** One per assistant step: stages are attributed to `messageId`. */
-  tools(input: { chatId: Id; projectRoot: string; messageId: Id }): ToolChanges;
+  /**
+   * One per assistant step: stages and writes are attributed to `messageId`. `turnId` = the user message that started
+   * the turn; `mode` = the turn's edit mode (picks `stage` or `write`).
+   */
+  tools(input: {
+    chatId: Id;
+    projectId: Id;
+    projectRoot: string;
+    messageId: Id;
+    turnId: Id;
+    mode: EditMode;
+  }): ToolChanges;
   /** At a new user message: remember the pending set so a retry of this turn can restore it. */
   snapshot(chatId: Id, userMessageId: Id): Promise<void>;
   /** Retry: restore the snapshot taken for this user message. Never touches disk. */
   restore(chatId: Id, userMessageId: Id): Promise<void>;
-  /** The text for the next user message's `changesNote`; marks those events as reported. */
-  takeNote(chatId: Id): Promise<string | undefined>;
+  /**
+   * The note for a new user message; marks what it reports as reported. Adds a mode line when `mode` differs from the
+   * last noted turn's mode (a store without one counts as 'review'), except on the chat's first turn. Records `mode`
+   * as the last noted mode.
+   */
+  takeNote(chatId: Id, opts: { mode: EditMode; firstTurn: boolean }): Promise<string | undefined>;
   apply(input: {
     chatId: Id;
     projectRoot: string;
@@ -205,6 +227,24 @@ export interface ChangesService {
     decisions: Record<string, Record<string, HunkDecision>>;
   }): Promise<ApplyChangesResponse>;
   discard(chatId: Id): Promise<ChatChanges>;
+  /**
+   * The Undo button: restores the batch's files that are still exactly as the turn left them and reports the rest.
+   * Throws `not_found` (unknown batch) or `conflict` (a review batch, already undone, past retention, or written into
+   * another project).
+   */
+  undoBatch(input: { chatId: Id; projectId: Id; projectRoot: string; batchId: Id }): Promise<UndoBatchResponse>;
+  /**
+   * Before a retry: undo every auto batch of `turnId` that isn't undone yet, forget what the chat has seen, and record
+   * `mode` as the last noted mode. Adds nothing to the next note. Null when there was nothing to undo.
+   */
+  prepareRetry(input: {
+    chatId: Id;
+    projectId: Id;
+    projectRoot: string;
+    turnId: Id;
+    mode: EditMode;
+  }): Promise<{ batchId: Id; undo: BatchUndo } | null>;
+  /** Deletes the store and the chat's blob folder, under the store lock. */
   removeForChat(chatId: Id): Promise<void>;
 }
 

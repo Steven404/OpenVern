@@ -8,6 +8,7 @@ import { type ErrorCode, errorInfo } from '@shared/errors';
 import type { AgentEvent } from '@shared/events';
 import { SAMPLE_MODELS, SAMPLE_USAGE } from '@shared/sample-data';
 import type {
+  AppliedBatch,
   AssistantMessage,
   AttachmentRef,
   Chat,
@@ -176,7 +177,11 @@ export class MockApiClient implements ApiClient {
 
   async listProjects(): Promise<ProjectListItem[]> {
     return this.projects
-      .map((p) => ({ ...clone(p), chatCount: this.chats.filter((c) => c.projectId === p.id).length }))
+      .map((p) => ({
+        ...clone(p),
+        chatCount: this.chats.filter((c) => c.projectId === p.id).length,
+        inGitRepo: true,
+      }))
       .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
   }
   async createProject(input: { rootPath: string; name?: string }) {
@@ -239,6 +244,7 @@ export class MockApiClient implements ApiClient {
       archived: false,
       usage: { ...EMPTY_USAGE },
       effort: null,
+      editMode: 'review',
       messages: [],
     };
     this.chats.push(chat);
@@ -575,7 +581,7 @@ export class MockApiClient implements ApiClient {
     const pending = this.changes.get(chatId) ?? null;
     if (!pending || pending.revision !== body.revision) fail('changes_stale', 409);
     const { written, rejectedHunks, skippedHunks } = acceptedOnly(pending?.files ?? [], body.decisions);
-    const batch = {
+    const batch: AppliedBatch = {
       id: crypto.randomUUID(),
       appliedAt: now(),
       messageId: pending?.messageId ?? '',
@@ -583,6 +589,8 @@ export class MockApiClient implements ApiClient {
       rejectedHunks,
       skippedHunks,
       conflicts: [],
+      source: 'review',
+      undoable: false,
     };
     this.applied.set(chatId, [...(this.applied.get(chatId) ?? []), batch]);
     this.changes.set(chatId, null);
@@ -616,6 +624,8 @@ export class MockApiClient implements ApiClient {
         totalDel: p.files.reduce((n, f) => n + f.del, 0),
       },
       applied: this.applied.get(chatId) ?? [],
+      // The mock writes nothing to disk; every applied batch stands for one change of the project's files.
+      diskSeq: (this.applied.get(chatId) ?? []).length,
     });
   }
 
@@ -662,6 +672,7 @@ export class MockApiClient implements ApiClient {
         archived: false,
         usage: { ...EMPTY_USAGE },
         effort: null,
+        editMode: 'review',
         messages,
       };
     };

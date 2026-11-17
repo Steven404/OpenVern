@@ -18,7 +18,7 @@ export function createMemoryChanges(): MemoryChanges {
   const of = (chatId: Id): ChatChanges => {
     let s = state.get(chatId);
     if (!s) {
-      s = { pending: null, applied: [] };
+      s = { pending: null, applied: [], diskSeq: 0 };
       state.set(chatId, s);
     }
     return s;
@@ -61,8 +61,11 @@ export function createMemoryChanges(): MemoryChanges {
         rejectedHunks: rejected,
         skippedHunks: total - accepted - rejected,
         conflicts: [],
+        source: 'review',
+        undoable: false,
       };
       s.applied.push(batch);
+      if (accepted > 0) s.diskSeq += 1;
       s.pending = null;
       return { batch: structuredClone(batch), changes: copy(s) };
     },
@@ -71,6 +74,10 @@ export function createMemoryChanges(): MemoryChanges {
       s.pending = null;
       return copy(s);
     },
+    undoBatch: async () => {
+      throw new Error('memory ChangesService: undoBatch() is not implemented');
+    },
+    prepareRetry: async () => null,
     removeForChat: async (chatId) => {
       state.delete(chatId);
     },

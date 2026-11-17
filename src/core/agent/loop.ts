@@ -138,6 +138,7 @@ export function toChatSummary(chat: ChatSummary | Chat): ChatSummary {
     archived: chat.archived,
     usage: chat.usage,
     effort: chat.effort,
+    editMode: chat.editMode,
   };
 }
 
@@ -145,8 +146,11 @@ export function toChatSummary(chat: ChatSummary | Chat): ChatSummary {
 function trackStaging(inner: ToolChanges): TrackedChanges {
   let last: { summary: ChangeSummary | null } | undefined;
   return {
+    mode: inner.mode,
     read: (p) => inner.read(p),
     staged: () => inner.staged(),
+    write: (p, content, opts) => inner.write(p, content, opts),
+    noteRead: (p, bytes) => inner.noteRead(p, bytes),
     async stage(p, content) {
       const result = await inner.stage(p, content);
       last = { summary: result.summary };
@@ -257,7 +261,10 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
     if (input.newUserMessage) {
       const { text, attachmentIds } = input.newUserMessage;
       const refs = attachmentIds.length > 0 ? await attachments.bindToChat(attachmentIds, chatId) : [];
-      const changesNote = chat.projectId ? await deps.changes?.takeNote(chatId) : undefined;
+      const firstTurn = !chat.messages.some((m) => m.role === 'user');
+      const changesNote = chat.projectId
+        ? await deps.changes?.takeNote(chatId, { mode: 'review', firstTurn })
+        : undefined;
       const message: UserMessage = {
         id: crypto.randomUUID(),
         role: 'user',
@@ -281,6 +288,8 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
       if (chat.projectId) await deps.changes?.restore(chatId, lastUser.id);
       state.modified = true;
     }
+    // The user message that started this turn; auto batches are keyed by it.
+    const turnId = chat.messages.findLast((m) => m.role === 'user')?.id ?? '';
     if (chat.model !== model) {
       await chats.update(chatId, { model });
       state.modified = true;
@@ -392,7 +401,16 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
       // One per assistant step: edits staged by this step's tool calls are attributed to its message.
       const stepChanges =
         canEdit && project && deps.changes
-          ? trackStaging(deps.changes.tools({ chatId, projectRoot: project.rootPath, messageId }))
+          ? trackStaging(
+              deps.changes.tools({
+                chatId,
+                projectId: project.id,
+                projectRoot: project.rootPath,
+                messageId,
+                turnId,
+                mode: 'review',
+              }),
+            )
           : undefined;
 
       let text = '';

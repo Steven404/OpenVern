@@ -282,7 +282,14 @@ it('denies tools access to both macOS and retained config roots', async () => {
     const context = {
       projectRoot: home,
       signal: new AbortController().signal,
-      changes: changes.tools({ chatId: 'c', projectRoot: home, messageId: 'm' }),
+      changes: changes.tools({
+        chatId: 'c',
+        projectId: 'p',
+        projectRoot: home,
+        messageId: 'm',
+        turnId: 'u',
+        mode: 'review',
+      }),
     };
     const projectTools = getProjectTools({ deniedRoots: await defaultDataDirRoots({}, home, 'darwin') });
     const runTool = (name: string, args: unknown) => {

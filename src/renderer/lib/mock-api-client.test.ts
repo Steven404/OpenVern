@@ -356,7 +356,7 @@ describe('MockApiClient', () => {
       const api = new MockApiClient({ delayMs: 0 });
       const [project] = await api.listProjects();
       const chat = await api.createChat({ projectId: project?.id ?? null, model: 'anthropic/claude-sonnet-5.5' });
-      expect(await api.getChatChanges(chat.id)).toEqual({ pending: null, applied: [] });
+      expect(await api.getChatChanges(chat.id)).toEqual({ pending: null, applied: [], diskSeq: 0 });
 
       const events = await collect(
         api.sendMessage(
@@ -450,7 +450,7 @@ describe('MockApiClient', () => {
         ),
       );
       expect((await api.getChatChanges(chat.id)).pending).not.toBeNull();
-      expect(await api.discardChatChanges(chat.id)).toEqual({ pending: null, applied: [] });
+      expect(await api.discardChatChanges(chat.id)).toEqual({ pending: null, applied: [], diskSeq: 0 });
     });
   });
 });
