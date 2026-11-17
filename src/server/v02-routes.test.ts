@@ -242,6 +242,7 @@ describe('change set lifecycle', () => {
     expect(await json<ChatChanges>(await h.call(`/api/chats/${chat.id}/changes`))).toEqual({
       pending: null,
       applied: [],
+      diskSeq: 0,
     });
     expect((await h.call('/api/chats/nope/changes')).status).toBe(404);
 
@@ -375,7 +376,7 @@ describe('change set lifecycle', () => {
     h.changes.seed(a.id, pending());
     h.changes.seed(b.id, pending());
     expect((await h.call(`/api/chats/${a.id}`, { method: 'DELETE' })).status).toBe(204);
-    expect(await h.changes.get(a.id)).toEqual({ pending: null, applied: [] });
+    expect(await h.changes.get(a.id)).toEqual({ pending: null, applied: [], diskSeq: 0 });
     expect((await h.call(`/api/projects/${p.id}`, { method: 'DELETE' })).status).toBe(204);
     expect((await h.changes.get(b.id)).pending).toBeNull();
   });

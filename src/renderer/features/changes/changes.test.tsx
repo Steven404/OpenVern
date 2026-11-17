@@ -103,6 +103,8 @@ describe('diff helpers', () => {
         rejectedHunks: 1,
         skippedHunks: 0,
         conflicts: [],
+        source: 'review',
+        undoable: false,
       }),
     ).toBe('Wrote 4 changes to 3 files · 1 rejected');
   });
@@ -294,7 +296,7 @@ describe('review pane', () => {
       files: pending.files.filter((f) => !f.path.endsWith('constants.ts')),
     };
     vi.spyOn(client, 'applyChatChanges').mockRejectedValue(new ApiError(errorInfo('changes_stale'), 409));
-    const get = vi.spyOn(client, 'getChatChanges').mockResolvedValue({ pending: next, applied: [] });
+    const get = vi.spyOn(client, 'getChatChanges').mockResolvedValue({ pending: next, applied: [], diskSeq: 0 });
 
     fireEvent.click(within(p).getByRole('button', { name: /Apply 4/ }));
     await waitFor(() => expect(get).toHaveBeenCalled());
@@ -402,6 +404,7 @@ describe('review pane', () => {
     vi.spyOn(client, 'getChatChanges').mockResolvedValue({
       pending: { ...current, files: [big, ...current.files.slice(1)] },
       applied: [],
+      diskSeq: 0,
     });
     renderApp({ client, route: `/chat/${chat.id}` });
     // The panel is still open on the Diff tab.
@@ -662,6 +665,8 @@ describe('long file lists in the cards', () => {
       rejectedHunks: 0,
       skippedHunks: 0,
       conflicts: [],
+      source: 'review',
+      undoable: false,
     };
     render(<AppliedEditsCard chatId="c" batch={batch} />);
     const el = screen.getByTestId('changes-card');

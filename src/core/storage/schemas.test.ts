@@ -14,6 +14,7 @@ describe('chatFileSchema', () => {
       archived: false,
       usage: { contextTokens: 0, promptTokens: 0, completionTokens: 0, costUsd: null, requests: 0 },
       effort: null,
+      editMode: 'review',
       messages: [
         {
           id: 'a',

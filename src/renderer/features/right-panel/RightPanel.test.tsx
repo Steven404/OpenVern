@@ -157,6 +157,7 @@ describe('launcher rules', () => {
     vi.spyOn(client, 'getChatChanges').mockResolvedValue({
       pending: { revision: 1, messageId: 'm1', files: sampleProposal(), totalAdd: 1, totalDel: 0 },
       applied: [],
+      diskSeq: 0,
     });
     cleanup();
     renderApp({ client, route: `/chat/${chat.id}` });

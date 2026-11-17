@@ -73,6 +73,7 @@ export function createFakeChats(now: () => Date = createClock()): FakeChats {
     archived: c.archived,
     usage: usageFor(c),
     effort: c.effort,
+    editMode: c.editMode,
   });
   return {
     store,
@@ -82,7 +83,7 @@ export function createFakeChats(now: () => Date = createClock()): FakeChats {
     async get(id) {
       return clone(need(id));
     },
-    async create({ projectId, model }) {
+    async create({ projectId, model, editMode }) {
       const ts = now().toISOString();
       const chat: Chat = {
         id: crypto.randomUUID(),
@@ -94,6 +95,7 @@ export function createFakeChats(now: () => Date = createClock()): FakeChats {
         archived: false,
         usage: { contextTokens: 0, promptTokens: 0, completionTokens: 0, costUsd: null, requests: 0 },
         effort: null,
+        editMode: editMode ?? 'review',
         messages: [],
       };
       store.set(chat.id, chat);
@@ -114,6 +116,7 @@ export function createFakeChats(now: () => Date = createClock()): FakeChats {
         c.updatedAt = now().toISOString();
       }
       if (patch.archived !== undefined) c.archived = patch.archived;
+      if (patch.editMode !== undefined) c.editMode = patch.editMode;
       return summary(c);
     },
     async remove(id) {
@@ -128,6 +131,12 @@ export function createFakeChats(now: () => Date = createClock()): FakeChats {
       c.usage = usageFor(c);
       c.updatedAt = now().toISOString();
       return summary(c);
+    },
+    async setChangesNote(id, messageId, note) {
+      const m = need(id).messages.find((x) => x.role === 'user' && x.id === messageId);
+      if (m?.role !== 'user') throw new CoreError('not_found');
+      if (note === undefined) delete m.changesNote;
+      else m.changesNote = note;
     },
     async truncateAfterLastUser(id) {
       const c = need(id);
@@ -212,7 +221,7 @@ export function createFakeProjects(projects: Project[] = []): ProjectsService & 
   return {
     add: (p) => void store.set(p.id, p),
     async list() {
-      return [...store.values()].map((p): ProjectListItem => ({ ...p, chatCount: 0 }));
+      return [...store.values()].map((p): ProjectListItem => ({ ...p, chatCount: 0, inGitRepo: false }));
     },
     async get(id) {
       const p = store.get(id);

@@ -20,6 +20,8 @@ export interface DataPaths {
   modelsCache: string;
   chatFile(id: string): string;
   changesFile(id: string): string;
+  /** Copies of project files that Undo of the chat's Auto turns needs, one file per sha256 of its bytes. */
+  changesBlobDir(id: string): string;
   attachmentBin(id: string): string;
   attachmentMeta(id: string): string;
 }
@@ -50,6 +52,7 @@ export function dataPaths(root: string): DataPaths {
     modelsCache: path.join(cacheDir, 'models.json'),
     chatFile: (id) => path.join(chatsDir, `${id}.json`),
     changesFile: (id) => path.join(changesDir, `${id}.json`),
+    changesBlobDir: (id) => path.join(changesDir, `${id}.blobs`),
     attachmentBin: (id) => path.join(attachmentsDir, `${id}.bin`),
     attachmentMeta: (id) => path.join(attachmentsDir, `${id}.json`),
   };

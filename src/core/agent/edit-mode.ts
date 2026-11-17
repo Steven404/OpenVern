@@ -1,7 +1,9 @@
-// Review-mode wording (plan G2.8). Everything the model is told about *proposed* edits lives here, so a later auto
-// mode can supply its own text without touching the edit tools or the agent loop.
+// Everything the model is told about edits, in both edit modes, lives here: tool descriptions and results, prompt
+// lines, refusals and the next-turn note. The edit tools, the agent loop and the change service import it, so the
+// wording can change without touching their logic. Review wording is pinned by tests: change it only on purpose.
 
-import { APP_NAME } from '@shared/constants';
+import { APP_NAME, LIMITS } from '@shared/constants';
+import type { ApplyConflictReason, ChangeKind, EditMode, UndoSkipReason } from '@shared/types';
 
 /** Names of the tools that stage edits. The agent offers them only when the chat may propose changes. */
 export const EDIT_TOOL_NAMES = ['edit_file', 'write_file', 'delete_file'] as const;
@@ -11,7 +13,7 @@ export const PROPOSED_NOT_WRITTEN = 'Proposed, not written yet.';
 /** Added to `read_file`'s header when the text shown is a proposal, not the file on disk. */
 export const PROPOSED_VERSION_NOTE = '(proposed version, not on disk yet)';
 
-/** First line of the next-turn note (plan §4.9). The change service builds the rest. */
+/** First line of the note's review block: what the user did with the proposals since the model's last reply. */
 export const CHANGES_NOTE_INTRO = `[${APP_NAME}] Since your last reply the user reviewed your proposed edits:`;
 
 /** Why a read of a proposed-deleted file fails. */
@@ -91,4 +93,133 @@ export function editPromptLines(): string[] {
     '- A user message may end with a note about earlier proposals (applied, rejected or skipped). Trust it over your memory.',
     '- You cannot run commands.',
   ];
+}
+
+// ---------------------------------------------------------------------------------------------------- change service
+
+/** `stage` refuses a new file once the pending set holds this many files. */
+export function tooManyProposedText(limit: number): string {
+  return `Too many proposed files (limit ${limit}). Ask the user to review them first.`;
+}
+
+/** `stage` refuses a proposal whose diff the user couldn't review hunk by hunk. */
+export function tooLargeToReviewText(path: string): string {
+  return (
+    `The change to ${path} is too large to review as a diff (over ${LIMITS.diffMaxLinesPerFile.toLocaleString('en-US')} ` +
+    'diff lines), so it was not proposed. Split it into smaller edits.'
+  );
+}
+
+/** Auto: the file's bytes differ from what the tool based its change on, or from what the chat last read. */
+export function autoStaleText(path: string): string {
+  return (
+    `Not written: ${path} changed on disk since you last read it (the user or another chat may have edited it). ` +
+    'Read it again, then redo the change.'
+  );
+}
+
+/** Auto: `write_file` / `delete_file` on an existing file the chat hasn't read. */
+export function autoUnreadText(path: string): string {
+  return (
+    `Not written: read ${path} with read_file first. In Auto, a file must be read in this chat before it is ` +
+    'overwritten or deleted.'
+  );
+}
+
+/** Auto: the path has a Review proposal waiting; writing over it would bypass that review. */
+export function autoPendingText(path: string): string {
+  return (
+    `Not written: ${path} has a proposed edit from an earlier turn waiting for the user's review. Ask the user to ` +
+    'apply or discard it first.'
+  );
+}
+
+/** Auto: the write itself failed (I/O). Nothing reached the file. */
+export function autoWriteFailedText(path: string): string {
+  return `Could not write ${path}. Nothing was changed.`;
+}
+
+// ---------------------------------------------------------------------------------------------------- next-turn note
+
+/** The note's mode block: the chat's edit mode changed since the model's last reply. */
+export function modeChangedNote(mode: EditMode): string {
+  return mode === 'auto'
+    ? `[${APP_NAME}] Edit mode changed since your last reply: Auto. Your edits are now written to disk as soon as ` +
+        'each edit tool call succeeds, and the user can undo a whole turn.'
+    : `[${APP_NAME}] Edit mode changed since your last reply: Review. Your edits are proposals again: nothing is ` +
+        'written until the user applies them.';
+}
+
+/** One proposed file as the note reports it. */
+export interface NoteFile {
+  path: string;
+  kind: ChangeKind;
+  accepted: number;
+  total: number;
+}
+
+/** Every review event since the last note, merged in order. */
+export interface ReviewNoteInput {
+  written: NoteFile[];
+  rejected: NoteFile[];
+  discarded: { path: string; kind: ChangeKind }[];
+  /** Files with no decision at all. */
+  skipped: NoteFile[];
+  conflicts: { path: string; reason: ApplyConflictReason }[];
+  /** Legacy proposals too large to review, which apply refused to write. */
+  tooLarge: string[];
+}
+
+const CONFLICT_TEXT: Record<ApplyConflictReason, string> = {
+  changed_on_disk: 'changed on disk before apply',
+  deleted_on_disk: 'deleted on disk before apply',
+  exists_on_disk: 'already exists on disk',
+  blocked: 'blocked, the path is not writable',
+  too_large: 'too large to review',
+};
+
+const notDone: Record<ChangeKind, string> = {
+  create: 'new file, not created',
+  modify: 'not changed',
+  delete: 'not deleted',
+};
+
+const writtenText = (f: NoteFile): string => `${f.path} (${f.accepted} of ${f.total}${f.total > 1 ? ' changes' : ''})`;
+const notDoneText = (f: { path: string; kind: ChangeKind }): string => `${f.path} (${notDone[f.kind]})`;
+
+/** The note's review block. `stillPending` = files still waiting for review. */
+export function reviewNote(input: ReviewNoteInput, stillPending: number): string {
+  const lines = [CHANGES_NOTE_INTRO];
+  if (input.written.length) lines.push(`- Written: ${input.written.map(writtenText).join(', ')}`);
+  if (input.rejected.length) lines.push(`- Rejected: ${input.rejected.map(notDoneText).join(', ')}`);
+  if (input.discarded.length) lines.push(`- Discarded: ${input.discarded.map(notDoneText).join(', ')}`);
+  if (input.skipped.length) lines.push(`- Left out, not decided: ${input.skipped.map(notDoneText).join(', ')}`);
+  for (const c of input.conflicts) lines.push(`- Not written, ${CONFLICT_TEXT[c.reason]}: ${c.path}`);
+  for (const path of input.tooLarge) lines.push(`- Not written, too large to review: ${path}`);
+  lines.push(
+    stillPending > 0
+      ? `${stillPending} proposed file${stillPending === 1 ? ' is' : 's are'} still awaiting review. Your reads show your proposed versions.`
+      : 'Nothing else is pending.',
+  );
+  return lines.join('\n');
+}
+
+const UNDO_SKIP_TEXT: Record<UndoSkipReason, string> = {
+  changed_since: 'changed since',
+  blocked: 'blocked',
+  unavailable: 'original not available',
+};
+
+/** The note's undo block: what the user's Undo clicks since the model's last reply restored and left alone. */
+export function undoneNote(
+  undos: readonly { restored: readonly string[]; skipped: readonly { path: string; reason: UndoSkipReason }[] }[],
+): string {
+  const restored = [...new Set(undos.flatMap((u) => u.restored))];
+  const lines = [`[${APP_NAME}] Since your last reply the user undid your edits from an earlier turn:`];
+  if (restored.length) lines.push(`- Restored to their earlier content: ${restored.join(', ')}`);
+  for (const reason of Object.keys(UNDO_SKIP_TEXT) as UndoSkipReason[]) {
+    const paths = [...new Set(undos.flatMap((u) => u.skipped.filter((s) => s.reason === reason).map((s) => s.path)))];
+    if (paths.length) lines.push(`- Not undone, ${UNDO_SKIP_TEXT[reason]}: ${paths.join(', ')}`);
+  }
+  return lines.join('\n');
 }

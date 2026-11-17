@@ -1,6 +1,6 @@
 // App-wide constants (plan §4.5).
 
-import type { ReasoningEffort } from './types';
+import type { EditMode, ReasoningEffort } from './types';
 
 export const APP_NAME = 'OpenVern';
 /** Lower-case form for paths, the protocol host, storage keys and env vars. */
@@ -40,6 +40,9 @@ export const REASONING_EFFORTS = [
 type AssertNever<T extends never> = T;
 export type AllReasoningEffortsListed = AssertNever<Exclude<ReasoningEffort, (typeof REASONING_EFFORTS)[number]>>;
 
+/** Every edit mode; `EditMode` documents what each one does. */
+export const EDIT_MODES = ['review', 'auto'] as const satisfies readonly EditMode[];
+
 export const LIMITS = {
   attachmentsPerMessage: 10,
   textAttachmentBytes: 512 * 1024,
@@ -69,6 +72,8 @@ export const LIMITS = {
   fileSearchMaxQueryLength: 1_000,
   viewerMaxBytes: 1024 * 1024,
   diffMaxLinesPerFile: 5_000,
+  /** Auto batches per chat that keep the original file contents Undo needs. */
+  autoUndoTurns: 20,
 } as const;
 
 export const LAYOUT = {

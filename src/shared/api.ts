@@ -105,6 +105,11 @@ export interface ApplyChangesResponse {
   batch: AppliedBatch;
   changes: ChatChanges;
 }
+/** `POST /chats/:id/changes/batches/:batchId/undo`. */
+export interface UndoBatchResponse {
+  batch: AppliedBatch; // with `undo` set
+  changes: ChatChanges;
+}
 
 // Terminal reads (docs/terminal-plan.md §4.2). The renderer relays main's answer, so every size is bounded here: the
 // text it carries is bound for the model.

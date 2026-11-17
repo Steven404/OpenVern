@@ -159,4 +159,5 @@ export const CONFLICT_LABEL: Record<AppliedBatch['conflicts'][number]['reason'],
   deleted_on_disk: 'Deleted on disk',
   exists_on_disk: 'Already exists on disk',
   blocked: 'Blocked',
+  too_large: 'Too large to review',
 };

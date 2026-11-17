@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { sampleProposal } from '../../renderer/lib/mock-changes';
 import { ensureDataDir } from '../storage/paths';
 import { cleanupTempDirs, makeTempDir } from '../storage/test-helpers';
-import { acceptAll, createChangesService } from './index';
+import { createChangesService } from './index';
 
 cleanupTempDirs();
 
@@ -20,7 +20,8 @@ async function setup() {
   const dataDir = (await ensureDataDir(path.join(base, 'data'))).root;
   const realRoot = await fs.realpath(root);
   const svc = createChangesService({ dataDir });
-  const tools = (messageId = MSG) => svc.tools({ chatId: CHAT, projectRoot: realRoot, messageId });
+  const tools = (messageId = MSG) =>
+    svc.tools({ chatId: CHAT, projectId: 'p', projectRoot: realRoot, messageId, turnId: 'u', mode: 'review' });
   const write = async (rel: string, text: string | Buffer) => {
     await fs.mkdir(path.dirname(path.join(realRoot, rel)), { recursive: true });
     await fs.writeFile(path.join(realRoot, rel), text);
@@ -280,17 +281,6 @@ describe('apply', () => {
     expect(res.batch.conflicts).toEqual([{ path: 'dir/new.txt', reason: 'blocked' }]);
     expect(await fs.readdir(outside)).toEqual([]);
   });
-
-  it('acceptAll builds a decision map for every hunk', async () => {
-    const s = await setup();
-    await s.write('f.txt', 'a\n');
-    await s.tools().stage('f.txt', 'b\n');
-    const p = await s.pending();
-    const decisions = acceptAll(p as NonNullable<typeof p>);
-    expect(Object.keys(decisions)).toEqual(['f.txt']);
-    await s.apply(p?.revision ?? 0, decisions);
-    expect(await s.read('f.txt')).toBe('b\n');
-  });
 });
 
 describe('discard, snapshot/restore, notes, cleanup', () => {
@@ -300,10 +290,10 @@ describe('discard, snapshot/restore, notes, cleanup', () => {
     const r = await s.svc.discard(CHAT);
     expect(r.pending).toBeNull();
     expect(await s.exists('a.txt')).toBe(false);
-    expect(await s.svc.takeNote(CHAT)).toBe(
+    expect(await s.svc.takeNote(CHAT, { mode: 'review', firstTurn: false })).toBe(
       '[OpenVern] Since your last reply the user reviewed your proposed edits:\n- Discarded: a.txt (new file, not created)\nNothing else is pending.',
     );
-    expect(await s.svc.takeNote(CHAT)).toBeUndefined();
+    expect(await s.svc.takeNote(CHAT, { mode: 'review', firstTurn: false })).toBeUndefined();
   });
 
   it('restores the snapshot taken for a user message', async () => {
@@ -354,7 +344,7 @@ describe('discard, snapshot/restore, notes, cleanup', () => {
       'newfile.txt': Object.fromEntries(hunkIds(byPath['newfile.txt']).map((id) => [id, 'accepted' as const])),
     });
     expect(res.batch.skippedHunks).toBe(1);
-    expect(await s.svc.takeNote(CHAT)).toBe(
+    expect(await s.svc.takeNote(CHAT, { mode: 'review', firstTurn: false })).toBe(
       [
         '[OpenVern] Since your last reply the user reviewed your proposed edits:',
         '- Written: multi.txt (2 of 2 changes), newfile.txt (1 of 1)',
@@ -372,7 +362,7 @@ describe('discard, snapshot/restore, notes, cleanup', () => {
     const p = await s.pending();
     await s.apply(p?.revision ?? 0, await s.allOf('accepted'));
     await s.tools().stage('b.txt', 'y\n');
-    const note = await s.svc.takeNote(CHAT);
+    const note = await s.svc.takeNote(CHAT, { mode: 'review', firstTurn: false });
     expect(note).toContain('- Written: a.txt (1 of 1)');
     expect(note?.endsWith('1 proposed file is still awaiting review. Your reads show your proposed versions.')).toBe(
       true,
@@ -386,7 +376,7 @@ describe('discard, snapshot/restore, notes, cleanup', () => {
     expect((await fs.stat(file)).isFile()).toBe(true);
     await s.svc.removeForChat(CHAT);
     await expect(fs.stat(file)).rejects.toThrow();
-    expect(await s.svc.get(CHAT)).toEqual({ pending: null, applied: [] });
+    expect(await s.svc.get(CHAT)).toEqual({ pending: null, applied: [], diskSeq: 0 });
     await s.svc.removeForChat(CHAT); // idempotent
   });
 

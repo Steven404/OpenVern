@@ -21,7 +21,14 @@ afterAll(async () => {
 describe('edit tools with the real ChangesService', () => {
   it('stages, reads through the overlay and leaves the disk alone', async () => {
     const svc = createChangesService({ dataDir: data });
-    const changes = svc.tools({ chatId: 'chat1', projectRoot: fx.root, messageId: 'm1' });
+    const changes = svc.tools({
+      chatId: 'chat1',
+      projectId: 'p',
+      projectRoot: fx.root,
+      messageId: 'm1',
+      turnId: 'u',
+      mode: 'review',
+    });
     const ctx = { ...fx.ctx, changes };
     const t = (n: string) => getProjectTools().find((x) => x.spec.name === n);
     const e = await t('edit_file')?.run({ path: 'README.md', old_string: '# Fixture', new_string: '# Real' }, ctx);

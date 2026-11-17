@@ -4,7 +4,7 @@
 
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { ApplyChangesResponse } from '@shared/api';
+import type { ApplyChangesResponse, UndoBatchResponse } from '@shared/api';
 import type { ChangeKind, ChangeSummary, ChatChanges, FileChange, Id } from '@shared/types';
 import { structuredPatch } from 'diff';
 import type { ChangesService } from '../types';
@@ -88,11 +88,13 @@ export function createFakeChangesService(): FakeChangesService {
             }
           : null,
         applied: [],
+        diskSeq: 0,
       };
     },
-    tools({ chatId, projectRoot, messageId }): ToolChanges {
+    tools({ chatId, projectRoot, messageId, mode }): ToolChanges {
       const map = forChat(chatId);
       return {
+        mode,
         async read(rel) {
           const e = map.get(rel);
           if (!e) return null;
@@ -117,6 +119,10 @@ export function createFakeChangesService(): FakeChangesService {
           const file = map.has(rel) ? toFileChange(rel, e) : null;
           return { file, summary: summaryOf(map, messageId) };
         },
+        async write() {
+          throw new Error('not implemented in the fake');
+        },
+        noteRead() {},
       };
     },
     async snapshot(chatId, userMessageId) {
@@ -138,7 +144,13 @@ export function createFakeChangesService(): FakeChangesService {
     },
     async discard(chatId) {
       forChat(chatId).clear();
-      return { pending: null, applied: [] };
+      return { pending: null, applied: [], diskSeq: 0 };
+    },
+    async undoBatch(): Promise<UndoBatchResponse> {
+      throw new Error('not implemented in the fake');
+    },
+    async prepareRetry() {
+      return null;
     },
     async removeForChat(chatId) {
       pending.delete(chatId);

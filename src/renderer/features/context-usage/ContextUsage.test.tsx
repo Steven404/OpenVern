@@ -42,6 +42,7 @@ function chatWith(usage: Partial<ChatUsage> = {}, model = MODEL_ID): ChatSummary
     archived: false,
     usage: { contextTokens: 0, promptTokens: 0, completionTokens: 0, costUsd: null, requests: 1, ...usage },
     effort: null,
+    editMode: 'review',
   };
 }
 

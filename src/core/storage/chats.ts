@@ -4,7 +4,7 @@
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { NEW_CHAT_TITLE } from '@shared/constants';
-import type { Chat, ChatSummary, Id } from '@shared/types';
+import type { Chat, ChatSummary, Id, UserMessage } from '@shared/types';
 import { CoreError } from '../errors';
 import type { ChatsService } from '../types';
 import { consoleLogger, isNotFound, JsonFile, type StorageLogger } from './json-file';
@@ -193,6 +193,7 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
         updatedAt: now,
         archived: false,
         effort: null,
+        editMode: input.editMode ?? 'review',
         messages: [],
       });
       return lock.run(async () => {
@@ -220,6 +221,9 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
         }
         // Any chat can be archived; a move keeps the flag.
         if (patch.archived !== undefined) next.archived = patch.archived;
+        // Like archiving, a mode change doesn't reorder the sidebar. The agent reads the mode at turn start, so a
+        // change made during a run applies from the next turn.
+        if (patch.editMode !== undefined) next.editMode = patch.editMode;
         await writeChat(next);
         const summary = summarize(next);
         await upsertIndex(summary);
@@ -254,6 +258,19 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
         const summary = summarize(next);
         await upsertIndex(summary);
         return summary;
+      });
+    },
+
+    setChangesNote(chatId, messageId, note) {
+      return lock.run(async () => {
+        const chat = await readChat(chatId);
+        const at = chat.messages.findIndex((m) => m.role === 'user' && m.id === messageId);
+        if (at < 0) throw new CoreError('not_found', 'Message not found.');
+        const { changesNote: _old, ...message } = chat.messages[at] as UserMessage;
+        const messages = [...chat.messages];
+        messages[at] = note === undefined ? message : { ...message, changesNote: note };
+        // The summary doesn't change (no `updatedAt` bump), so the index stays as it is.
+        await writeChat({ ...chat, messages });
       });
     },
 
