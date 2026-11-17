@@ -31,15 +31,26 @@ export interface ToolCallRowProps {
   variant?: 'card' | 'inGroup';
 }
 
+/** Whether two blocks render the same: every rendered call, state and result field, compared as primitives. */
+export function toolBlockEqual(
+  a: Pick<ToolBlock, 'call' | 'result' | 'state'>,
+  b: Pick<ToolBlock, 'call' | 'result' | 'state'>,
+): boolean {
+  return (
+    a.call.id === b.call.id &&
+    a.call.name === b.call.name &&
+    a.call.argsJson === b.call.argsJson &&
+    a.state === b.state &&
+    a.result?.id === b.result?.id &&
+    a.result?.output === b.result?.output &&
+    a.result?.summary === b.result?.summary &&
+    a.result?.durationMs === b.result?.durationMs
+  );
+}
+
 /** Re-render only when the call, its state or its result changes; streamed text elsewhere must not touch rows. */
 export function toolCallRowPropsEqual(prev: ToolCallRowProps, next: ToolCallRowProps): boolean {
-  return (
-    prev.variant === next.variant &&
-    prev.block.call.id === next.block.call.id &&
-    prev.block.call.argsJson === next.block.call.argsJson &&
-    prev.block.state === next.block.state &&
-    prev.block.result?.id === next.block.result?.id
-  );
+  return prev.variant === next.variant && toolBlockEqual(prev.block, next.block);
 }
 
 /** One tool call: muted clock while queued, spinner while running, then ✓ / ✕, with expandable arguments and output. */

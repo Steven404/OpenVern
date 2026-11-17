@@ -1,6 +1,6 @@
 import type { ToolMessage } from '@shared/types';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { installDomStubs } from '../composer/test-utils';
 import { AssistantTurn } from './AssistantTurn';
 import { toolCallRowPropsEqual } from './ToolCallRow';
@@ -55,6 +55,13 @@ const reallocated = (b: ToolBlock): ToolBlock => ({
 
 const withResultId = (b: ToolBlock, id: string): ToolBlock => ({ ...b, result: b.result && { ...b.result, id } });
 
+const withArgs = (b: ToolBlock, argsJson: string): ToolBlock => ({ ...b, call: { ...b.call, argsJson } });
+const withName = (b: ToolBlock, name: string): ToolBlock => ({ ...b, call: { ...b.call, name } });
+const withResult = (b: ToolBlock, patch: Partial<ToolMessage>): ToolBlock => ({
+  ...b,
+  result: b.result && { ...b.result, ...patch },
+});
+
 const header = (): HTMLElement => {
   const [button] = within(screen.getByTestId('tool-group')).getAllByRole('button');
   if (!button) throw new Error('no group header');
@@ -83,6 +90,16 @@ describe('toolGroupPropsEqual', () => {
     expect(toolGroupPropsEqual(prev, next)).toBe(false);
   });
 
+  it('differs when argsJson, the call name or a result field changes and the ids stay the same', () => {
+    const prev = { group: groupOf([a, b]) };
+    const differs = (changed: ToolBlock) => toolGroupPropsEqual(prev, { group: groupOf([a, changed]) });
+    expect(differs(withArgs(b, '{"path":"other.ts"}'))).toBe(false);
+    expect(differs(withName(b, 'edit_file'))).toBe(false);
+    expect(differs(withResult(b, { output: 'changed' }))).toBe(false);
+    expect(differs(withResult(b, { summary: 'changed' }))).toBe(false);
+    expect(differs(withResult(b, { durationMs: 999 }))).toBe(false);
+  });
+
   it('differs when the group grows, changes key, or changes liveness', () => {
     const prev = { group: groupOf([a, b]) };
     expect(toolGroupPropsEqual(prev, { group: groupOf([a, b, step('c', 'c.ts')]) })).toBe(false);
@@ -107,6 +124,15 @@ describe('toolCallRowPropsEqual', () => {
         { block: { ...block, call: { ...block.call, argsJson: '{"path":"other.ts"}' } } },
       ),
     ).toBe(false);
+  });
+
+  it('differs when the call name or a result field changes and the ids stay the same', () => {
+    const differs = (changed: ToolBlock) => toolCallRowPropsEqual({ block }, { block: changed });
+    expect(differs(withName(block, 'edit_file'))).toBe(false);
+    expect(differs(withArgs(block, '{"path":"other.ts"}'))).toBe(false);
+    expect(differs(withResult(block, { output: 'changed' }))).toBe(false);
+    expect(differs(withResult(block, { summary: 'changed' }))).toBe(false);
+    expect(differs(withResult(block, { durationMs: 999 }))).toBe(false);
   });
 
   it('differs when the variant changes', () => {
@@ -162,6 +188,51 @@ describe('ToolGroup', () => {
     expect(group.getAttribute('data-state')).toBe('ok');
     expect(header().getAttribute('aria-expanded')).toBe('true');
     expect(screen.getAllByTestId('tool-row')).toHaveLength(3);
+  });
+
+  it('a rerender with changed arguments and the same ids updates the header label and an open row', () => {
+    const a = step('a', 'a.ts');
+    const b = step('b', 'b.ts');
+    const { rerender } = render(<ToolGroup group={groupOf([a, b])} />);
+    expect(screen.getByRole('button', { name: 'Read a.ts and b.ts' })).toBeTruthy();
+    fireEvent.click(header());
+    const [row] = screen.getAllByRole('button', { name: /read_file/ });
+    if (!row) throw new Error('no row');
+    fireEvent.click(row);
+    expect(screen.getByText(/"path": "a\.ts"/)).toBeTruthy();
+
+    rerender(<ToolGroup group={groupOf([withArgs(a, JSON.stringify({ path: 'z.ts' })), b])} />);
+    expect(header().getAttribute('aria-label')).toBe('Read z.ts and b.ts');
+    expect(screen.getByText(/"path": "z\.ts"/)).toBeTruthy();
+    expect(screen.queryByText(/"path": "a\.ts"/)).toBeNull();
+  });
+
+  it('a rerender with a same-id result whose output changed updates the open row', () => {
+    const a = step('a', 'a.ts');
+    const b = step('b', 'b.ts');
+    const { rerender } = render(<ToolGroup group={groupOf([a, b])} />);
+    fireEvent.click(header());
+    const [row] = screen.getAllByRole('button', { name: /read_file/ });
+    if (!row) throw new Error('no row');
+    fireEvent.click(row);
+    expect(screen.getByText('output of a.ts')).toBeTruthy();
+
+    rerender(<ToolGroup group={groupOf([withResult(a, { output: 'fresh output' }), b])} />);
+    expect(screen.getByText('fresh output')).toBeTruthy();
+    expect(screen.queryByText('output of a.ts')).toBeNull();
+  });
+
+  it('a group of same-named files shows the count and renders without a duplicate-key warning', () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      render(<ToolGroup group={groupOf([step('a', 'src/index.ts'), step('b', 'tests/index.ts')])} />);
+      expect(screen.getByRole('button', { name: 'Read 2 files' })).toBeTruthy();
+      const keyWarnings = errors.mock.calls.filter((call) => /same key|unique "key"/.test(String(call[0])));
+      expect(keyWarnings).toEqual([]);
+      expect(errors).not.toHaveBeenCalled();
+    } finally {
+      errors.mockRestore();
+    }
   });
 
   it('a failure shows the ✕, the danger clause, and an accessible name that says "failed"', () => {

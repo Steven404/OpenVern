@@ -118,6 +118,15 @@ describe('summarizeGroup: settled label', () => {
     expect(label([edit('a.ts'), step('edit_file', 'oops')])).toBe('Edited 2 files');
   });
 
+  it('counts files that share a basename instead of naming them', () => {
+    const same = summarizeGroup(group([read('src/index.ts'), read('tests/index.ts')]));
+    expect(same.text).toBe('Read 2 files');
+    expect(same.clauses[0]?.names).toBeNull();
+    expect(label([edit('a/index.ts'), write('b/index.ts')])).toBe('Edited 2 files');
+    expect(label([read('src/index.ts'), read('src/index.ts')])).toBe('Read index.ts');
+    expect(label([read('src/index.ts'), read('tests/index.ts'), edit('a.ts')])).toBe('Read 2 files, edited a.ts');
+  });
+
   it('adds "· N failed" and "· N not run" after the clauses', () => {
     const failed = summarizeGroup(group([read('a.ts'), read('b.ts', 'failed')]));
     expect(failed.text).toBe('Read a.ts and b.ts · 1 failed');

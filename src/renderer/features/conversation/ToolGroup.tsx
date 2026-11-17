@@ -2,7 +2,7 @@ import { Check, ChevronRight, X } from 'lucide-react';
 import { memo, useId, useState } from 'react';
 import { Spinner } from '../../components/ui';
 import { formatDuration } from '../composer/format';
-import { ToolCallRow } from './ToolCallRow';
+import { ToolCallRow, toolBlockEqual } from './ToolCallRow';
 import { clauseText, type GroupSummary, summarizeGroup } from './tool-summary';
 import type { ToolGroupItem } from './turns';
 
@@ -10,7 +10,7 @@ export interface ToolGroupProps {
   group: ToolGroupItem;
 }
 
-/** Re-render only when the group's identity, liveness or any call's state or result changes. */
+/** Re-render only when the group's identity, liveness or anything a call or its result renders changes. */
 export function toolGroupPropsEqual(prev: ToolGroupProps, next: ToolGroupProps): boolean {
   const a = prev.group;
   const b = next.group;
@@ -20,12 +20,7 @@ export function toolGroupPropsEqual(prev: ToolGroupProps, next: ToolGroupProps):
     a.blocks.length === b.blocks.length &&
     a.blocks.every((block, i) => {
       const other = b.blocks[i];
-      return (
-        !!other &&
-        block.call.id === other.call.id &&
-        block.state === other.state &&
-        block.result?.id === other.result?.id
-      );
+      return !!other && toolBlockEqual(block, other);
     })
   );
 }
@@ -116,7 +111,7 @@ function GroupLabel({ summary }: { summary: GroupSummary }) {
   );
 }
 
-/** A clause with its file names in mono. */
+/** A clause with its file names in mono. The summary only passes names that are unique within the clause. */
 function ClauseText({ clause, capitalize }: { clause: GroupSummary['clauses'][number]; capitalize: boolean }) {
   if (!clause.names) return <>{clauseText(clause, capitalize)}</>;
   const verb = capitalize ? clause.verb.charAt(0).toUpperCase() + clause.verb.slice(1) : clause.verb;

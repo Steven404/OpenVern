@@ -48,7 +48,10 @@ function pathOf(block: ToolBlock): string | null {
   return typeof path === 'string' && path ? path : null;
 }
 
-/** Distinct files touched by these calls; a call without a usable path counts as its own file and has no name. */
+/**
+ * Distinct files touched by these calls. A call without a usable path counts as its own file and has no name, and
+ * paths that share a basename are counted, not named, since the names would be indistinguishable.
+ */
 function distinctPaths(blocks: ToolBlock[]): {
   count: number;
   names: string[] | null;
@@ -60,9 +63,10 @@ function distinctPaths(blocks: ToolBlock[]): {
     if (path) paths.add(path);
     else unnamed += 1;
   }
+  const names = [...paths].map(basename);
   return {
     count: paths.size + unnamed,
-    names: unnamed > 0 ? null : [...paths].map(basename),
+    names: unnamed > 0 || new Set(names).size < names.length ? null : names,
   };
 }
 
