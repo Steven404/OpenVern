@@ -7,6 +7,7 @@ import {
   retryBody,
   sendMessageBody,
   terminalReadAnswerBody,
+  undoBatchBody,
   updateChatBody,
 } from '@shared/api';
 import { LIMITS } from '@shared/constants';
@@ -65,6 +66,7 @@ export function chatRoutes(core: Core): Hono {
 
   r.get(ROUTES.chats, async (c) => c.json(await core.chats.list()));
 
+  // `editMode` omitted = 'review'.
   r.post(ROUTES.chats, async (c) => {
     const body = await readJson(c, createChatBody);
     return c.json(await core.chats.create(body));
@@ -72,6 +74,10 @@ export function chatRoutes(core: Core): Hono {
 
   r.get(ROUTES.chat, async (c) => c.json(await core.chats.get(c.req.param('id'))));
 
+  /**
+   * Rename, move, archive, or change the edit mode. `editMode` takes no run claim and is accepted while a run is
+   * active: the agent reads the mode once at turn start, so a change applies from the next turn.
+   */
   r.patch(ROUTES.chat, async (c) => {
     const id = c.req.param('id');
     const body = await readJson(c, updateChatBody);
@@ -210,6 +216,39 @@ export function chatRoutes(core: Core): Hono {
           revision: body.revision,
           decisions: body.decisions,
         }),
+      ),
+    );
+  });
+
+  // The Undo button of an auto batch. Needs the chat idle, like apply: a running turn may still be writing into
+  // this batch, and the claim keeps a new turn (or its retry undo) from starting while the files are restored.
+  r.post(ROUTES.chatBatchUndo, async (c) => {
+    const id = c.req.param('id');
+    const batchId = c.req.param('batchId');
+    await readJson(c, undoBatchBody);
+    await core.chats.get(id); // 404 before any claim
+    return c.json(
+      await withIdleChat(
+        id,
+        async () => {
+          // Read under the claim, so the project the undo is pinned to is the chat's project right now.
+          const chat = await core.chats.get(id);
+          if (!chat.projectId) throw new CoreError('conflict', 'This chat has no project to write to.');
+          const project = await core.projects.get(chat.projectId).catch((err) => {
+            // A project that no longer exists leaves the chat with nowhere to write.
+            if (err instanceof CoreError && err.code === 'not_found') {
+              throw new CoreError('conflict', 'This chat has no project to write to.');
+            }
+            throw err;
+          });
+          return core.changes.undoBatch({
+            chatId: id,
+            projectId: project.id,
+            projectRoot: project.rootPath,
+            batchId,
+          });
+        },
+        'Wait for the response to finish before undoing edits.',
       ),
     );
   });

@@ -1,40 +1,61 @@
-// Edit tools (plan G2.1/G2.2, §4.6): `edit_file`, `write_file`, `delete_file`. They never touch the disk; they stage
-// content in the chat's change set through `ctx.changes`, which the user later reviews and applies.
+// Edit tools: `edit_file`, `write_file`, `delete_file`. They never touch the disk themselves. In Review they stage
+// content in the chat's change set through `ctx.changes`, which the user later reviews and applies; in Auto they hand
+// it to `ctx.changes.write`, which re-checks everything under the file's write lock and writes it.
 
+import { createHash } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import { LIMITS } from '@shared/constants';
-import type { FileChange } from '@shared/types';
+import type { EditMode, FileChange } from '@shared/types';
 import { z } from 'zod';
 import {
+  alreadyProposedForDeletionText,
+  autoNoChangeText,
+  autoPendingText,
+  changeFailedText,
+  contentTooLargeText,
+  createdText,
   createResultText,
+  deletedText,
   deleteResultText,
+  EDITING_UNAVAILABLE_TEXT,
+  editedTooLargeText,
+  editNoChangeText,
   editResultText,
   editToolDescriptions,
   noChangeText,
+  proposedForDeletionText,
+  sourceTooLargeText,
+  writeNoChangeText,
+  writtenEditText,
 } from '../agent/edit-mode';
 import { CoreError } from '../errors';
 import { redactSecrets } from '../security/redact';
 import { type ResolveResult, resolveForWrite, type SandboxOptions } from './sandbox';
-import type { Tool, ToolChanges, ToolContext, ToolResult } from './types';
+import type { EditToolName, Tool, ToolChanges, ToolContext, ToolResult } from './types';
 import { abortedResult, displayPath, fail, parseArgs, succeed, toParameters } from './util';
 
-/** Hard ceiling on files we are willing to load into memory to edit. */
-const MAX_EDIT_SOURCE_BYTES = 5 * 1024 * 1024;
 const PLACEHOLDER = '«redacted:';
 const MAX_MATCH_LINES_LISTED = 10;
 
-const NO_CHANGES_MESSAGE =
-  'Editing is not available in this chat: no change set is attached, so nothing can be proposed.';
-
+/**
+ * The file a change is based on. `hash` is the sha256 of the bytes read from disk ('' when the file is missing, or
+ * when the text came from a pending proposal): in Auto the change service refuses the write unless the file still
+ * has exactly these bytes.
+ */
 type Current =
-  | { state: 'text'; content: string }
-  | { state: 'missing' }
-  /** Staged for deletion; still on disk. */
+  | { state: 'text'; content: string; hash: string }
+  | { state: 'missing'; hash: '' }
+  /** Staged for deletion; still on disk. Review only. */
   | { state: 'deleted' }
-  | { state: 'binary' }
+  | { state: 'binary'; hash: string }
   | { state: 'other'; message: string };
 
-/** The file as the model sees it: staged content first, then the disk. */
+const sha256 = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
+
+/**
+ * The file as the model sees it. Review: staged content first, then the disk. Auto: the disk only (a path with a
+ * pending proposal is refused before this runs).
+ */
 async function loadCurrent(
   rel: string,
   abs: string,
@@ -42,23 +63,28 @@ async function loadCurrent(
   changes: ToolChanges,
   signal: AbortSignal,
 ): Promise<Current> {
-  const staged = await changes.read(rel);
-  if (staged?.kind === 'staged') return { state: 'text', content: staged.content };
-  if (staged?.kind === 'deleted') return { state: 'deleted' };
-  if (!exists) return { state: 'missing' };
+  if (changes.mode === 'review') {
+    const staged = await changes.read(rel);
+    if (staged?.kind === 'staged') return { state: 'text', content: staged.content, hash: '' };
+    if (staged?.kind === 'deleted') return { state: 'deleted' };
+  }
+  if (!exists) return { state: 'missing', hash: '' };
   try {
     const info = await stat(abs);
     if (info.isDirectory()) return { state: 'other', message: `${rel} is a directory, not a file.` };
     if (!info.isFile()) return { state: 'other', message: `${rel} is not a regular file.` };
-    if (info.size > MAX_EDIT_SOURCE_BYTES) {
-      return { state: 'other', message: `${rel} is too large to edit (${Math.round(info.size / 1024 / 1024)} MB).` };
+    // The change service enforces the same limit (in Auto, under the write lock); this one keeps the bytes out of
+    // memory in the first place, in both modes.
+    if (info.size > LIMITS.editSourceMaxBytes) {
+      return { state: 'other', message: sourceTooLargeText(changes.mode, rel, info.size) };
     }
     const buf = await readFile(abs, { signal });
-    if (buf.includes(0)) return { state: 'binary' };
+    const hash = sha256(buf);
+    if (buf.includes(0)) return { state: 'binary', hash };
     try {
-      return { state: 'text', content: new TextDecoder('utf-8', { fatal: true }).decode(buf) };
+      return { state: 'text', content: new TextDecoder('utf-8', { fatal: true }).decode(buf), hash };
     } catch {
-      return { state: 'binary' };
+      return { state: 'binary', hash };
     }
   } catch (e) {
     return { state: 'other', message: `Cannot read ${rel}: ${(e as NodeJS.ErrnoException).code ?? 'unknown error'}` };
@@ -92,17 +118,23 @@ function diffExcerpt(file: FileChange): { excerpt: string[]; omitted: number } {
   return { excerpt: all.slice(0, cap), omitted: Math.max(0, all.length - cap) };
 }
 
-async function stageContent(
+/**
+ * Hands the change to the change service: staged as a proposal in Review, written to disk in Auto. A refusal comes
+ * back as a `CoreError` whose message is meant for the model, so it becomes the tool's failure text.
+ */
+async function commitChange(
   changes: ToolChanges,
   rel: string,
   content: string | null,
+  auto: { tool: EditToolName; baseHash: string },
 ): Promise<{ ok: true; file: FileChange | null } | { ok: false; message: string }> {
   try {
-    const { file } = await changes.stage(rel, content);
+    const { file } =
+      changes.mode === 'auto' ? await changes.write(rel, content, auto) : await changes.stage(rel, content);
     return { ok: true, file };
   } catch (e) {
     if (e instanceof CoreError) return { ok: false, message: e.message };
-    return { ok: false, message: `Could not propose the change to ${rel}.` };
+    return { ok: false, message: changeFailedText(changes.mode, rel) };
   }
 }
 
@@ -121,12 +153,44 @@ async function prepare<S extends z.ZodType>(
   if (!parsed.ok) return { ok: false, result: fail(parsed.message, 'invalid arguments') };
   const relPath = pathOf(parsed.data);
   const summary = displayPath(relPath);
-  if (!ctx.changes) return { ok: false, result: fail(NO_CHANGES_MESSAGE, summary) };
+  if (!ctx.changes) return { ok: false, result: fail(EDITING_UNAVAILABLE_TEXT, summary) };
   if (ctx.signal.aborted) return { ok: false, result: abortedResult(summary) };
   const res = await resolveForWrite(ctx.projectRoot, relPath, opts);
   if (!res.ok) return { ok: false, result: fail(res.message, summary) };
   if (res.rel === '') return { ok: false, result: fail('The project root is a directory, not a file.', summary) };
+  // Auto never writes over a pending Review proposal: the user hasn't decided on it, and a write based on its text
+  // would apply it without review. The change service refuses it too (folded spellings included).
+  if (ctx.changes.mode === 'auto' && (await ctx.changes.read(res.rel)) !== null) {
+    return { ok: false, result: fail(autoPendingText(res.rel), summary) };
+  }
   return { ok: true, data: parsed.data, changes: ctx.changes, res, summary };
+}
+
+/** The tool result for a change that reached the disk (Auto). `file` is this write's own diff. */
+function writtenResult(
+  file: FileChange | null,
+  rel: string,
+  content: string | null,
+  lines: number | null,
+  summary: string,
+  replacements?: number,
+): ToolResult {
+  if (!file) return succeed(autoNoChangeText(rel), summary);
+  if (file.kind === 'delete') return succeed(deletedText(rel, lines), summary);
+  if (file.kind === 'create') return succeed(createdText(rel, lineCount(content ?? '')), summary);
+  const { excerpt, omitted } = diffExcerpt(file);
+  return succeed(
+    writtenEditText({
+      path: rel,
+      add: file.add,
+      del: file.del,
+      excerpt,
+      omitted,
+      ...(replacements !== undefined ? { replacements } : {}),
+      ...(file.tooLarge ? { tooLarge: true } : {}),
+    }),
+    summary,
+  );
 }
 
 function blockedByState(cur: Current, rel: string, summary: string): ToolResult | null {
@@ -165,9 +229,18 @@ function occurrences(text: string, needle: string): number[] {
   return out;
 }
 
-export function createEditFileTool(opts: SandboxOptions = {}): Tool {
+/** `editMode` picks the description the model reads; what the tool does follows the turn's `ctx.changes.mode`. */
+export interface EditToolOptions extends SandboxOptions {
+  editMode?: EditMode;
+}
+
+export function createEditFileTool(opts: EditToolOptions = {}): Tool {
   return {
-    spec: { name: 'edit_file', description: editToolDescriptions().edit, parameters: toParameters(editSchema) },
+    spec: {
+      name: 'edit_file',
+      description: editToolDescriptions(opts.editMode).edit,
+      parameters: toParameters(editSchema),
+    },
 
     async run(rawArgs, ctx) {
       const prep = await prepare(editSchema, rawArgs, ctx, opts, (d) => d.path);
@@ -193,7 +266,7 @@ export function createEditFileTool(opts: SandboxOptions = {}): Tool {
         return fail(`File not found: ${rel}. To create a new file use write_file.`, summary);
       }
       if (cur.state === 'deleted') {
-        return fail(`${rel} is proposed for deletion. To bring it back use write_file with its full content.`, summary);
+        return fail(proposedForDeletionText(rel), summary);
       }
       const blocked = blockedByState(cur, rel, summary);
       if (blocked) return blocked;
@@ -239,21 +312,12 @@ export function createEditFileTool(opts: SandboxOptions = {}): Tool {
       let next = replaceAll ? text.split(oldNorm).join(newNorm) : text.replace(oldNorm, () => newNorm);
       if (crlf) next = next.replaceAll('\n', '\r\n');
       const size = Buffer.byteLength(next);
-      if (size > LIMITS.writeFileMaxBytes) {
-        return fail(
-          `The edited file would be ${Math.round(size / 1024)} KB, over the ${Math.round(LIMITS.writeFileMaxBytes / 1024)} KB limit for a proposal.`,
-          summary,
-        );
-      }
+      if (size > LIMITS.writeFileMaxBytes) return fail(editedTooLargeText(changes.mode, size), summary);
 
-      const staged = await stageContent(changes, rel, next);
+      const staged = await commitChange(changes, rel, next, { tool: 'edit_file', baseHash: cur.hash });
       if (!staged.ok) return fail(staged.message, summary);
-      if (!staged.file) {
-        return succeed(
-          `Proposed edit to ${rel} brings it back to its content on disk, so no change is proposed for it.`,
-          summary,
-        );
-      }
+      if (changes.mode === 'auto') return writtenResult(staged.file, rel, next, null, summary, found.length);
+      if (!staged.file) return succeed(editNoChangeText(changes.mode, rel), summary);
       const { excerpt, omitted } = diffExcerpt(staged.file);
       return succeed(
         editResultText({
@@ -280,9 +344,13 @@ const writeSchema = z.object({
   content: z.string().describe('The complete content of the file.'),
 });
 
-export function createWriteFileTool(opts: SandboxOptions = {}): Tool {
+export function createWriteFileTool(opts: EditToolOptions = {}): Tool {
   return {
-    spec: { name: 'write_file', description: editToolDescriptions().write, parameters: toParameters(writeSchema) },
+    spec: {
+      name: 'write_file',
+      description: editToolDescriptions(opts.editMode).write,
+      parameters: toParameters(writeSchema),
+    },
 
     async run(rawArgs, ctx) {
       const prep = await prepare(writeSchema, rawArgs, ctx, opts, (d) => d.path);
@@ -294,27 +362,21 @@ export function createWriteFileTool(opts: SandboxOptions = {}): Tool {
       const bad = checkNewContent(content, 'content');
       if (bad) return fail(bad, summary);
       const size = Buffer.byteLength(content);
-      if (size > LIMITS.writeFileMaxBytes) {
-        return fail(
-          `content is ${Math.round(size / 1024)} KB, over the ${Math.round(LIMITS.writeFileMaxBytes / 1024)} KB limit for a proposal. Split it into several files, or make targeted changes with edit_file.`,
-          summary,
-        );
-      }
+      if (size > LIMITS.writeFileMaxBytes) return fail(contentTooLargeText(changes.mode, size), summary);
 
       const cur = await loadCurrent(rel, res.abs, res.exists, changes, ctx.signal);
       if (ctx.signal.aborted) return abortedResult(summary);
       const blocked = blockedByState(cur, rel, summary);
       if (blocked) return blocked;
-      if (cur.state === 'text' && cur.content === content) return succeed(noChangeText(rel), summary);
-
-      const staged = await stageContent(changes, rel, content);
-      if (!staged.ok) return fail(staged.message, summary);
-      if (!staged.file) {
-        return succeed(
-          `Proposed content for ${rel} equals its content on disk, so no change is proposed for it.`,
-          summary,
-        );
+      if (cur.state === 'text' && cur.content === content) {
+        return succeed(changes.mode === 'auto' ? autoNoChangeText(rel) : noChangeText(rel), summary);
       }
+
+      const baseHash = cur.state === 'text' || cur.state === 'missing' ? cur.hash : '';
+      const staged = await commitChange(changes, rel, content, { tool: 'write_file', baseHash });
+      if (!staged.ok) return fail(staged.message, summary);
+      if (changes.mode === 'auto') return writtenResult(staged.file, rel, content, null, summary);
+      if (!staged.file) return succeed(writeNoChangeText(changes.mode, rel), summary);
       if (staged.file.kind === 'create') return succeed(createResultText(rel, lineCount(content)), summary);
       const { excerpt, omitted } = diffExcerpt(staged.file);
       return succeed(
@@ -331,9 +393,13 @@ const deleteSchema = z.object({
   path: z.string().min(1).describe('File to delete, relative to the project root. Directories cannot be deleted.'),
 });
 
-export function createDeleteFileTool(opts: SandboxOptions = {}): Tool {
+export function createDeleteFileTool(opts: EditToolOptions = {}): Tool {
   return {
-    spec: { name: 'delete_file', description: editToolDescriptions().delete, parameters: toParameters(deleteSchema) },
+    spec: {
+      name: 'delete_file',
+      description: editToolDescriptions(opts.editMode).delete,
+      parameters: toParameters(deleteSchema),
+    },
 
     async run(rawArgs, ctx) {
       const prep = await prepare(deleteSchema, rawArgs, ctx, opts, (d) => d.path);
@@ -344,12 +410,14 @@ export function createDeleteFileTool(opts: SandboxOptions = {}): Tool {
       const cur = await loadCurrent(rel, res.abs, res.exists, changes, ctx.signal);
       if (ctx.signal.aborted) return abortedResult(summary);
       if (cur.state === 'missing') return fail(`File not found: ${rel}. Nothing to delete.`, summary);
-      if (cur.state === 'deleted') return succeed(`${rel} is already proposed for deletion.`, summary);
+      if (cur.state === 'deleted') return succeed(alreadyProposedForDeletionText(rel), summary);
       if (cur.state === 'other') return fail(cur.message, summary);
 
-      const staged = await stageContent(changes, rel, null);
+      const lines = cur.state === 'text' ? lineCount(cur.content) : null;
+      const staged = await commitChange(changes, rel, null, { tool: 'delete_file', baseHash: cur.hash });
       if (!staged.ok) return fail(staged.message, summary);
-      return succeed(deleteResultText(rel, cur.state === 'text' ? lineCount(cur.content) : null), summary);
+      if (changes.mode === 'auto') return writtenResult(staged.file, rel, null, lines, summary);
+      return succeed(deleteResultText(rel, lines), summary);
     },
   };
 }

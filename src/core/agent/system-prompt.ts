@@ -1,6 +1,7 @@
 // System prompt construction (S4.9). Pure: the caller supplies the date, project and rendered tree.
 
 import { LIMITS } from '@shared/constants';
+import type { EditMode } from '@shared/types';
 import { editPromptLines } from './edit-mode';
 
 export interface SystemPromptInput {
@@ -13,6 +14,8 @@ export interface SystemPromptInput {
   hasTools: boolean;
   /** True when the edit tools are offered too (project chat, tools-capable model, change set attached). */
   canEdit?: boolean;
+  /** How the edit tools reach the disk this turn (default 'review'). Used only with `canEdit`. */
+  editMode?: EditMode;
   /** Output of `renderTree`; used in every project prompt. */
   tree?: string;
   /** The tree could not be read in time; tell the model instead of showing one. */
@@ -45,6 +48,7 @@ export function buildSystemPrompt({
   project,
   hasTools,
   canEdit = false,
+  editMode = 'review',
   tree,
   treeUnavailable,
   terminal = false,
@@ -111,7 +115,7 @@ export function buildSystemPrompt({
     '- list_files: list a directory as a tree.',
     '- read_file: read a file (optionally a line range). Large files are truncated; request further ranges if needed.',
     '- search: find text or a regular expression across files.',
-    ...(canEdit ? ['', ...editPromptLines()] : []),
+    ...(canEdit ? ['', ...editPromptLines(editMode)] : []),
     ...(terminal ? ['', 'You can also read the terminal:', ...terminalPromptLines()] : []),
     '',
     'Limits and rules:',

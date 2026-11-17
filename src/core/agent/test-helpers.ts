@@ -327,6 +327,7 @@ export interface HarnessOptions {
   script: FakeScript;
   models?: ModelInfo[];
   tools?: Tool[];
+  getProjectTools?: AgentServiceDeps['getProjectTools'];
   /** Create the chat inside the demo project (default) or as a loose chat. */
   project?: boolean;
   chatModel?: string;
@@ -351,6 +352,7 @@ export interface Harness {
   agent: AgentService;
   chats: FakeChats;
   attachments: FakeAttachments;
+  projects: ProjectsService;
   provider: FakeProvider;
   tools: Tool[];
   chatId: Id;
@@ -384,7 +386,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     projects,
     models,
     provider,
-    getProjectTools: () => tools,
+    getProjectTools: opts.getProjectTools ?? (() => tools),
     ...(opts.changes ? { changes: opts.changes } : {}),
     ...(opts.terminalReads ? { terminalReads: opts.terminalReads } : {}),
     ...(terminalTools ? { getTerminalTools: () => terminalTools } : {}),
@@ -404,6 +406,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     agent,
     chats,
     attachments,
+    projects,
     provider,
     tools,
     chatId: chat.id,

@@ -71,7 +71,8 @@ export interface Tool<C extends ChatToolContext = ToolContext> {
 // S3 exports from `./index`:
 //   getProjectTools(): Tool[]
 //   renderTree(root: string, opts: { depth: number; maxEntries: number }): Promise<string>
-export type GetProjectTools = () => Tool[];
+/** `editMode` picks the edit tools' descriptions (default 'review'). */
+export type GetProjectTools = (opts?: { editMode?: EditMode }) => Tool[];
 /** Tools offered in every chat, project or not, when the client can answer terminal reads (terminal plan T2.3). */
 export type GetTerminalTools = () => Tool<ChatToolContext>[];
 export type RenderTree = (

@@ -83,6 +83,26 @@ describe('FakeProvider test markers', () => {
     expect(Date.now() - t0).toBeGreaterThanOrEqual(330);
   });
 
+  it.each(['write', 'delete'])('[fake:%s] reads its target, then changes it in the same step', async (marker) => {
+    const p = createFakeProvider({ delayMs: 0 });
+    const tool = { name: `${marker}_file`, description: '', parameters: { type: 'object' } };
+    const events = await run(p, userReq(`[fake:${marker}=src/example.txt]`, { tools: [readFile, tool] }));
+    const calls = events.flatMap((e) =>
+      e.type === 'tool_call' ? [{ name: e.call.name, args: JSON.parse(e.call.argsJson) }] : [],
+    );
+    expect(calls).toEqual([
+      { name: 'read_file', args: { path: 'src/example.txt' } },
+      {
+        name: `${marker}_file`,
+        args:
+          marker === 'write'
+            ? { path: 'src/example.txt', content: '// created by the fake provider\n' }
+            : { path: 'src/example.txt' },
+      },
+    ]);
+    expect(events.at(-1)).toEqual({ type: 'finish', reason: 'tool_calls' });
+  });
+
   it('[fake:read=<path>] makes the first tool call read that path', async () => {
     const p = createFakeProvider({ delayMs: 0 });
     const events = await run(p, userReq('look [fake:read=../outside.txt]', { tools: [readFile] }));

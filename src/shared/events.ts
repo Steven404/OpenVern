@@ -12,6 +12,8 @@ export type AgentEvent =
   | { type: 'tool_call'; messageId: Id; toolCall: ToolCall } // tool is now running
   | { type: 'tool_result'; message: ToolMessage }
   | { type: 'changes_updated'; messageId: Id; changes: ChangeSummary | null } // after a tool_result that staged edits; null: nothing pending any more
+  // An Auto write landed in this turn's batch, or a retry undid the turn's earlier writes. Refetch the chat's changes.
+  | { type: 'auto_batch_updated'; batchId: Id }
   | { type: 'assistant_end'; message: AssistantMessage } // final persisted form of that assistant message
   | { type: 'chat_updated'; chat: ChatSummary } // title, model or updatedAt changed
   | { type: 'error'; error: ApiErrorInfo } // run-level error; the run then ends

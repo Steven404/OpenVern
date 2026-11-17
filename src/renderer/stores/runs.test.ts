@@ -161,6 +161,32 @@ describe('useRunsStore', () => {
     return { api, queryClient, chat: full, deps: { api, queryClient } };
   }
 
+  it.each(['auto_batch_updated', 'changes_updated'] as const)(
+    '%s invalidates only this chat changes query when consumed',
+    async (type) => {
+      const { api, queryClient, chat, deps } = await setup();
+      const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+      let invalidatedDuringStream = false;
+      vi.spyOn(api, 'sendMessage').mockImplementation(async function* () {
+        yield type === 'auto_batch_updated'
+          ? { type, batchId: 'batch' }
+          : { type, messageId: 'assistant', changes: null };
+        invalidatedDuringStream = queryClient.getQueryState(queryKeys.chatChanges(chat.id))?.isInvalidated === true;
+        yield { type: 'done' };
+      });
+      queryClient.setQueryData(queryKeys.chatChanges(chat.id), { pending: null, applied: [], diskSeq: 0 });
+      await useRunsStore.getState().send(deps, chat.id, { text: 'go', attachments: [], model: chat.model });
+      expect(invalidatedDuringStream).toBe(true);
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.chatChanges(chat.id) });
+      expect(
+        invalidate.mock.calls.filter(
+          ([arg]) => JSON.stringify(arg?.queryKey) === JSON.stringify(queryKeys.chatChanges('other')),
+        ),
+      ).toHaveLength(0);
+      expect(queryClient.getQueryState(queryKeys.chatChanges(chat.id))?.isInvalidated).toBe(true);
+    },
+  );
+
   it('runs a turn to completion, refetches the chat and clears the overlay', async () => {
     const { api, queryClient, chat, deps } = await setup();
     const before = chat.messages.length;
