@@ -18,7 +18,7 @@ OpenVern is a desktop AI app: chat with an LLM about a local code project, with 
 
 ## Positioning
 
-- **You see every step.** Tool calls, files read and proposed edits are shown in the conversation, and every change can be opened as a diff. The user chooses how writes are approved: review each change before it touches disk, or let edits land as the model responds and stop only for high-risk ones.
+- **You see every step.** Tool calls are summarised in place, one click from the full call; proposed and applied edits stay visible as cards, and every change can be opened as a diff. The user chooses how writes are approved: review each change before it touches disk, or let edits land as the model responds and stop only for high-risk ones.
 - **Any model.** Provider-agnostic: V0 talks to OpenRouter through a thin in-house adapter, not one vendor's SDK.
 - **Local and private.** Chats, projects and settings live in local JSON files; the API key sits in the OS keyring (Electron `safeStorage`); no telemetry.
 
@@ -54,7 +54,7 @@ The interface uses the flat Blue hour design: an indigo `#10162e` ground, tonal 
 
 ## Product Principles
 
-1. **Visible over magical.** Show what the model did and is about to do; never hide a tool call or a write.
+1. **Visible over magical.** Show what the model did and is about to do. Tool calls are summarised in place, one click away; edits stay visible as cards and diffs.
 2. **The user decides who holds the write key.** In review mode, anything that changes disk waits for an explicit, reviewable approval. In auto mode, edits are written as soon as the model responds and only high-risk edits and commands stop for approval before they run; every change, applied or pending, can still be opened as a diff.
 3. **Local by default.** Data stays on the machine; network traffic is the model provider and nothing else.
 4. **Model-neutral.** No UI or flow should assume one vendor's model.

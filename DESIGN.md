@@ -155,7 +155,10 @@ components:
     backgroundColor: "{colors.card}"
     textColor: "{colors.text-secondary}"
     rounded: "{rounded.lg}"
-    padding: "10px 14px"
+    padding: "6px 12px"
+  tool-row-nested:
+    textColor: "{colors.text-secondary}"
+    padding: "4px 12px"
   code-block:
     backgroundColor: "{colors.code}"
     textColor: "{colors.text-code}"
@@ -176,7 +179,7 @@ components:
 
 The few minutes after sunset when the sky turns deep indigo and the windows along a canal light up. The flat `#10162e` ground stays calm for hours of reading; surfaces step up in small dusk-blue increments; and one warm lamplight accent marks the next action, the way a lit window draws the eye across dark water. Gable brick, the colour of the canal houses, is the quiet second voice.
 
-The window uses a flat `#10162e` ground with no backdrop glow. Everything else is flat colour, 1px lines and type. Density is calm, not sparse: a 272px sidebar, a centred 760px conversation column and 32px between turns. The interface shows its work (tool calls, files read, proposed edits) as small legible rows, because the product's stance is visible over magical.
+The window uses a flat `#10162e` ground with no backdrop glow. Everything else is flat colour, 1px lines and type. Density is calm, not sparse: a 272px sidebar, a centred 760px conversation column and 32px between turns. The interface shows its work (tool calls, files read, proposed edits) as compact rows that fold into one-line summaries, because the product's stance is visible over magical.
 
 Blue hour is the shipped design. **Late Workshop** remains unshipped and unselectable: the dormant `[data-theme="late-workshop"]` block in `src/renderer/styles/tokens.css` is only partial (it omits card, surface-focus, overlay-tonal, selection and diff tokens), nothing sets `data-theme`, and there is no theme switch or persistence.
 
@@ -285,7 +288,8 @@ Soft-cornered and quiet: ghost by default, the accent saved for the one action t
 - **Style:** 8px corners and borderless by default. The project chip uses the bubble fill and secondary text; composer attachment chips use the 6% tonal overlay; an errored attachment gains a danger border. Hover treatment is component-specific.
 
 ### Cards / Containers
-- **Tool row:** card surface, no border, 10px corners; seafoam check, mono tool name, muted path, faint timing. Rows hover with `overlay-row`; the expanded panel is separated by a `border-tool` line.
+- **Tool row:** card surface, no border, 10px corners, 32px tall; seafoam check, mono tool name, muted path, faint timing. Rows hover with `overlay-row`; the expanded panel is separated by a `border-tool` line.
+- **Tool group:** two or more consecutive tool calls in a turn fold into one card with a 32px header that summarises them ("Read 3 files, searched 2 times, edited 1 file · 1 failed"), with the summed duration on the right. It stays collapsed while streaming and shows the live step in the header. Opened, each call is a flat 28px row on the group's card, with a `border-tool` line under the header and no card per row. A single call stays a tool row.
 - **Code block:** night canal, no border, 10px corners, 16×18px padding.
 - **Proposed edits card:** card surface (`#182040`), active while reviewing (`#1d2448`), 12px corners, no border; file rows show A/M/D badges and +/− counts, with a footer strip holding the status dot and a tonal Review button.
 
@@ -329,7 +333,7 @@ Quiet and always there when something can scroll. The thumb is the only mark.
 ### Do:
 - **Do** prefer tokens from `src/renderer/styles/tokens.css`; isolated hard-coded colours remain in diff hunk chrome, gap rows, status pills, the segmented-control track, the proposed-edits footer, and file-viewer line numbers.
 - **Do** keep Lamplight to one primary action per view, plus focus.
-- **Do** show tool calls and proposed edits as visible rows or cards in the conversation.
+- **Do** summarise tool calls in place, one click from each call, and keep proposed and applied edits visible as cards.
 - **Do** use 1px cool borders and surface steps for separation.
 - **Do** maintain readable text contrast; verify contrast against the specific surface in use.
 - **Do** route new interface colours through existing Blue hour tokens.
