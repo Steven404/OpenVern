@@ -134,6 +134,17 @@ export function autoPendingText(path: string): string {
   );
 }
 
+/**
+ * Auto: the file on disk is over `LIMITS.editSourceMaxBytes`, so it is neither changed nor deleted (Undo would have to
+ * keep a copy of it).
+ */
+export function autoSourceTooLargeText(path: string): string {
+  return (
+    `Not written: ${path} is larger than ${LIMITS.editSourceMaxBytes / (1024 * 1024)} MB, too large to change or ` +
+    'delete with the edit tools. Nothing was changed.'
+  );
+}
+
 /** Auto: the write itself failed (I/O). Nothing reached the file. */
 export function autoWriteFailedText(path: string): string {
   return `Could not write ${path}. Nothing was changed.`;

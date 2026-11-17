@@ -479,11 +479,11 @@ describe('design sample (ReviewChanges)', () => {
   });
 });
 
-// ------------------------------------------------------------------------------------------------ A1 additions
+// ------------------------------------------- too-large proposals, diskSeq, old stores, notes, blob cleanup
 
 const REVIEW = { mode: 'review', firstTurn: false } as const;
 
-describe('review: too-large proposals (A1)', () => {
+describe('review: too-large proposals', () => {
   /** `n` lines, all different from `lines(n, 'old')`. */
   const bigPair = (n: number) => ({ old: `${lines(n, 'old').join('\n')}\n`, next: `${lines(n, 'new').join('\n')}\n` });
 
@@ -536,7 +536,7 @@ describe('review: too-large proposals (A1)', () => {
   });
 });
 
-describe('review: legacy too-large pending files (A1)', () => {
+describe('review: legacy too-large pending files', () => {
   /** A v0.3 store holding a pending file whose diff is too large to review (older builds could stage one). */
   async function legacy(extra: { ok?: boolean } = {}) {
     const s = await setup();
@@ -614,7 +614,7 @@ describe('review: legacy too-large pending files (A1)', () => {
   });
 });
 
-describe('diskSeq (A1)', () => {
+describe('diskSeq', () => {
   it('apply bumps it only when it wrote something', async () => {
     const s = await setup();
     expect((await s.svc.get(CHAT)).diskSeq).toBe(0);
@@ -664,7 +664,7 @@ describe('diskSeq (A1)', () => {
   });
 });
 
-describe('v0.3 stores (A1)', () => {
+describe('v0.3 stores', () => {
   it('a store without any Auto field loads as Review history with diskSeq 0', async () => {
     const s = await setup();
     const batch = {
@@ -722,7 +722,7 @@ describe('v0.3 stores (A1)', () => {
   });
 });
 
-describe('takeNote (A1)', () => {
+describe('takeNote', () => {
   const storeWith = async (s: Awaited<ReturnType<typeof setup>>, extra: Record<string, unknown>) => {
     await fs.mkdir(path.join(s.dataDir, 'changes'), { recursive: true });
     await fs.writeFile(
@@ -865,7 +865,7 @@ describe('takeNote (A1)', () => {
   });
 });
 
-describe('removeForChat and the blob folder (A1)', () => {
+describe('removeForChat and the blob folder', () => {
   it('deletes the store and the blob folder, forgets the read record, and is idempotent', async () => {
     const s = await setup();
     await s.write('a.txt', 'orig\n');

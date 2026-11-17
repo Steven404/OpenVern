@@ -74,6 +74,11 @@ export const LIMITS = {
   diffMaxLinesPerFile: 5_000,
   /** Auto batches per chat that keep the original file contents Undo needs. */
   autoUndoTurns: 20,
+  /**
+   * Largest file the edit tools load to change it. The change service enforces it too: an Auto write or delete of a
+   * bigger file is refused before its bytes are read or kept for Undo.
+   */
+  editSourceMaxBytes: 5 * 1024 * 1024,
 } as const;
 
 export const LAYOUT = {

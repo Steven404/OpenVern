@@ -1192,7 +1192,7 @@ describe('ChatsService effort (F3)', () => {
   });
 });
 
-describe('ChatsService editMode (A1)', () => {
+describe('ChatsService editMode', () => {
   it('a new chat starts in review, in the return value, the file and the index; auto can be asked for', async () => {
     const { storage, dataDir } = await makeStorage();
     const plain = await storage.chats.create({ projectId: null, model: 'm' });
@@ -1283,7 +1283,7 @@ describe('ChatsService editMode (A1)', () => {
   });
 });
 
-describe('ChatsService.setChangesNote (A1)', () => {
+describe('ChatsService.setChangesNote', () => {
   async function chatWithTurns() {
     const s = await makeStorage();
     const chat = await s.storage.chats.create({ projectId: null, model: 'm' });

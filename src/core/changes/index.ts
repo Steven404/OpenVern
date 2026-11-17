@@ -21,6 +21,7 @@ import type {
 import { z } from 'zod';
 import {
   autoPendingText,
+  autoSourceTooLargeText,
   autoStaleText,
   autoUnreadText,
   autoWriteFailedText,
@@ -30,7 +31,7 @@ import {
   undoneNote,
 } from '../agent/edit-mode';
 import { CoreError } from '../errors';
-import { isNotFound, JsonFile, type StorageLogger, writeFileAtomic } from '../storage/json-file';
+import { isNotFound, JsonFile, type StorageLogger } from '../storage/json-file';
 import { withFileLock } from '../storage/mutex';
 import { type DataPaths, dataPaths } from '../storage/paths';
 import { resolveInProject, type SandboxOptions, sameFoldedRel } from '../tools/sandbox';
@@ -341,11 +342,31 @@ const badPath = (message: string) => new CoreError('path_invalid', message);
 const targetError = (target: Extract<Target, { ok: false }>, relPath: string) =>
   badPath(target.kind === 'link' ? `${target.message}: ${relPath}` : target.message);
 
-/** A project file as it is on disk right now. `lstat`, so a symlink shows up as `other`. */
+/**
+ * A project file as it is on disk right now. `lstat`, so a symlink shows up as `other`. A file over
+ * `LIMITS.editSourceMaxBytes` is `tooLarge` and its bytes are never read: Auto never loads, hashes or keeps a copy of
+ * a file the edit tools wouldn't load either.
+ */
 type OnDisk =
   | { kind: 'missing' }
   | { kind: 'other' }
+  | { kind: 'tooLarge' }
   | { kind: 'file'; bytes: Buffer; hash: string; mode: number; text: string | null };
+
+/** Up to `limit` bytes from the handle's position to its end; null when there are more. */
+async function readAtMost(handle: fs.FileHandle, limit: number): Promise<Buffer | null> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for (;;) {
+    // Never more than `limit + 1` bytes in all: one past the limit is enough to know the file is over it.
+    const buf = Buffer.allocUnsafe(Math.min(limit + 1 - total, 1024 * 1024));
+    const { bytesRead } = await handle.read(buf, 0, buf.length, null);
+    if (bytesRead === 0) return Buffer.concat(chunks, total);
+    chunks.push(buf.subarray(0, bytesRead));
+    total += bytesRead;
+    if (total > limit) return null;
+  }
+}
 
 async function readOnDisk(abs: string): Promise<OnDisk> {
   let info: Awaited<ReturnType<typeof fs.lstat>>;
@@ -356,33 +377,92 @@ async function readOnDisk(abs: string): Promise<OnDisk> {
     throw err;
   }
   if (!info.isFile()) return { kind: 'other' };
-  const bytes = await fs.readFile(abs);
-  return { kind: 'file', bytes, hash: sha256(bytes), mode: info.mode & 0o7777, text: textOf(bytes) };
+  if (info.size > LIMITS.editSourceMaxBytes) return { kind: 'tooLarge' };
+  // Opened without following a link and without blocking on a FIFO, in case the path changed since the `lstat`; the
+  // read is bounded too, in case the file grew.
+  let handle: fs.FileHandle;
+  try {
+    handle = await fs.open(abs, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0));
+  } catch (err) {
+    if (isNotFound(err)) return { kind: 'missing' };
+    if ((err as NodeJS.ErrnoException).code === 'ELOOP') return { kind: 'other' };
+    throw err;
+  }
+  try {
+    const opened = await handle.stat();
+    if (!opened.isFile()) return { kind: 'other' };
+    const bytes = await readAtMost(handle, LIMITS.editSourceMaxBytes);
+    if (bytes === null) return { kind: 'tooLarge' };
+    return { kind: 'file', bytes, hash: sha256(bytes), mode: opened.mode & 0o7777, text: textOf(bytes) };
+  } finally {
+    await handle.close();
+  }
 }
 
+/** What a hash check compares: the file's sha256, `''` when missing, null when it can't match anything. */
+const hashOnDisk = (d: OnDisk): string | null => (d.kind === 'file' ? d.hash : d.kind === 'missing' ? '' : null);
+
 /**
- * Atomic write that also restores `mode`'s permission bits, which `open` masks with the umask. The fix-up opens the
- * path without following a link, so a path swapped for a symlink is never chmod-ed through. It is best effort: once
- * the rename has happened the content is on disk, so a failed fix-up must not report the write as failed.
+ * The only way the change service changes a project file: `data === null` unlinks `abs`, anything else replaces it
+ * atomically (temp file + rename). With `exactMode`, the permission bits are then set to `mode` exactly, since `open`
+ * masks them with the umask; the fix-up opens the path without following a link and is best effort (once the rename
+ * has happened the content is on disk, so a failed fix-up must not report the write as failed).
+ *
+ * RECHECK IMMEDIATELY BEFORE MUTATION (invariant): `check` re-resolves the path and re-reads the file, and it is the
+ * last step before the unlink or the rename, after every await that could let something change the file (blob
+ * writes, folder creation, the test hook, writing the temp file). A non-null result refuses: nothing is changed and
+ * the result is returned. For a write it also runs before the temp file is created, so a folder already swapped for a
+ * link gets no temp file (one swapped in the moment between gets only that temp file, which the late check removes).
+ * What remains is the race against other programs between `check`'s read and the unlink/rename syscall: a few
+ * milliseconds, unavoidable because editors and shells take no lock we could share.
  */
-async function writeWithMode(
+async function replaceChecked<R>(
   abs: string,
-  data: string | Uint8Array,
+  data: string | Uint8Array | null,
   mode: number,
-  logger: StorageLogger | undefined,
-): Promise<void> {
-  await writeFileAtomic(abs, data, mode);
-  const bits = mode & 0o777;
+  check: () => Promise<R | null>,
+  opts: { exactMode: boolean; logger: StorageLogger | undefined },
+): Promise<R | null> {
+  const early = await check();
+  if (early !== null) return early;
+  if (data === null) {
+    await fs.unlink(abs);
+    return null;
+  }
+  // Same temp name as `writeFileAtomic`, so a leftover is recognisable.
+  const tmp = `${abs}.${process.pid}.${randomUUID().slice(0, 8)}.tmp`;
   try {
-    const handle = await fs.open(abs, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+    const handle = await fs.open(tmp, 'wx', mode);
     try {
-      if (((await handle.stat()).mode & 0o777) !== bits) await handle.chmod(bits);
+      await handle.writeFile(data);
+      await handle.sync();
     } finally {
       await handle.close();
     }
+    const late = await check();
+    if (late !== null) {
+      await fs.rm(tmp, { force: true });
+      return late;
+    }
+    await fs.rename(tmp, abs);
   } catch (err) {
-    logger?.warn(`could not set the permissions of ${path.basename(abs)}: ${String(err)}`);
+    await fs.rm(tmp, { force: true }).catch(() => {});
+    throw err;
   }
+  if (opts.exactMode) {
+    const bits = mode & 0o777;
+    try {
+      const handle = await fs.open(abs, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+      try {
+        if (((await handle.stat()).mode & 0o777) !== bits) await handle.chmod(bits);
+      } finally {
+        await handle.close();
+      }
+    } catch (err) {
+      opts.logger?.warn(`could not set the permissions of ${path.basename(abs)}: ${String(err)}`);
+    }
+  }
+  return null;
 }
 
 /** Every blob hash a batch of the store still needs. */
@@ -437,7 +517,7 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
   };
 
   /** Only use under the chat's store lock (see `BlobStore`). `fileFor` has already vetted the id. */
-  const blobsFor = (chatId: Id): BlobStore => createBlobStore(paths.changesBlobDir(chatId));
+  const blobsFor = (chatId: Id): BlobStore => createBlobStore(paths.root, paths.changesBlobDir(chatId));
 
   /**
    * Read-modify-write under the chat's store lock. `fn` must not call `load` or `mutate` (the lock isn't re-entrant).
@@ -580,6 +660,8 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
           throw new CoreError('internal', autoWriteFailedText(rel));
         });
         if (disk.kind === 'other') throw badPath(`${rel} is not a regular file.`);
+        // Checked here, under the lock and before anything is hashed or copied into a blob (deletes included).
+        if (disk.kind === 'tooLarge') throw new CoreError('file_too_large', autoSourceTooLargeText(rel));
         const current = disk.kind === 'file' ? disk : null;
         const currentHash = current?.hash ?? '';
 
@@ -633,13 +715,22 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
 
           if (next !== null) await fs.mkdir(path.dirname(target.abs), { recursive: true });
           await deps.beforeWrite?.({ op: 'auto', chatId, path: rel });
-          // Re-check after creating parents: nothing may have turned into a link on the way.
-          const again = await resolveTarget(projectRoot, rel, deps.sandbox);
-          if (!again.ok || again.rel !== rel) {
-            throw badPath(again.ok ? `Path goes through a symbolic link: ${rel}` : `${again.message}: ${rel}`);
-          }
-          if (nextBytes === null) await fs.unlink(target.abs);
-          else await writeWithMode(target.abs, nextBytes, current?.mode ?? 0o644, deps.logger);
+          // The checks above ran before the blob write, the folder creation and the hook; `replaceChecked` repeats
+          // them as its last step: the path must still resolve to the same file (nothing turned into a link), and its
+          // bytes must still be the ones checked (or still missing).
+          const recheck = async (): Promise<CoreError | null> => {
+            const again = await resolveTarget(projectRoot, rel, deps.sandbox);
+            if (!again.ok || again.rel !== rel) {
+              return badPath(again.ok ? `Path goes through a symbolic link: ${rel}` : `${again.message}: ${rel}`);
+            }
+            const now = hashOnDisk(await readOnDisk(target.abs));
+            return now === currentHash ? null : new CoreError('conflict', autoStaleText(rel));
+          };
+          const refused = await replaceChecked(target.abs, nextBytes, current?.mode ?? 0o644, recheck, {
+            exactMode: true,
+            logger: deps.logger,
+          });
+          if (refused) throw refused;
         } catch (err) {
           // The store is unchanged; drop a blob that only this failed write referenced.
           await collectBlobs(chatId, store);
@@ -705,11 +796,11 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
     // LOCK ORDER: the chat's store lock (held by the caller's `mutate`), then this one file's write lock.
     return withWriteLock(target.abs, async () => {
       // Never touch a file that changed after the turn: Undo must not destroy later work.
+      const untouched = (disk: OnDisk): boolean =>
+        e.afterHash === null ? disk.kind === 'missing' : hashOnDisk(disk) === e.afterHash;
       const disk = await readOnDisk(target.abs).catch(() => null);
       if (disk === null) return 'blocked';
-      const untouched =
-        e.afterHash === null ? disk.kind === 'missing' : disk.kind === 'file' && disk.hash === e.afterHash;
-      if (!untouched) return 'changed_since';
+      if (!untouched(disk)) return 'changed_since';
       let original: Buffer | null = null;
       if (e.before) {
         original = await blobs.get(e.before.hash);
@@ -718,15 +809,21 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
       try {
         if (original) await fs.mkdir(path.dirname(target.abs), { recursive: true });
         await deps.beforeWrite?.({ op: 'undo', chatId, path: e.path });
-        const again = await resolveTarget(projectRoot, e.path, deps.sandbox);
-        if (!again.ok || again.rel !== e.path) return 'blocked';
-        if (original === null || e.before === null) await fs.unlink(target.abs);
-        else await writeWithMode(target.abs, original, e.before.mode, deps.logger);
+        // Repeated by `replaceChecked` as its last step, after the blob read, the folder creation and the hook.
+        const recheck = async (): Promise<UndoSkipReason | null> => {
+          const again = await resolveTarget(projectRoot, e.path, deps.sandbox);
+          if (!again.ok || again.rel !== e.path) return 'blocked';
+          return untouched(await readOnDisk(target.abs)) ? null : 'changed_since';
+        };
+        const restore = original === null || e.before === null ? null : original;
+        return await replaceChecked(target.abs, restore, e.before?.mode ?? 0o644, recheck, {
+          exactMode: true,
+          logger: deps.logger,
+        });
       } catch (err) {
         deps.logger?.warn(`undo: could not restore ${e.path}: ${String(err)}`);
         return 'blocked';
       }
-      return null;
     });
   }
 
@@ -836,23 +933,23 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
           rejectedHunks += rejected;
           skippedHunks += undecided;
           try {
-            if (change.kind === 'delete') {
-              await deps.beforeWrite?.({ op: 'apply', chatId: input.chatId, path: rec.path });
-              await fs.unlink(check.abs);
-            } else {
-              await fs.mkdir(path.dirname(check.abs), { recursive: true });
-              await deps.beforeWrite?.({ op: 'apply', chatId: input.chatId, path: rec.path });
-              // Re-check after creating parents: nothing may have turned into a link on the way.
-              const again = await resolveTarget(input.projectRoot, rec.path, deps.sandbox);
-              if (!again.ok || again.rel !== rec.path) return 'blocked';
-              const text = applyHunks(rec.baseContent, rec.content, accepted);
-              await writeFileAtomic(check.abs, text, check.mode);
-            }
+            const text = change.kind === 'delete' ? null : applyHunks(rec.baseContent, rec.content, accepted);
+            if (text !== null) await fs.mkdir(path.dirname(check.abs), { recursive: true });
+            await deps.beforeWrite?.({ op: 'apply', chatId: input.chatId, path: rec.path });
+            // The same check again as `replaceChecked`'s last step, after the folder creation and the hook: re-resolve
+            // (a parent swapped for a link is `blocked`, for deletes too) and the existence and hash check.
+            const recheck = async (): Promise<ApplyConflictReason | null> => {
+              const again = await checkConflict(input.projectRoot, rec, change.kind);
+              return 'reason' in again ? again.reason : null;
+            };
+            return await replaceChecked(check.abs, text, check.mode, recheck, {
+              exactMode: false,
+              logger: deps.logger,
+            });
           } catch (err) {
             deps.logger?.warn(`apply: could not write ${rec.path}: ${String(err)}`);
             return 'blocked';
           }
-          return null;
         });
         if (outcome !== null) {
           conflicts.push({ path: rec.path, reason: outcome });
@@ -1032,7 +1129,11 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
         await fs.unlink(file.path).catch((err) => {
           if (!isNotFound(err)) throw err;
         });
-        await blobsFor(chatId).removeAll();
+        // A blob folder that isn't safe to remove (a link planted in the data dir) is left alone: the chat itself is
+        // still removed, and nothing outside storage is touched.
+        await blobsFor(chatId)
+          .removeAll()
+          .catch((err) => deps.logger?.warn(`changes: could not remove stored originals: ${String(err)}`));
       });
     },
   };

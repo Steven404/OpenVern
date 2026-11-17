@@ -1,4 +1,5 @@
-// A1: Undo of an Auto turn (`undoBatch`) and `prepareRetry`. Real temp project folder, real data dir.
+// Undo of an Auto turn (`undoBatch`) and `prepareRetry`: only files still exactly as the turn left them are restored,
+// the rest are reported. Real temp project folder, real data dir; races are driven by the `beforeWrite` hook.
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -273,6 +274,52 @@ describe('undoBatch: skipped files', () => {
     const res = await s.undo((await s.get()).applied[0]?.id as string);
     expect(res.batch.undo?.skipped).toEqual([{ path: 'a.txt', reason: 'unavailable' }]);
     expect(await s.exists('a.txt')).toBe(false);
+  });
+});
+
+describe('undoBatch: the file changes after the check (inside the hook)', () => {
+  // The first check runs before the blob read, the folder creation and the hook; the restore must check again right
+  // before it writes or unlinks, or it destroys what changed in between.
+  it('a modified file edited inside the hook is not overwritten: skipped changed_since', async () => {
+    const s = await setupAuto();
+    await s.seed('a.txt', 'orig\n');
+    await s.seed('b.txt', 'b0\n');
+    const tc = s.turn();
+    await s.readPut(tc, 'a.txt', 'new\n');
+    await s.readPut(tc, 'b.txt', 'b1\n');
+    s.hooks.beforeWrite = async (info) => {
+      if (info.path === 'a.txt') await fs.writeFile(s.abs('a.txt'), 'user edit\n');
+    };
+    const res = await s.undo((await s.get()).applied[0]?.id as string);
+    expect(res.batch.undo).toMatchObject({
+      restored: ['b.txt'],
+      skipped: [{ path: 'a.txt', reason: 'changed_since' }],
+    });
+    expect(await s.read('a.txt')).toBe('user edit\n');
+    expect(await s.read('b.txt')).toBe('b0\n');
+  });
+
+  it('a deleted file recreated inside the hook is not overwritten: skipped changed_since', async () => {
+    const s = await setupAuto();
+    await s.seed('gone.txt', 'orig\n');
+    await s.readPut(s.turn(), 'gone.txt', null, 'delete_file');
+    s.hooks.beforeWrite = async () => {
+      await fs.writeFile(s.abs('gone.txt'), 'recreated by the user\n');
+    };
+    const res = await s.undo((await s.get()).applied[0]?.id as string);
+    expect(res.batch.undo).toMatchObject({ restored: [], skipped: [{ path: 'gone.txt', reason: 'changed_since' }] });
+    expect(await s.read('gone.txt')).toBe('recreated by the user\n');
+  });
+
+  it('a created file edited inside the hook is not removed: skipped changed_since', async () => {
+    const s = await setupAuto();
+    await s.put(s.turn(), 'made.txt', 'made\n');
+    s.hooks.beforeWrite = async () => {
+      await fs.writeFile(s.abs('made.txt'), 'user edit\n');
+    };
+    const res = await s.undo((await s.get()).applied[0]?.id as string);
+    expect(res.batch.undo).toMatchObject({ restored: [], skipped: [{ path: 'made.txt', reason: 'changed_since' }] });
+    expect(await s.read('made.txt')).toBe('user edit\n');
   });
 });
 

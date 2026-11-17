@@ -7,12 +7,20 @@
 // Never take a store lock while holding a write lock, never hold two write locks at once, and never hold two
 // chats' store locks at once. With one order everywhere no cycle of waits can form.
 //
+// ALIASES (invariant): every spelling the volume may treat as the same file must end up on the same lock. The base key
+// (`fileLockKey`) is the real path, NFC-normalised and lower-cased, which already merges plain case differences. The
+// volume can merge more than that: APFS stores `poſt.txt` (long s) and `post.txt` as one name. So `withWriteLock`
+// also reuses the key of any lock in use whose path `sameFoldedRel` matches: the sandbox's own conservative fold
+// (NFKD, full case folding, marks dropped, per segment on darwin). That fold over-merges look-alikes the volume keeps
+// apart; over-merging only serialises two writes, while under-merging lets both pass their checks and both write.
+//
 // Writes by other programs (the user's editor, terminal commands) can't be locked. The callers re-check the file's
-// hash right before writing, so that window is a few milliseconds.
+// bytes as the very last step before writing, so that window is a few milliseconds.
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { withFileLock } from '../storage/mutex';
+import { sameFoldedRel } from '../tools/sandbox';
 
 const KEY_PREFIX = 'project-file:';
 
@@ -31,12 +39,21 @@ async function realPathOf(abs: string): Promise<string> {
 }
 
 /**
- * The lock key for an absolute project file path: its real path, NFC-normalised and lower-cased. Lower-casing can
+ * The base lock key for an absolute project file path: its real path, NFC-normalised and lower-cased. Lower-casing can
  * only over-serialise two names that differ by case; in exchange, nested projects and case-insensitive disks share
- * one lock per physical file.
+ * one lock per physical file. `withWriteLock` merges the remaining Unicode aliases (see ALIASES above).
  */
 export async function fileLockKey(abs: string): Promise<string> {
   return KEY_PREFIX + (await realPathOf(abs)).normalize('NFC').toLowerCase();
+}
+
+/** Lock keys in use (held or waited for) → how many callers use them. */
+const inUse = new Map<string, number>();
+
+/** The key in use that `key` is an alias of, or `key` itself. Linear in the number of locks in use, which is small. */
+function aliasOf(key: string): string {
+  for (const k of inUse.keys()) if (sameFoldedRel(k, key)) return k;
+  return key;
 }
 
 /**
@@ -44,5 +61,15 @@ export async function fileLockKey(abs: string): Promise<string> {
  * (or no lock) and must not take another write lock or any store lock inside `fn` (see the lock order above).
  */
 export async function withWriteLock<T>(abs: string, fn: () => Promise<T>): Promise<T> {
-  return withFileLock(await fileLockKey(abs), fn);
+  const base = await fileLockKey(abs);
+  // No await between the alias lookup and the count update: a second alias arriving now sees this key in use.
+  const key = aliasOf(base);
+  inUse.set(key, (inUse.get(key) ?? 0) + 1);
+  try {
+    return await withFileLock(key, fn);
+  } finally {
+    const left = (inUse.get(key) ?? 1) - 1;
+    if (left === 0) inUse.delete(key);
+    else inUse.set(key, left);
+  }
 }

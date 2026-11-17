@@ -62,7 +62,7 @@ describe('archived flag in the storage schemas', () => {
   });
 });
 
-describe('editMode in the storage schemas (A1)', () => {
+describe('editMode in the storage schemas', () => {
   const summary = { id: 'c', projectId: null, title: 't', model: 'm', createdAt: 'x', updatedAt: 'x' };
 
   it('chatFileSchema: missing, malformed -> review; auto -> auto; nothing is rejected', () => {

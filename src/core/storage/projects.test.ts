@@ -261,7 +261,7 @@ describe('macOS access denials (AS-08)', () => {
   });
 });
 
-describe('ProjectsService.list inGitRepo (A1)', () => {
+describe('ProjectsService.list inGitRepo', () => {
   const listed = async (storage: Awaited<ReturnType<typeof makeStorage>>['storage'], id: string) =>
     (await storage.projects.list()).find((p) => p.id === id)?.inGitRepo;
 

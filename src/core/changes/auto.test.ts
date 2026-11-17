@@ -1,12 +1,19 @@
-// A1: Auto-mode writes. Real temp project folder, real data dir; races are driven by the `beforeWrite` hook (it runs
-// inside the file's write lock), never by timing.
+// Auto-mode writes straight to disk: the sandbox, the hash and stale-read checks, the per-file lock, the stored
+// originals and review apply's write path. Real temp project folder, real data dir; races are driven by the
+// `beforeWrite` hook (it runs inside the file's write lock), never by timing.
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { LIMITS } from '@shared/constants';
 import type { HunkDecision } from '@shared/types';
 import { describe, expect, it } from 'vitest';
-import { autoPendingText, autoStaleText, autoUnreadText, autoWriteFailedText } from '../agent/edit-mode';
+import {
+  autoPendingText,
+  autoSourceTooLargeText,
+  autoStaleText,
+  autoUnreadText,
+  autoWriteFailedText,
+} from '../agent/edit-mode';
 import { cleanupTempDirs } from '../storage/test-helpers';
 import { type AutoSetup, flush, gate, setupAuto, waitFor } from './auto-test-helpers';
 import { sha256 } from './blobs';
@@ -436,9 +443,7 @@ describe('auto write: more edges', () => {
     expect((await s.get()).applied).toEqual([]);
   });
 
-  // BUG (src/core/changes/index.ts, apply, `fs.unlink(check.abs)`): a review delete is not re-resolved after the hook
-  // (unlike write, auto and undo), so a parent folder swapped for a symlink deletes the same-named file outside the project.
-  it.fails('review apply: a parent folder swapped for a symlink before a delete does not delete the outside file', async () => {
+  it('review apply: a parent folder swapped for a symlink before a delete does not delete the outside file', async () => {
     const s = await setupAuto();
     await fs.writeFile(path.join(s.outside, 'x.txt'), 'OUTSIDE\n');
     await s.seed('dir/x.txt', 'inside\n');
@@ -483,6 +488,175 @@ describe('auto write: more edges', () => {
     expect(batch?.written[0]).toMatchObject({ kind: 'create', add: 1 });
     await s.undo(batch?.id as string);
     expect(await s.exists('new.txt')).toBe(false);
+  });
+});
+
+/** Stages `content` for `rel` in Review and returns apply's input accepting every hunk. */
+async function stageAll(s: AutoSetup, rel: string, content: string | null) {
+  await s.turn({ mode: 'review' }).stage(rel, content);
+  const p = (await s.get()).pending;
+  const decisions: Record<string, Record<string, HunkDecision>> = {};
+  for (const f of p?.files ?? [])
+    decisions[f.path] = Object.fromEntries(f.hunks.map((h) => [h.id, 'accepted' as const]));
+  return { chatId: 'chat1', projectRoot: s.root, revision: p?.revision ?? 0, decisions };
+}
+
+describe('the file changes after the checks, inside the hook', () => {
+  // Every write path checks the file, then awaits (blob write, folder creation, the hook, the re-resolve). The check
+  // must be repeated right before the write or unlink, or a change made in between is destroyed.
+  it('auto: a modify, create or delete is refused with autoStaleText; the change on disk is kept', async () => {
+    const s = await setupAuto();
+    await s.seed('mod.txt', 'orig\n');
+    await s.seed('del.txt', 'orig\n');
+    const tc = s.turn();
+    await s.readFile(tc, 'mod.txt');
+    await s.readFile(tc, 'del.txt');
+    s.hooks.beforeWrite = async (info) => {
+      await fs.writeFile(s.abs(info.path), `user ${info.path}\n`);
+    };
+    for (const [rel, content] of [
+      ['mod.txt', 'model\n'],
+      ['new.txt', 'model\n'],
+      ['del.txt', null],
+    ] as const) {
+      await expect(s.put(tc, rel, content, content === null ? 'delete_file' : 'write_file')).rejects.toMatchObject({
+        code: 'conflict',
+        message: autoStaleText(rel),
+      });
+      expect(await s.read(rel)).toBe(`user ${rel}\n`);
+    }
+    expect((await s.get()).applied).toEqual([]);
+    expect((await s.get()).diskSeq).toBe(0);
+    expect(await s.blobs()).toEqual([]);
+  });
+
+  it('review apply: a modify, create or delete becomes a conflict; the change on disk is kept', async () => {
+    for (const [rel, seed, content, reason] of [
+      ['mod.txt', 'orig\n', 'proposed\n', 'changed_on_disk'],
+      ['new.txt', null, 'proposed\n', 'exists_on_disk'],
+      ['del.txt', 'orig\n', null, 'changed_on_disk'],
+    ] as const) {
+      const s = await setupAuto();
+      if (seed !== null) await s.seed(rel, seed);
+      const input = await stageAll(s, rel, content);
+      s.hooks.beforeWrite = async () => {
+        await fs.writeFile(s.abs(rel), 'user\n');
+      };
+      const res = await s.svc.apply(input);
+      expect(res.batch.written).toEqual([]);
+      expect(res.batch.conflicts).toEqual([{ path: rel, reason }]);
+      expect(res.changes.diskSeq).toBe(0);
+      expect(await s.read(rel)).toBe('user\n');
+    }
+  });
+
+  it('review apply: a file deleted inside the hook is not recreated (deleted_on_disk)', async () => {
+    const s = await setupAuto();
+    await s.seed('a.txt', 'orig\n');
+    const input = await stageAll(s, 'a.txt', 'proposed\n');
+    s.hooks.beforeWrite = async () => {
+      await fs.rm(s.abs('a.txt'));
+    };
+    const res = await s.svc.apply(input);
+    expect(res.batch.conflicts).toEqual([{ path: 'a.txt', reason: 'deleted_on_disk' }]);
+    expect(await s.exists('a.txt')).toBe(false);
+  });
+});
+
+describe('auto write: the source-size limit', () => {
+  const L = LIMITS.editSourceMaxBytes;
+  /** A text file of exactly `n` bytes. */
+  const sized = (n: number) => `${'a'.repeat(n - 1)}\n`;
+
+  it('a file of exactly the limit can be modified and deleted', async () => {
+    const s = await setupAuto();
+    await s.seed('mod.txt', sized(L));
+    await s.seed('del.txt', sized(L));
+    const tc = s.turn();
+    await expect(s.readPut(tc, 'mod.txt', 'small\n')).resolves.toMatchObject({ batchId: expect.any(String) });
+    await expect(s.readPut(tc, 'del.txt', null, 'delete_file')).resolves.toMatchObject({
+      batchId: expect.any(String),
+    });
+    expect(await s.read('mod.txt')).toBe('small\n');
+    expect(await s.exists('del.txt')).toBe(false);
+  });
+
+  it('a file one byte over the limit is refused for modify and delete, before any copy is kept', async () => {
+    const s = await setupAuto();
+    await s.seed('mod.txt', sized(L + 1));
+    await s.seed('del.txt', sized(L + 1));
+    const tc = s.turn();
+    for (const [rel, content] of [
+      ['mod.txt', 'small\n'],
+      ['del.txt', null],
+    ] as const) {
+      await expect(s.readPut(tc, rel, content, content === null ? 'delete_file' : 'edit_file')).rejects.toMatchObject({
+        code: 'file_too_large',
+        message: autoSourceTooLargeText(rel),
+      });
+      expect((await fs.stat(s.abs(rel))).size).toBe(L + 1);
+    }
+    expect(await s.blobs()).toEqual([]);
+    expect((await s.get()).applied).toEqual([]);
+  });
+
+  it('a binary file one byte over the limit cannot be deleted either', async () => {
+    const s = await setupAuto();
+    const bytes = Buffer.alloc(L + 1, 0);
+    await s.seed('big.bin', bytes);
+    await expect(s.readPut(s.turn(), 'big.bin', null, 'delete_file')).rejects.toMatchObject({
+      code: 'file_too_large',
+    });
+    expect(await s.exists('big.bin')).toBe(true);
+    expect(await s.blobs()).toEqual([]);
+  });
+});
+
+describe('stored originals (the blob folder)', () => {
+  it('a blob folder that is a symlink is refused: nothing outside storage is written or deleted', async () => {
+    const s = await setupAuto();
+    const elsewhere = path.join(s.outside, 'elsewhere');
+    await fs.mkdir(elsewhere);
+    const unrelatedHash = sha256('not a blob of this chat');
+    await fs.writeFile(path.join(elsewhere, 'keep.txt'), 'keep\n');
+    await fs.writeFile(path.join(elsewhere, unrelatedHash), 'hash-named\n');
+    await fs.mkdir(path.dirname(s.blobDir()), { recursive: true });
+    await fs.symlink(elsewhere, s.blobDir());
+
+    await s.seed('a.txt', 'orig\n');
+    await expect(s.readPut(s.turn(), 'a.txt', 'new\n')).rejects.toMatchObject({
+      code: 'internal',
+      message: autoWriteFailedText('a.txt'),
+    });
+    expect(await s.read('a.txt')).toBe('orig\n');
+    expect((await fs.readdir(elsewhere)).sort()).toEqual([unrelatedHash, 'keep.txt'].sort());
+    expect(await fs.readFile(path.join(elsewhere, 'keep.txt'), 'utf8')).toBe('keep\n');
+
+    // Removing the chat removes the link, never what it points to.
+    await s.svc.removeForChat('chat1');
+    expect(await fs.lstat(s.blobDir()).catch(() => null)).toBeNull();
+    expect((await fs.readdir(elsewhere)).sort()).toEqual([unrelatedHash, 'keep.txt'].sort());
+  });
+
+  it('collecting blobs removes only unreferenced blobs, never other files, folders or link targets', async () => {
+    const s = await setupAuto();
+    await s.seed('a.txt', 'orig\n');
+    await s.readPut(s.turn(), 'a.txt', 'new\n');
+    const dir = s.blobDir();
+    expect(await s.blobs()).toEqual([sha256('orig\n')]);
+    const target = path.join(s.outside, 'target.txt');
+    await fs.writeFile(target, 'outside\n');
+    await fs.writeFile(path.join(dir, 'notes.txt'), 'mine\n');
+    await fs.mkdir(path.join(dir, 'sub'));
+    await fs.writeFile(path.join(dir, 'sub', 'inner.txt'), 'inner\n');
+    // A hash-named folder and a hash-named link to an outside file.
+    await fs.mkdir(path.join(dir, sha256('folder')));
+    await fs.symlink(target, path.join(dir, sha256('link')));
+
+    await s.undo((await s.get()).applied[0]?.id as string); // drops the undo data, then collects
+    expect((await s.blobs()).sort()).toEqual(['notes.txt', 'sub', sha256('folder')].sort());
+    expect(await fs.readFile(path.join(dir, 'sub', 'inner.txt'), 'utf8')).toBe('inner\n');
+    expect(await fs.readFile(target, 'utf8')).toBe('outside\n');
   });
 });
 
@@ -1209,6 +1383,52 @@ describe('concurrency (deterministic, via the hook)', () => {
         code: 'conflict',
       });
       expect(await s.read('a.txt')).toBe('orig\n');
+    },
+    LIMIT_TEST,
+  );
+
+  it.runIf(process.platform === 'darwin')(
+    'two chats create "poſt.txt" and "post.txt" at once: one lock, exactly one create lands',
+    async (ctx) => {
+      const s = await setupAuto();
+      // The volume must store the two spellings as one name (APFS and HFS+ do by default).
+      await fs.writeFile(path.join(s.outside, 'post.txt'), 'probe');
+      if (
+        !(await fs.lstat(path.join(s.outside, 'poſt.txt')).then(
+          () => true,
+          () => false,
+        ))
+      ) {
+        ctx.skip();
+      }
+      const A = s.turn({ chatId: 'chatA', turnId: 'tA' });
+      const B = s.turn({ chatId: 'chatB', turnId: 'tB' });
+      const g = gate();
+      const order: string[] = [];
+      s.hooks.beforeWrite = async (info) => {
+        order.push(info.chatId);
+        if (info.chatId === 'chatA') await g.hold();
+      };
+      const pa = A.write('poſt.txt', 'A\n', { tool: 'write_file', baseHash: '' });
+      await g.entered;
+      let bSettled = false;
+      const pb = B.write('post.txt', 'B\n', { tool: 'write_file', baseHash: '' }).finally(() => {
+        bSettled = true;
+      });
+      pb.catch(() => {});
+      await flush(64);
+      expect(bSettled).toBe(false);
+      expect(order).toEqual(['chatA']); // B waits on A's lock instead of passing its own checks
+      g.open();
+      const [ra, rb] = await Promise.allSettled([pa, pb]);
+      expect(ra.status).toBe('fulfilled');
+      expect((rb as PromiseRejectedResult).reason).toMatchObject({
+        code: 'conflict',
+        message: autoStaleText('post.txt'),
+      });
+      expect(await fs.readdir(s.root)).toHaveLength(1);
+      expect(await s.read('post.txt')).toBe('A\n');
+      expect([...(await s.get('chatA')).applied, ...(await s.get('chatB')).applied]).toHaveLength(1);
     },
     LIMIT_TEST,
   );
