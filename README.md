@@ -12,8 +12,8 @@ no telemetry.
 - **Projects and chats.** Add a folder as a project and keep chats inside it, or chat without a project. Chats can be
   archived and deleted.
 - **Any OpenRouter model.** Pick a model per chat. For models that support reasoning, choose the reasoning effort.
-- **Read access through tool calls.** In a project chat the model can list, read and search files. Each tool call is
-  shown in the conversation.
+- **Read access through tool calls.** In a project chat the model can list, read and search files. Consecutive tool
+  calls fold into one summary row ("Read 3 files, searched 2 times"), one click from each call.
 - **A terminal you type into.** A shell dock under the composer, one per chat, in the project folder (or your home
   folder for a chat without a project). Open it from the right panel's Terminal row or with Ctrl+` (on macOS too),
   in a chat or already on the new-chat screen, where it starts in the chosen project's folder or, with no project, in

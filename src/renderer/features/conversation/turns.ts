@@ -31,6 +31,17 @@ export interface ToolBlock {
 
 export type Block = TextBlock | ToolBlock;
 
+/** A run of two or more consecutive tool calls shown as one disclosure row. */
+export interface ToolGroupItem {
+  kind: 'group';
+  /** The first block's key; stable while the group grows at its tail. */
+  key: string;
+  blocks: ToolBlock[];
+  live: boolean;
+}
+
+export type TurnItem = TextBlock | ToolBlock | ToolGroupItem;
+
 export interface Turn {
   key: string;
   user: UserMessage | null;
@@ -127,3 +138,41 @@ export function isWaiting(turns: Turn[], run: RunState | undefined): boolean {
 /** The turn holds a block of this assistant message (where the Proposed edits card belongs). */
 export const turnHasMessage = (turn: Turn, messageId: string): boolean =>
   turn.blocks.some((b) => (b.kind === 'text' ? b.messageId : b.messageId) === messageId);
+
+/** Only text the user can see ends a run of tool calls; an empty streaming placeholder does not. */
+const isVisibleText = (b: TextBlock): boolean => b.text.length > 0 || b.status === 'stopped' || b.status === 'error';
+
+/**
+ * Folds every run of 2 or more consecutive tool calls (edit tools included) into one group keyed by its first
+ * block. A run of 1 stays a plain tool block. A group is live while a call is running or queued, or while it is
+ * the last item of the live turn (the gap between sequential calls); `skipped` counts as settled.
+ * `live`: this turn is the last one and a run is open for the chat.
+ */
+export function groupBlocks(blocks: Block[], { live }: { live: boolean }): TurnItem[] {
+  const items: TurnItem[] = [];
+  let run: ToolBlock[] = [];
+  const flush = () => {
+    const [first] = run;
+    if (first && run.length === 1) items.push(first);
+    else if (first) items.push({ kind: 'group', key: first.key, blocks: run, live: false });
+    run = [];
+  };
+  for (const b of blocks) {
+    if (b.kind === 'tool') run.push(b);
+    else if (isVisibleText(b)) {
+      flush();
+      items.push(b);
+    } else {
+    }
+  }
+  flush();
+  const lastIndex = items.length - 1;
+  return items.map((item, i) =>
+    item.kind === 'group'
+      ? {
+          ...item,
+          live: item.blocks.some((b) => b.state === 'running' || b.state === 'queued') || (live && i === lastIndex),
+        }
+      : item,
+  );
+}

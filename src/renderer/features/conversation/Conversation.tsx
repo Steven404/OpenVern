@@ -139,6 +139,7 @@ export function Conversation({ chatId }: ConversationProps) {
                 <AssistantTurn
                   blocks={turn.blocks}
                   notice={turn.notice}
+                  live={isLast && running}
                   waiting={turnWaiting}
                   footer={cards}
                   error={turnError}

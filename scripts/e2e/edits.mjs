@@ -202,6 +202,11 @@ try {
   await waitFor(`location.hash.startsWith('#/chat/')`, 'project chat');
   await waitFor(`!!document.querySelector('[data-testid=changes-card]') && ${isIdle}`, 'Proposed edits card', 25000);
   await sleep(600);
+  // Tool groups are collapsed, and the names are in their rows: open every group (the edit_file calls come after
+  // "Applying the edits.", so they sit in a second group).
+  const groupHeaders = `document.querySelectorAll('[data-testid="tool-group"] > button')`;
+  const groupCount = await ev(`${groupHeaders}.length`);
+  for (let i = 0; i < groupCount; i++) await click(`${groupHeaders}[${i}]`, `tool group ${i + 1}`);
   const text = await ev('document.body.innerText');
   check(
     'B6 tool rows show edit_file / write_file / delete_file',

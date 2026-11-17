@@ -283,7 +283,10 @@ describe('Conversation run overlay', () => {
     });
     renderWithProviders(<Conversation chatId={chat.id} />, { api });
     await screen.findByText('reading now');
-    const rows = screen.getAllByTestId('tool-row').slice(-2);
+    const group = screen.getByTestId('tool-group');
+    expect(group.getAttribute('data-state')).toBe('live');
+    fireEvent.click(within(group).getByRole('button', { name: /Reading x\.ts/ }));
+    const rows = within(group).getAllByTestId('tool-row');
     expect(rows.map((r) => r.getAttribute('data-state'))).toEqual(['running', 'queued']);
   });
 

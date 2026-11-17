@@ -1,16 +1,19 @@
 import type { ApiErrorInfo } from '@shared/errors';
 import { Info } from 'lucide-react';
-import { memo, type ReactNode } from 'react';
+import { memo, type ReactNode, useMemo } from 'react';
 import { Button } from '../../components/ui';
 import { ErrorCard } from './ErrorCard';
 import { Markdown } from './Markdown';
 import { ToolCallRow } from './ToolCallRow';
-import type { Block, TextBlock } from './turns';
+import { ToolGroup } from './ToolGroup';
+import { type Block, groupBlocks, type TextBlock } from './turns';
 
 export interface AssistantTurnProps {
   blocks: Block[];
   /** Small muted note before the content (e.g. the project tree timed out). */
   notice?: string;
+  /** This turn is the last one and a run is open: its trailing tool group stays live between calls. */
+  live?: boolean;
   /** "Thinking…" before the first token (and between tool calls and the next reply). */
   waiting?: boolean;
   /** Rendered after the blocks (the Proposed edits card). */
@@ -25,10 +28,11 @@ export interface AssistantTurnProps {
   onRetry?: () => void;
 }
 
-/** One article per turn, with texts and tool rows in order. */
+/** One article per turn, with texts, tool rows and tool groups in order. */
 export const AssistantTurn = memo(function AssistantTurn({
   blocks,
   notice,
+  live = false,
   waiting = false,
   footer,
   error,
@@ -36,6 +40,7 @@ export const AssistantTurn = memo(function AssistantTurn({
   forceRetry = false,
   onRetry,
 }: AssistantTurnProps) {
+  const items = useMemo(() => groupBlocks(blocks, { live }), [blocks, live]);
   const lastText = blocks.findLast((b) => b.kind === 'text');
   const hasStoppedBlock = blocks.some((b) => b.kind === 'text' && b.status === 'stopped');
   return (
@@ -50,8 +55,10 @@ export const AssistantTurn = memo(function AssistantTurn({
         </p>
       )}
 
-      {blocks.map((b) =>
-        b.kind === 'tool' ? (
+      {items.map((b) =>
+        b.kind === 'group' ? (
+          <ToolGroup key={b.key} group={b} />
+        ) : b.kind === 'tool' ? (
           <ToolCallRow key={b.key} block={b} />
         ) : (
           <TextPart key={b.key} block={b} onRetry={b === lastText ? onRetry : undefined} />
