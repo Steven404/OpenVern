@@ -2,7 +2,7 @@
 // two chats (or an apply and an auto write) can never both pass the on-disk hash check and both write.
 //
 // LOCK ORDER (invariant; every caller must follow it, or two callers can deadlock):
-//   1. a chat's change-store lock (the `JsonFile` lock on `changes/<chatId>.json`) first,
+//   1. a chat's change-store lock (the file lock keyed by `changes/<chatId>.json`) first,
 //   2. then at most ONE project-file write lock at a time, taken and released per file.
 // Never take a store lock while holding a write lock, never hold two write locks at once, and never hold two
 // chats' store locks at once. With one order everywhere no cycle of waits can form.

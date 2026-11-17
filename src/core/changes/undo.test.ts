@@ -6,7 +6,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { autoUnreadText, modeChangedNote } from '../agent/edit-mode';
 import { cleanupTempDirs } from '../storage/test-helpers';
-import { setupAuto } from './auto-test-helpers';
+import { makeFifo, releaseFifo, setupAuto, swapProjectRoot, watchFileReads, within } from './auto-test-helpers';
 import { sha256 } from './blobs';
 
 cleanupTempDirs();
@@ -266,6 +266,52 @@ describe('undoBatch: skipped files', () => {
     expect(await s.read('ok.txt')).toBe('o0\n');
   });
 
+  it.skipIf(process.platform === 'win32')(
+    'a FIFO in a blob’s place is skipped (unavailable) at once, not waited on; the others are restored',
+    async () => {
+      const s = await setupAuto();
+      await s.seed('a.txt', 'a0\n');
+      await s.seed('b.txt', 'b0\n');
+      const tc = s.turn();
+      await s.readPut(tc, 'a.txt', 'a1\n');
+      await s.readPut(tc, 'b.txt', 'b1\n');
+      const blob = path.join(s.blobDir(), sha256('a0\n'));
+      await fs.rm(blob);
+      makeFifo(blob);
+      let res: Awaited<ReturnType<typeof s.undo>>;
+      try {
+        res = await within(2_000, s.undo((await s.get()).applied[0]?.id as string));
+      } finally {
+        await releaseFifo(blob);
+      }
+      expect(res.batch.undo).toMatchObject({
+        restored: ['b.txt'],
+        skipped: [{ path: 'a.txt', reason: 'unavailable' }],
+      });
+      expect(await s.read('a.txt')).toBe('a1\n');
+      expect(await s.read('b.txt')).toBe('b0\n');
+    },
+  );
+
+  it('a corrupt 6 MiB blob is skipped (unavailable) without being read in full', async () => {
+    const s = await setupAuto();
+    await s.seed('a.txt', 'a0\n');
+    await s.readPut(s.turn(), 'a.txt', 'a1\n');
+    await fs.writeFile(path.join(s.blobDir(), sha256('a0\n')), Buffer.alloc(6 * 1024 * 1024, 0x62));
+    const reads = await watchFileReads(s.abs('a.txt'));
+    let res: Awaited<ReturnType<typeof s.undo>>;
+    try {
+      res = await s.undo((await s.get()).applied[0]?.id as string);
+      expect(reads.readFileCalls()).toBe(0);
+      // Only the project file and the store are read; not one byte of the blob.
+      expect(await reads.bytesRead()).toBeLessThan(64 * 1024);
+    } finally {
+      reads.restore();
+    }
+    expect(res.batch.undo?.skipped).toEqual([{ path: 'a.txt', reason: 'unavailable' }]);
+    expect(await s.read('a.txt')).toBe('a1\n');
+  });
+
   it('a blob for a file the turn deleted: missing → unavailable, and the file is not recreated empty', async () => {
     const s = await setupAuto();
     await s.seed('a.txt', 'orig\n');
@@ -320,6 +366,42 @@ describe('undoBatch: the file changes after the check (inside the hook)', () => 
     const res = await s.undo((await s.get()).applied[0]?.id as string);
     expect(res.batch.undo).toMatchObject({ restored: [], skipped: [{ path: 'made.txt', reason: 'changed_since' }] });
     expect(await s.read('made.txt')).toBe('user edit\n');
+  });
+});
+
+describe('undoBatch: the project folder swapped for a link to another folder (inside the hook)', () => {
+  it('every file is blocked, the ones after the swap too; nothing outside or in the moved project changes', async () => {
+    const s = await setupAuto();
+    await s.seed('a.txt', 'a0\n');
+    await s.seed('b.txt', 'b0\n');
+    const tc = s.turn();
+    await s.readPut(tc, 'a.txt', 'a1\n'); // modified
+    await s.readPut(tc, 'b.txt', null, 'delete_file'); // deleted
+    await s.readPut(tc, 'c.txt', 'c1\n'); // created
+    // The other folder looks exactly like what the turn left, so every hash check would pass there.
+    await fs.writeFile(path.join(s.outside, 'a.txt'), 'a1\n');
+    await fs.writeFile(path.join(s.outside, 'c.txt'), 'c1\n');
+    const seqBefore = (await s.get()).diskSeq;
+    let moved = '';
+    s.hooks.beforeWrite = async () => {
+      // Only the first file reaches the hook; the others must be refused by the root pinned for the whole undo.
+      if (!moved) moved = await swapProjectRoot(s);
+    };
+    const res = await s.undo((await s.get()).applied[0]?.id as string);
+    expect(res.batch.undo).toMatchObject({
+      restored: [],
+      skipped: [
+        { path: 'a.txt', reason: 'blocked' },
+        { path: 'b.txt', reason: 'blocked' },
+        { path: 'c.txt', reason: 'blocked' },
+      ],
+    });
+    expect(res.changes.diskSeq).toBe(seqBefore);
+    for (const dir of [s.outside, moved]) {
+      expect((await fs.readdir(dir)).sort()).toEqual(['a.txt', 'c.txt']);
+      expect(await fs.readFile(path.join(dir, 'a.txt'), 'utf8')).toBe('a1\n');
+      expect(await fs.readFile(path.join(dir, 'c.txt'), 'utf8')).toBe('c1\n');
+    }
   });
 });
 

@@ -3,16 +3,20 @@
 // batches. Every call must run under the chat's change-store lock: `collect` decides what is unreferenced from the
 // store, and a concurrent `put` could otherwise lose a blob it just wrote.
 //
-// TRUST (invariant): only the data dir itself (`root`) is trusted. Every folder from it down to the blob folder must be
-// a real directory, never a symlink, checked before each operation; otherwise a planted link would make `put` write
-// copies of project files outside storage and `collect` delete files there. Blobs are opened without following a
-// link, and `collect` only ever unlinks names this module creates (a hash, or `writeFileAtomic`'s temp name for one),
-// never anything else and never recursively.
+// TRUST (invariant; see `storage-trust.ts`): only the data dir itself (`root`) is trusted. Every folder from it down
+// to the blob folder must be a real directory, never a symlink, checked before each operation; otherwise a planted
+// link would make `put` write copies of project files outside storage and `collect` delete files there. A blob is
+// read only when it is a regular file of at most `LIMITS.editSourceMaxBytes` (Auto never keeps a larger original),
+// opened without following a link or blocking, at most limit + 1 bytes, and only returned when its bytes still hash
+// to its name. `collect` only ever unlinks names this module creates (a hash, or `writeFileAtomic`'s temp name for
+// one), never anything else and never recursively.
 
 import { createHash } from 'node:crypto';
-import { promises as fs, constants as fsConstants } from 'node:fs';
+import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { LIMITS } from '@shared/constants';
 import { isNotFound, writeFileAtomic } from '../storage/json-file';
+import { folderCheck, readNoFollow } from './storage-trust';
 
 const HASH = /^[0-9a-f]{64}$/;
 /** `writeFileAtomic`'s temp file for a blob: `<hash>.<pid>.<8 hex>.tmp`. */
@@ -23,7 +27,10 @@ export const sha256 = (data: Uint8Array | string): string => createHash('sha256'
 export interface BlobStore {
   /** Stores `bytes` (owner-only) unless a blob with the same hash exists. Returns the hash. */
   put(bytes: Uint8Array): Promise<string>;
-  /** The bytes stored under `hash`, or null when missing, unreadable or no longer matching the hash. */
+  /**
+   * The bytes stored under `hash`, or null when missing, unreadable, not a regular file, over
+   * `LIMITS.editSourceMaxBytes` or no longer matching the hash. Never blocks and never reads more than the limit + 1.
+   */
   get(hash: string): Promise<Buffer | null>;
   /** Deletes every blob (and stray temp file of one) whose hash isn't in `keep`. Nothing else is touched. */
   collect(keep: ReadonlySet<string>): Promise<void>;
@@ -31,29 +38,11 @@ export interface BlobStore {
   removeAll(): Promise<void>;
 }
 
-/** Thrown when a folder on the way to the blobs is a symlink or not a directory. Nothing has been touched. */
-export class UnsafeBlobDirError extends Error {
-  constructor(dir: string) {
-    super(`Refusing to use ${dir}: it is a symbolic link or not a folder.`);
-    this.name = 'UnsafeBlobDirError';
-  }
-}
-
-/** A regular file's bytes, opened without following a symlink in its last component. Null when missing. */
-async function readNoFollow(file: string): Promise<Buffer | null> {
-  let handle: fs.FileHandle;
-  try {
-    handle = await fs.open(file, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
-  } catch (err) {
-    if (isNotFound(err)) return null;
-    throw err;
-  }
-  try {
-    if (!(await handle.stat()).isFile()) return null;
-    return await handle.readFile();
-  } finally {
-    await handle.close();
-  }
+/** The blob's bytes when it is intact (a regular file within the limit that hashes to `hash`), else null. */
+async function readBlob(file: string, hash: string): Promise<Buffer | null> {
+  const got = await readNoFollow(file, LIMITS.editSourceMaxBytes);
+  // A damaged blob must never be restored over a project file.
+  return got.kind === 'ok' && sha256(got.bytes) === hash ? got.bytes : null;
 }
 
 /**
@@ -61,50 +50,21 @@ async function readNoFollow(file: string): Promise<Buffer | null> {
  * @param dir the blob folder; must lie below `root`.
  */
 export function createBlobStore(root: string, dir: string): BlobStore {
-  const steps = path.relative(root, dir).split(path.sep);
-  if (steps.length === 0 || steps.some((s) => s === '' || s === '.' || s === '..') || path.isAbsolute(steps[0] ?? '')) {
-    throw new Error(`Blob folder ${dir} is not inside ${root}`);
-  }
+  // Throws `UnsafeStorageError` before anything is read, written or deleted.
+  const checkDirs = folderCheck(root, dir);
 
   const fileOf = (hash: string): string => {
     if (!HASH.test(hash)) throw new Error(`Invalid blob hash: ${hash}`);
     return path.join(dir, hash);
   };
 
-  /**
-   * Checks every folder from below `root` down to `dir` (or only its first `depth` folders): each must be a real
-   * directory (`lstat`, so a symlink is refused). A missing one is created (owner-only) when `create`, and then checked
-   * again; otherwise the result is 'missing'. Throws `UnsafeBlobDirError` before anything is read, written or deleted.
-   */
-  async function checkDirs(create: boolean, depth = steps.length): Promise<'ok' | 'missing'> {
-    let cur = root;
-    for (const step of steps.slice(0, depth)) {
-      cur = path.join(cur, step);
-      let info = await fs.lstat(cur).catch((err) => {
-        if (isNotFound(err)) return null;
-        throw err;
-      });
-      if (info === null) {
-        if (!create) return 'missing';
-        // The data dir is owner-only; these are copies of project files, so the folder is too.
-        await fs.mkdir(cur, { mode: 0o700 }).catch((err) => {
-          if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
-        });
-        info = await fs.lstat(cur);
-      }
-      if (info.isSymbolicLink() || !info.isDirectory()) throw new UnsafeBlobDirError(cur);
-    }
-    return 'ok';
-  }
-
   return {
     async put(bytes) {
       const hash = sha256(bytes);
       const file = fileOf(hash);
-      await checkDirs(true);
-      const existing = await readNoFollow(file).catch(() => null);
-      if (existing && sha256(existing) === hash) return hash;
-      // The rename replaces whatever entry has the name (a damaged blob, or a link) without following it.
+      await checkDirs({ create: true });
+      if (await readBlob(file, hash).catch(() => null)) return hash;
+      // The rename replaces whatever entry has the name (a damaged blob, a link or a FIFO) without following it.
       await writeFileAtomic(file, bytes, 0o600);
       return hash;
     },
@@ -112,17 +72,15 @@ export function createBlobStore(root: string, dir: string): BlobStore {
     async get(hash) {
       if (!HASH.test(hash)) return null;
       try {
-        if ((await checkDirs(false)) === 'missing') return null;
-        const bytes = await readNoFollow(fileOf(hash));
-        // A damaged blob must never be restored over a project file.
-        return bytes && sha256(bytes) === hash ? bytes : null;
+        if ((await checkDirs({ create: false })) === 'missing') return null;
+        return await readBlob(fileOf(hash), hash);
       } catch {
         return null;
       }
     },
 
     async collect(keep) {
-      if ((await checkDirs(false)) === 'missing') return;
+      if ((await checkDirs({ create: false })) === 'missing') return;
       const entries = await fs.readdir(dir, { withFileTypes: true });
       await Promise.all(
         entries
@@ -135,7 +93,7 @@ export function createBlobStore(root: string, dir: string): BlobStore {
 
     async removeAll() {
       // The folders above `dir` must be real, or the recursive removal below would happen somewhere else.
-      if ((await checkDirs(false, steps.length - 1)) === 'missing') return;
+      if ((await checkDirs({ create: false, parentsOnly: true })) === 'missing') return;
       const info = await fs.lstat(dir).catch((err) => {
         if (isNotFound(err)) return null;
         throw err;

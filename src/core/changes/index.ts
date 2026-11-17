@@ -31,7 +31,7 @@ import {
   undoneNote,
 } from '../agent/edit-mode';
 import { CoreError } from '../errors';
-import { isNotFound, JsonFile, type StorageLogger } from '../storage/json-file';
+import { consoleLogger, isNotFound, type StorageLogger, writeFileAtomic } from '../storage/json-file';
 import { withFileLock } from '../storage/mutex';
 import { type DataPaths, dataPaths } from '../storage/paths';
 import { resolveInProject, type SandboxOptions, sameFoldedRel } from '../tools/sandbox';
@@ -40,6 +40,7 @@ import type { ChangesService } from '../types';
 import { type BlobStore, createBlobStore, sha256 } from './blobs';
 import { applyHunks, detectEol, diffFile, finishFileChange, sameLines } from './diff';
 import { buildNote, type ChangeEvent, type NoteFile } from './note';
+import { folderCheck, readAtMost, readNoFollow, UnsafeStorageError } from './storage-trust';
 import { withWriteLock } from './write-lock';
 
 export { applyHunks, diffFile } from './diff';
@@ -300,6 +301,9 @@ function keepCrlf(base: string | null, next: string | null): string | null {
 
 const binaryText = (rel: string) => `${rel} is a binary file; it can't be edited or overwritten.`;
 
+const unsafeStoreText =
+  "This chat's change history can't be opened safely: a folder or file in the app's data folder is a symbolic link or not a regular file. Nothing was read or changed.";
+
 type Target =
   | { ok: true; abs: string; rel: string; exists: boolean; root: string }
   | { ok: false; kind: 'path' | 'link'; message: string };
@@ -343,6 +347,26 @@ const targetError = (target: Extract<Target, { ok: false }>, relPath: string) =>
   badPath(target.kind === 'link' ? `${target.message}: ${relPath}` : target.message);
 
 /**
+ * PINNED ROOT (invariant): every mutation of a project file is pinned to the project's real root and the file's
+ * absolute path as first resolved for the operation (one auto write, one review apply, one undo). The relative path
+ * alone doesn't name the same file once the project folder (or a folder above it) has been renamed and a link to
+ * another folder put in its place: it resolves cleanly there, maybe to identical bytes. So each later resolution,
+ * the last check before the unlink or rename included, must give the same root and the same absolute path; anything
+ * else refuses the file (`path_invalid` for Auto, `blocked` for apply and undo).
+ */
+interface Pin {
+  root: string;
+  abs: string;
+}
+
+const samePlace = (t: Extract<Target, { ok: true }>, pin: Pin): boolean => t.root === pin.root && t.abs === pin.abs;
+
+/** The project's real root at the start of an apply or undo, or null when it can't be resolved (every file blocked). */
+const pinRoot = (projectRoot: string): Promise<string | null> => fs.realpath(projectRoot).catch(() => null);
+
+const movedText = (rel: string) => `The project folder was moved or replaced during the write: ${rel}`;
+
+/**
  * A project file as it is on disk right now. `lstat`, so a symlink shows up as `other`. A file over
  * `LIMITS.editSourceMaxBytes` is `tooLarge` and its bytes are never read: Auto never loads, hashes or keeps a copy of
  * a file the edit tools wouldn't load either.
@@ -352,21 +376,6 @@ type OnDisk =
   | { kind: 'other' }
   | { kind: 'tooLarge' }
   | { kind: 'file'; bytes: Buffer; hash: string; mode: number; text: string | null };
-
-/** Up to `limit` bytes from the handle's position to its end; null when there are more. */
-async function readAtMost(handle: fs.FileHandle, limit: number): Promise<Buffer | null> {
-  const chunks: Buffer[] = [];
-  let total = 0;
-  for (;;) {
-    // Never more than `limit + 1` bytes in all: one past the limit is enough to know the file is over it.
-    const buf = Buffer.allocUnsafe(Math.min(limit + 1 - total, 1024 * 1024));
-    const { bytesRead } = await handle.read(buf, 0, buf.length, null);
-    if (bytesRead === 0) return Buffer.concat(chunks, total);
-    chunks.push(buf.subarray(0, bytesRead));
-    total += bytesRead;
-    if (total > limit) return null;
-  }
-}
 
 async function readOnDisk(abs: string): Promise<OnDisk> {
   let info: Awaited<ReturnType<typeof fs.lstat>>;
@@ -408,11 +417,12 @@ const hashOnDisk = (d: OnDisk): string | null => (d.kind === 'file' ? d.hash : d
  * masks them with the umask; the fix-up opens the path without following a link and is best effort (once the rename
  * has happened the content is on disk, so a failed fix-up must not report the write as failed).
  *
- * RECHECK IMMEDIATELY BEFORE MUTATION (invariant): `check` re-resolves the path and re-reads the file, and it is the
- * last step before the unlink or the rename, after every await that could let something change the file (blob
- * writes, folder creation, the test hook, writing the temp file). A non-null result refuses: nothing is changed and
- * the result is returned. For a write it also runs before the temp file is created, so a folder already swapped for a
- * link gets no temp file (one swapped in the moment between gets only that temp file, which the late check removes).
+ * RECHECK IMMEDIATELY BEFORE MUTATION (invariant): `check` re-resolves the path (it must still give the pinned root
+ * and absolute path; see PINNED ROOT) and re-reads the file, and it is the last step before the unlink or the rename,
+ * after every await that could let something change the file (blob writes, folder creation, the test hook, writing
+ * the temp file). A non-null result refuses: nothing is changed and the result is returned. For a write it also runs
+ * before the temp file is created, so a folder already swapped for a link gets no temp file (one swapped in the moment
+ * between gets only that temp file, which the late check removes).
  * What remains is the race against other programs between `check`'s read and the unlink/rename syscall: a few
  * milliseconds, unavoidable because editors and shells take no lock we could share.
  */
@@ -511,12 +521,69 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
     seen.get(chatId)?.delete(rel);
   };
 
-  const fileFor = (chatId: Id): JsonFile<Store> => {
+  /** Warnings about the change storage itself go to the console when no logger is given, as other stored files do. */
+  const storeLogger = deps.logger ?? consoleLogger;
+
+  /** The chat's store file. Its path is also the key of the chat's store lock (`withFileLock`). */
+  const storeFileOf = (chatId: Id): string => {
     if (!SAFE_ID.test(chatId)) throw new CoreError('not_found', 'Chat not found.');
-    return new JsonFile<Store>(paths.changesFile(chatId), storeSchema, { logger: deps.logger });
+    return paths.changesFile(chatId);
   };
 
-  /** Only use under the chat's store lock (see `BlobStore`). `fileFor` has already vetted the id. */
+  // STORE TRUST (invariant; see `storage-trust.ts`): `changes/` must be a real folder below the data dir, checked
+  // right before every read, write, quarantine and delete of a store file, and the store file is opened without
+  // following a link or blocking and must be a regular file. A read or update that finds anything else fails closed
+  // (`unsafeStoreText`): nothing is read, moved or written there, and no project file is touched.
+  const checkStoreDir = folderCheck(paths.root, paths.changesDir);
+
+  /** Maps an unsafe store folder or file to the error the caller reports. */
+  async function failClosed<T>(op: () => Promise<T>): Promise<T> {
+    try {
+      return await op();
+    } catch (err) {
+      if (!(err instanceof UnsafeStorageError)) throw err;
+      storeLogger.warn(`changes: ${err.message}`);
+      throw new CoreError('internal', unsafeStoreText);
+    }
+  }
+
+  /**
+   * The stored change set, or null when there is none (or it was corrupt and has been moved aside, as `JsonFile`
+   * does). Only under the chat's store lock.
+   */
+  async function readStore(file: string): Promise<Store | null> {
+    if ((await checkStoreDir({ create: false })) === 'missing') return null;
+    const got = await readNoFollow(file);
+    if (got.kind === 'missing') return null;
+    if (got.kind !== 'ok') throw new UnsafeStorageError(file, 'file');
+    let reason: string;
+    try {
+      const parsed = storeSchema.safeParse(JSON.parse(got.bytes.toString('utf8')));
+      if (parsed.success) return parsed.data;
+      reason = parsed.error.issues[0]?.message ?? 'schema mismatch';
+    } catch (err) {
+      reason = err instanceof Error ? err.message : 'invalid JSON';
+    }
+    // Moved aside, never deleted; the chat starts again from an empty store. The folder is checked again first: the
+    // rename must not move anything outside storage.
+    await checkStoreDir({ create: false });
+    const backup = `${file}.corrupt-${Date.now()}`;
+    try {
+      await fs.rename(file, backup);
+      storeLogger.warn(`${path.basename(file)} is corrupt (${reason}); moved to ${path.basename(backup)}.`);
+    } catch (err) {
+      storeLogger.warn(`${path.basename(file)} is corrupt (${reason}) and could not be backed up: ${String(err)}`);
+    }
+    return null;
+  }
+
+  /** Replaces the store file atomically (the rename replaces the entry itself, never a link's target). */
+  async function writeStore(file: string, store: Store): Promise<void> {
+    await checkStoreDir({ create: true });
+    await writeFileAtomic(file, `${JSON.stringify(store, null, 2)}\n`);
+  }
+
+  /** Only use under the chat's store lock (see `BlobStore`). `storeFileOf` has already vetted the id. */
   const blobsFor = (chatId: Id): BlobStore => createBlobStore(paths.root, paths.changesBlobDir(chatId));
 
   /**
@@ -525,19 +592,18 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
    * (`withWriteLock`), never another chat's store lock. A throw leaves the stored file unchanged.
    */
   async function mutate<T>(chatId: Id, fn: (store: Store) => Promise<T> | T): Promise<T> {
-    const file = fileFor(chatId);
-    await fs.mkdir(paths.changesDir, { recursive: true });
-    let result: T | undefined;
-    await file.update(async (current) => {
-      const store = current ?? emptyStore();
-      result = await fn(store);
-      return store;
+    const file = storeFileOf(chatId);
+    return withFileLock(file, async () => {
+      const store = (await failClosed(() => readStore(file))) ?? emptyStore();
+      const result = await fn(store);
+      await failClosed(() => writeStore(file, store));
+      return result;
     });
-    return result as T;
   }
 
   async function load(chatId: Id): Promise<Store> {
-    return (await fileFor(chatId).read()) ?? emptyStore();
+    const file = storeFileOf(chatId);
+    return (await withFileLock(file, () => failClosed(() => readStore(file)))) ?? emptyStore();
   }
 
   async function chatProject(chatId: Id): Promise<ProjectCheck> {
@@ -646,6 +712,8 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
     const target = await resolveTarget(projectRoot, relPath, deps.sandbox);
     if (!target.ok) throw targetError(target, relPath);
     const rel = target.rel;
+    // This first resolution pins the write (see PINNED ROOT).
+    const pin: Pin = { root: target.root, abs: target.abs };
 
     return mutate(chatId, async (store) => {
       // Writing over a pending proposal would make its review meaningless; the pending set stays untouched. Compared
@@ -716,13 +784,15 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
           if (next !== null) await fs.mkdir(path.dirname(target.abs), { recursive: true });
           await deps.beforeWrite?.({ op: 'auto', chatId, path: rel });
           // The checks above ran before the blob write, the folder creation and the hook; `replaceChecked` repeats
-          // them as its last step: the path must still resolve to the same file (nothing turned into a link), and its
-          // bytes must still be the ones checked (or still missing).
+          // them as its last step: the path must still resolve to the same file under the same project root (nothing
+          // turned into a link, the project folder wasn't swapped), and its bytes must still be the ones checked (or
+          // still missing).
           const recheck = async (): Promise<CoreError | null> => {
             const again = await resolveTarget(projectRoot, rel, deps.sandbox);
             if (!again.ok || again.rel !== rel) {
               return badPath(again.ok ? `Path goes through a symbolic link: ${rel}` : `${again.message}: ${rel}`);
             }
+            if (!samePlace(again, pin)) return badPath(movedText(rel));
             const now = hashOnDisk(await readOnDisk(target.abs));
             return now === currentHash ? null : new CoreError('conflict', autoStaleText(rel));
           };
@@ -787,12 +857,15 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
    */
   async function undoFile(
     chatId: Id,
-    projectRoot: string,
+    project: { root: string; real: string | null },
     e: UndoEntry,
     blobs: BlobStore,
   ): Promise<UndoSkipReason | null> {
+    const projectRoot = project.root;
     const target = await resolveTarget(projectRoot, e.path, deps.sandbox);
-    if (!target.ok || target.rel !== e.path) return 'blocked';
+    // The project root is pinned for the whole undo, the file's path from this first resolution (see PINNED ROOT).
+    if (!target.ok || target.rel !== e.path || target.root !== project.real) return 'blocked';
+    const pin: Pin = { root: target.root, abs: target.abs };
     // LOCK ORDER: the chat's store lock (held by the caller's `mutate`), then this one file's write lock.
     return withWriteLock(target.abs, async () => {
       // Never touch a file that changed after the turn: Undo must not destroy later work.
@@ -812,7 +885,7 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
         // Repeated by `replaceChecked` as its last step, after the blob read, the folder creation and the hook.
         const recheck = async (): Promise<UndoSkipReason | null> => {
           const again = await resolveTarget(projectRoot, e.path, deps.sandbox);
-          if (!again.ok || again.rel !== e.path) return 'blocked';
+          if (!again.ok || again.rel !== e.path || !samePlace(again, pin)) return 'blocked';
           return untouched(await readOnDisk(target.abs)) ? null : 'changed_since';
         };
         const restore = original === null || e.before === null ? null : original;
@@ -827,10 +900,13 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
     });
   }
 
-  /** Undoes one batch in place (it must still have its undo data). Under the chat's store lock only. */
+  /**
+   * Undoes one batch in place (it must still have its undo data). Under the chat's store lock only. `project.real` is
+   * the project's real root, pinned once by the caller for the whole undo (see PINNED ROOT).
+   */
   async function undoInStore(
     chatId: Id,
-    projectRoot: string,
+    project: { root: string; real: string | null },
     store: Store,
     batch: StoredBatch,
     by: BatchUndo['by'],
@@ -839,7 +915,7 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
     const restored: string[] = [];
     const skipped: BatchUndo['skipped'] = [];
     for (const e of [...(batch.undoData ?? [])].sort(byPath)) {
-      const reason = await undoFile(chatId, projectRoot, e, blobs);
+      const reason = await undoFile(chatId, project, e, blobs);
       if (reason) skipped.push({ path: e.path, reason });
       else restored.push(e.path);
     }
@@ -858,13 +934,15 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
 
   // -------------------------------------------------------------------------------------------- apply (Review)
 
+  /** The file must still resolve to `pin` (see PINNED ROOT) and be as the proposal expects. */
   async function checkConflict(
     projectRoot: string,
     rec: StoredFile,
     kind: ChangeKind,
+    pin: Pin,
   ): Promise<{ reason: ApplyConflictReason } | { abs: string; mode: number; root: string }> {
     const target = await resolveTarget(projectRoot, rec.path, deps.sandbox);
-    if (!target.ok || target.rel !== rec.path) return { reason: 'blocked' };
+    if (!target.ok || target.rel !== rec.path || !samePlace(target, pin)) return { reason: 'blocked' };
     if (kind === 'create') {
       if (target.exists) return { reason: 'exists_on_disk' };
       return { abs: target.abs, mode: 0o644, root: target.root };
@@ -893,6 +971,8 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
       const ev = { written: [] as NoteFile[], rejected: [] as NoteFile[], skipped: [] as NoteFile[] };
       let rejectedHunks = 0;
       let skippedHunks = 0;
+      // Pinned once for the whole apply (see PINNED ROOT).
+      const realRoot = await pinRoot(input.projectRoot);
 
       for (const rec of [...store.files].sort(byPath)) {
         const change = fileChangeOf(rec);
@@ -921,14 +1001,15 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
         }
 
         const target = await resolveTarget(input.projectRoot, rec.path, deps.sandbox);
-        if (!target.ok || target.rel !== rec.path) {
+        if (!target.ok || target.rel !== rec.path || target.root !== realRoot) {
           conflicts.push({ path: rec.path, reason: 'blocked' });
           continue;
         }
+        const pin: Pin = { root: target.root, abs: target.abs };
         // LOCK ORDER: the chat's store lock (held by `mutate`), then this one file's write lock, released before the
         // next file. The hash check and the write happen under it, so an auto write in another chat can't slip in.
         const outcome = await withWriteLock(target.abs, async (): Promise<ApplyConflictReason | null> => {
-          const check = await checkConflict(input.projectRoot, rec, change.kind);
+          const check = await checkConflict(input.projectRoot, rec, change.kind, pin);
           if ('reason' in check) return check.reason;
           rejectedHunks += rejected;
           skippedHunks += undecided;
@@ -937,9 +1018,10 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
             if (text !== null) await fs.mkdir(path.dirname(check.abs), { recursive: true });
             await deps.beforeWrite?.({ op: 'apply', chatId: input.chatId, path: rec.path });
             // The same check again as `replaceChecked`'s last step, after the folder creation and the hook: re-resolve
-            // (a parent swapped for a link is `blocked`, for deletes too) and the existence and hash check.
+            // (a parent or the project folder swapped for a link is `blocked`, for deletes too) and the existence and
+            // hash check.
             const recheck = async (): Promise<ApplyConflictReason | null> => {
-              const again = await checkConflict(input.projectRoot, rec, change.kind);
+              const again = await checkConflict(input.projectRoot, rec, change.kind, pin);
               return 'reason' in again ? again.reason : null;
             };
             return await replaceChecked(check.abs, text, check.mode, recheck, {
@@ -1085,7 +1167,7 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
         if (batch.source !== 'auto' || batch.undo || !batch.undoData || batch.projectId !== projectId) {
           throw notUndoable();
         }
-        await undoInStore(chatId, projectRoot, store, batch, 'user');
+        await undoInStore(chatId, { root: projectRoot, real: await pinRoot(projectRoot) }, store, batch, 'user');
         return { batch: batchOf(batch, projectId), changes: chatChangesOf(store, projectId) };
       }),
 
@@ -1102,8 +1184,9 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
             b.projectId === projectId,
         );
         let result: { batchId: Id; undo: BatchUndo } | null = null;
+        const project = { root: projectRoot, real: batches.length > 0 ? await pinRoot(projectRoot) : null };
         for (const batch of batches) {
-          const undo = await undoInStore(chatId, projectRoot, store, batch, 'retry');
+          const undo = await undoInStore(chatId, project, store, batch, 'retry');
           result = {
             batchId: batch.id,
             undo: result
@@ -1121,14 +1204,23 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
       }),
 
     removeForChat: async (chatId) => {
-      const file = fileFor(chatId);
+      const file = storeFileOf(chatId);
       seen.delete(chatId);
-      // Under the store lock (the `JsonFile` lock is keyed by the file's path), so no write of this chat can add a
-      // blob while its folder goes.
-      await withFileLock(file.path, async () => {
-        await fs.unlink(file.path).catch((err) => {
-          if (!isNotFound(err)) throw err;
+      // Under the store lock (keyed by the store file's path), so no write of this chat can add a blob while its
+      // folder goes.
+      await withFileLock(file, async () => {
+        // A `changes/` folder that isn't a real folder (a link planted in the data dir) is left alone, like an unsafe
+        // blob folder below: the chat itself is still removed, and nothing outside storage is deleted.
+        const dir = await checkStoreDir({ create: false }).catch((err) => {
+          storeLogger.warn(`changes: could not remove the change history: ${String(err)}`);
+          return 'unsafe' as const;
         });
+        // `unlink` removes the file, or a link in its place, never a link's target.
+        if (dir === 'ok') {
+          await fs.unlink(file).catch((err) => {
+            if (!isNotFound(err)) throw err;
+          });
+        }
         // A blob folder that isn't safe to remove (a link planted in the data dir) is left alone: the chat itself is
         // still removed, and nothing outside storage is touched.
         await blobsFor(chatId)

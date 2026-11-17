@@ -2,9 +2,11 @@
 // folder, a real data dir, a change service with a swappable `beforeWrite` hook, and small tool-like helpers that
 // compute `baseHash` from the disk the way the edit tools do.
 
-import { promises as fs } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { promises as fs, constants as fsConstants } from 'node:fs';
 import path from 'node:path';
 import type { EditMode, Id } from '@shared/types';
+import { vi } from 'vitest';
 import { ensureDataDir } from '../storage/paths';
 import { makeTempDir } from '../storage/test-helpers';
 import type { SandboxOptions } from '../tools/sandbox';
@@ -48,6 +50,63 @@ export async function flush(times = 8): Promise<void> {
 /** Polls `cond` until it holds. No timing assertion: a condition that never holds ends in the test's timeout. */
 export async function waitFor(cond: () => Promise<boolean> | boolean): Promise<void> {
   while (!(await cond())) await new Promise<void>((r) => setImmediate(r));
+}
+
+/** Rejects when `p` hasn't settled within `ms`: a read that blocks shows up as a failure, not a hung test. */
+export function within<T>(ms: number, p: Promise<T>): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`still pending after ${ms} ms`)), ms);
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+}
+
+/** Creates a FIFO at `file` (POSIX only). */
+export function makeFifo(file: string): void {
+  execFileSync('mkfifo', [file]);
+}
+
+/**
+ * Opens and closes the FIFO's write end, which releases a reader stuck opening it (it then reads end-of-file). Call it
+ * in a `finally`, so a test that fails because a read blocked doesn't leave a worker thread stuck.
+ */
+export async function releaseFifo(file: string): Promise<void> {
+  const handle = await fs.open(file, fsConstants.O_WRONLY | fsConstants.O_NONBLOCK).catch(() => null);
+  await handle?.close();
+}
+
+/**
+ * Watches every `FileHandle` read in this process until `restore()`: whether `readFile` (an unbounded read) was
+ * called, and how many bytes `read` returned in all.
+ */
+export async function watchFileReads(anyFile: string) {
+  const probe = await fs.open(anyFile, 'r');
+  const proto = Object.getPrototypeOf(probe) as fs.FileHandle;
+  await probe.close();
+  const readFile = vi.spyOn(proto, 'readFile');
+  const read = vi.spyOn(proto, 'read');
+  return {
+    readFileCalls: () => readFile.mock.calls.length,
+    bytesRead: async () => {
+      const results = await Promise.all(read.mock.results.map((r) => r.value as Promise<{ bytesRead: number }>));
+      return results.reduce((n, r) => n + r.bytesRead, 0);
+    },
+    restore: () => {
+      readFile.mockRestore();
+      read.mockRestore();
+    },
+  };
+}
+
+/**
+ * What a program running as the user could do mid-operation: moves the project folder away and puts a link to
+ * `s.outside` at its path. Returns where the project went.
+ */
+export async function swapProjectRoot(s: { root: string; outside: string }): Promise<string> {
+  const moved = `${s.root}-moved`;
+  await fs.rename(s.root, moved);
+  await fs.symlink(s.outside, s.root);
+  return moved;
 }
 
 export async function setupAuto(opts: AutoSetupOptions = {}) {

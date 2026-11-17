@@ -5,8 +5,10 @@ import type { DiffHunk, FileChange, HunkDecision } from '@shared/types';
 import { describe, expect, it } from 'vitest';
 import { sampleProposal } from '../../renderer/lib/mock-changes';
 import { modeChangedNote, tooLargeToReviewText } from '../agent/edit-mode';
+import type { StorageLogger } from '../storage/json-file';
 import { ensureDataDir } from '../storage/paths';
-import { cleanupTempDirs, makeTempDir } from '../storage/test-helpers';
+import { cleanupTempDirs, makeTempDir, recordingLogger } from '../storage/test-helpers';
+import { makeFifo, releaseFifo, within } from './auto-test-helpers';
 import { sha256 } from './blobs';
 import { createChangesService } from './index';
 
@@ -15,13 +17,13 @@ cleanupTempDirs();
 const CHAT = 'chat1';
 const MSG = 'msg1';
 
-async function setup() {
+async function setup(opts: { logger?: StorageLogger } = {}) {
   const base = await makeTempDir();
   const root = path.join(base, 'project');
   await fs.mkdir(root);
   const dataDir = (await ensureDataDir(path.join(base, 'data'))).root;
   const realRoot = await fs.realpath(root);
-  const svc = createChangesService({ dataDir });
+  const svc = createChangesService({ dataDir, logger: opts.logger });
   const tools = (messageId = MSG) =>
     svc.tools({ chatId: CHAT, projectId: 'p', projectRoot: realRoot, messageId, turnId: 'u', mode: 'review' });
   const write = async (rel: string, text: string | Buffer) => {
@@ -895,4 +897,95 @@ describe('removeForChat and the blob folder', () => {
     });
     await expect(s.svc.removeForChat('../x')).rejects.toMatchObject({ code: 'not_found' });
   });
+});
+
+describe('change store trust: links and special files in the data dir', () => {
+  /** A valid store with one pending proposal, as the service writes it. */
+  async function storeWithProposal(): Promise<string> {
+    const s = await setup();
+    await s.tools().stage('proposed.txt', 'from elsewhere\n');
+    return fs.readFile(path.join(s.dataDir, 'changes', `${CHAT}.json`), 'utf8');
+  }
+  /** Every entry of `dir` (no recursion) with its content, or `link -> target` for a link. */
+  async function contents(dir: string): Promise<Record<string, string>> {
+    const out: Record<string, string> = {};
+    for (const name of (await fs.readdir(dir)).sort()) {
+      const p = path.join(dir, name);
+      const info = await fs.lstat(p);
+      out[name] = info.isSymbolicLink() ? `link -> ${await fs.readlink(p)}` : await fs.readFile(p, 'utf8');
+    }
+    return out;
+  }
+  const autoTools = (s: Awaited<ReturnType<typeof setup>>) =>
+    s.svc.tools({ chatId: CHAT, projectId: 'p', projectRoot: s.root, messageId: 'm', turnId: 't', mode: 'auto' });
+
+  it('a changes folder that is a symlink: nothing is read, written, moved or deleted through it', async () => {
+    const logger = recordingLogger();
+    const s = await setup({ logger });
+    const elsewhere = await makeTempDir();
+    await fs.writeFile(path.join(elsewhere, `${CHAT}.json`), await storeWithProposal());
+    await fs.writeFile(path.join(elsewhere, 'broken.json'), '{ not json');
+    await fs.rm(path.join(s.dataDir, 'changes'), { recursive: true });
+    await fs.symlink(elsewhere, path.join(s.dataDir, 'changes'));
+    const before = await contents(elsewhere);
+    const refused = { code: 'internal', message: expect.stringContaining('symbolic link') };
+
+    // Reads (a corrupt store would be moved aside), updates, a new store, an auto write.
+    await expect(s.svc.get(CHAT)).rejects.toMatchObject(refused);
+    await expect(s.svc.get('broken')).rejects.toMatchObject(refused);
+    await expect(s.tools().read('proposed.txt')).rejects.toMatchObject(refused);
+    await expect(s.tools().stage('a.txt', 'x\n')).rejects.toMatchObject(refused);
+    await expect(s.svc.takeNote('newchat', { mode: 'review', firstTurn: false })).rejects.toMatchObject(refused);
+    await s.write('p.txt', 'orig\n');
+    const tc = autoTools(s);
+    tc.noteRead('p.txt', Buffer.from('orig\n'));
+    await expect(tc.write('p.txt', 'new\n', { tool: 'write_file', baseHash: sha256('orig\n') })).rejects.toMatchObject(
+      refused,
+    );
+    expect(await s.read('p.txt')).toBe('orig\n');
+    // Deleting the chat goes on (logged), but deletes nothing there.
+    await s.svc.removeForChat(CHAT);
+    expect(logger.messages.some((m) => m.includes('symbolic link'))).toBe(true);
+
+    expect(await contents(elsewhere)).toEqual(before);
+  });
+
+  it('a store file that is a symlink is refused; its target is never read, written or deleted', async () => {
+    const s = await setup();
+    const elsewhere = await makeTempDir();
+    const target = path.join(elsewhere, 'target.json');
+    const json = await storeWithProposal();
+    await fs.writeFile(target, json);
+    const link = path.join(s.dataDir, 'changes', `${CHAT}.json`);
+    await fs.symlink(target, link);
+    const refused = { code: 'internal', message: expect.stringContaining('symbolic link') };
+
+    await expect(s.svc.get(CHAT)).rejects.toMatchObject(refused);
+    await expect(s.svc.takeNote(CHAT, { mode: 'auto', firstTurn: false })).rejects.toMatchObject(refused);
+    await expect(s.tools().stage('a.txt', 'x\n')).rejects.toMatchObject(refused);
+    // Still the link (an update would have replaced it with a regular file), and the target is unchanged.
+    expect((await fs.lstat(link)).isSymbolicLink()).toBe(true);
+    expect(await fs.readFile(target, 'utf8')).toBe(json);
+
+    // Removing the chat removes the link itself, never its target.
+    await s.svc.removeForChat(CHAT);
+    expect(await fs.lstat(link).catch(() => null)).toBeNull();
+    expect(await fs.readFile(target, 'utf8')).toBe(json);
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'a FIFO in the store file’s place is refused at once, not waited on',
+    async () => {
+      const s = await setup();
+      const fifo = path.join(s.dataDir, 'changes', `${CHAT}.json`);
+      makeFifo(fifo);
+      try {
+        await expect(within(2_000, s.svc.get(CHAT))).rejects.toMatchObject({ code: 'internal' });
+        await expect(within(2_000, s.tools().stage('a.txt', 'x\n'))).rejects.toMatchObject({ code: 'internal' });
+      } finally {
+        await releaseFifo(fifo);
+      }
+      expect((await fs.lstat(fifo)).isFIFO()).toBe(true);
+    },
+  );
 });

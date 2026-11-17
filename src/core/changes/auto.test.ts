@@ -15,8 +15,8 @@ import {
   autoWriteFailedText,
 } from '../agent/edit-mode';
 import { cleanupTempDirs } from '../storage/test-helpers';
-import { type AutoSetup, flush, gate, setupAuto, waitFor } from './auto-test-helpers';
-import { sha256 } from './blobs';
+import { type AutoSetup, flush, gate, setupAuto, swapProjectRoot, waitFor, watchFileReads } from './auto-test-helpers';
+import { createBlobStore, sha256 } from './blobs';
 import { fileLockKey } from './write-lock';
 
 cleanupTempDirs();
@@ -563,6 +563,74 @@ describe('the file changes after the checks, inside the hook', () => {
   });
 });
 
+describe('the project folder swapped for a link to another folder, inside the hook', () => {
+  // The other folder holds the same bytes, so the hash checks pass there: only the pinned root tells them apart.
+  const files = async (dir: string) =>
+    Object.fromEntries(
+      await Promise.all(
+        (await fs.readdir(dir)).sort().map(async (n) => [n, await fs.readFile(path.join(dir, n), 'utf8')] as const),
+      ),
+    );
+
+  it.each([
+    ['modify', 'a.txt', 'model\n'],
+    ['create', 'new.txt', 'model\n'],
+    ['delete', 'a.txt', null],
+  ] as const)(
+    'auto %s: refused (path_invalid); nothing outside or in the moved project changes',
+    async (_, rel, content) => {
+      const s = await setupAuto();
+      await s.seed('a.txt', 'orig\n');
+      await fs.writeFile(path.join(s.outside, 'a.txt'), 'orig\n');
+      const tc = s.turn();
+      await s.readFile(tc, 'a.txt');
+      let moved = '';
+      s.hooks.beforeWrite = async () => {
+        moved = await swapProjectRoot(s);
+      };
+      await expect(s.put(tc, rel, content, content === null ? 'delete_file' : 'write_file')).rejects.toMatchObject({
+        code: 'path_invalid',
+        message: expect.stringContaining('moved or replaced'),
+      });
+      expect(await files(s.outside)).toEqual({ 'a.txt': 'orig\n' });
+      expect(await files(moved)).toEqual({ 'a.txt': 'orig\n' });
+      expect((await s.get()).applied).toEqual([]);
+      expect(await s.blobs()).toEqual([]);
+    },
+  );
+
+  it.each([
+    ['the modify', 'a.txt', 'b.txt'],
+    ['the delete', 'b.txt', 'a.txt'],
+  ])(
+    'review apply, %s first: the modify and the delete are both blocked; nothing outside changes',
+    async (_, mod, del) => {
+      const s = await setupAuto();
+      await s.seed(mod, 'mod\n');
+      await s.seed(del, 'del\n');
+      await fs.writeFile(path.join(s.outside, mod), 'mod\n');
+      await fs.writeFile(path.join(s.outside, del), 'del\n');
+      await s.turn({ mode: 'review' }).stage(mod, 'proposed\n');
+      const input = await stageAll(s, del, null);
+      let moved = '';
+      s.hooks.beforeWrite = async () => {
+        // Only the first file reaches the hook; the second must be refused by the root pinned for the whole apply.
+        if (!moved) moved = await swapProjectRoot(s);
+      };
+      const res = await s.svc.apply(input);
+      expect(res.batch.written).toEqual([]);
+      expect(res.batch.conflicts).toEqual([
+        { path: 'a.txt', reason: 'blocked' },
+        { path: 'b.txt', reason: 'blocked' },
+      ]);
+      expect(res.changes.diskSeq).toBe(0);
+      const expected = { [mod]: 'mod\n', [del]: 'del\n' };
+      expect(await files(s.outside)).toEqual(expected);
+      expect(await files(moved)).toEqual(expected);
+    },
+  );
+});
+
 describe('auto write: the source-size limit', () => {
   const L = LIMITS.editSourceMaxBytes;
   /** A text file of exactly `n` bytes. */
@@ -636,6 +704,28 @@ describe('stored originals (the blob folder)', () => {
     await s.svc.removeForChat('chat1');
     expect(await fs.lstat(s.blobDir()).catch(() => null)).toBeNull();
     expect((await fs.readdir(elsewhere)).sort()).toEqual([unrelatedHash, 'keep.txt'].sort());
+  });
+
+  it('a blob over the source-size limit is unavailable even when it hashes to its name, and is never read', async () => {
+    const s = await setupAuto();
+    await s.seed('probe.txt', 'p\n');
+    const big = Buffer.alloc(LIMITS.editSourceMaxBytes + 1, 0x61);
+    const hash = sha256(big);
+    await fs.mkdir(s.blobDir(), { recursive: true });
+    await fs.writeFile(path.join(s.blobDir(), hash), big);
+    const blobs = createBlobStore(s.dataDir, s.blobDir());
+    const reads = await watchFileReads(s.abs('probe.txt'));
+    try {
+      expect(await blobs.get(hash)).toBeNull();
+      expect(reads.readFileCalls()).toBe(0);
+      expect(await reads.bytesRead()).toBe(0);
+    } finally {
+      reads.restore();
+    }
+    // A blob exactly at the limit is still returned.
+    const atLimit = big.subarray(0, LIMITS.editSourceMaxBytes);
+    const atLimitHash = await blobs.put(atLimit);
+    expect((await blobs.get(atLimitHash))?.equals(atLimit)).toBe(true);
   });
 
   it('collecting blobs removes only unreferenced blobs, never other files, folders or link targets', async () => {
