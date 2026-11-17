@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   createChatBody,
+  ROUTES,
   retryBody,
   sendMessageBody,
   terminalReadAnswerBody,
+  undoBatchBody,
   updateChatBody,
   updateSettingsBody,
 } from './api';
@@ -12,6 +14,22 @@ import { ERROR_DEFAULTS, ERROR_STATUS, errorInfo, isApiErrorBody } from './error
 import { TERMINAL } from './terminal';
 
 describe('api schemas', () => {
+  it('validates edit modes on create and update', () => {
+    for (const editMode of ['review', 'auto']) {
+      expect(createChatBody.parse({ projectId: null, model: 'm', editMode }).editMode).toBe(editMode);
+      expect(updateChatBody.parse({ editMode }).editMode).toBe(editMode);
+    }
+    for (const editMode of ['bogus', '', null, 1]) {
+      expect(createChatBody.safeParse({ projectId: null, model: 'm', editMode }).success).toBe(false);
+      expect(updateChatBody.safeParse({ editMode }).success).toBe(false);
+    }
+  });
+
+  it('exposes the undo route and accepts an empty body', () => {
+    expect(ROUTES.chatBatchUndo).toBe('/chats/:id/changes/batches/:batchId/undo');
+    expect(undoBatchBody.parse({})).toEqual({});
+  });
+
   it('sendMessageBody needs text or an attachment', () => {
     expect(sendMessageBody.safeParse({ text: '  ', attachmentIds: [], model: 'm' }).success).toBe(false);
     expect(sendMessageBody.safeParse({ text: '', attachmentIds: ['a'], model: 'm' }).success).toBe(true);
