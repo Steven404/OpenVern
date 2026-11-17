@@ -99,9 +99,19 @@ export function ModelPicker({
               <Command.Input
                 placeholder="Search models…"
                 aria-label="Search models"
-                className="h-11 w-full border-0 bg-transparent text-[14px] text-text placeholder:text-text-faint"
+                className="h-11 w-full border-0 bg-transparent text-[14px] text-text placeholder:text-text-faint focus-visible:outline-none"
               />
             </div>
+            {/* Pinned below the search so the current model stays readable while the list is filtered. */}
+            {current ? (
+              <div className="border-b border-border-control px-3 py-1.5">
+                <div className="flex min-h-11 items-center gap-3 px-0.5 text-text" data-testid="current-model">
+                  <span className="sr-only">Current model: </span>
+                  <ModelDetails model={current} />
+                  <Check aria-hidden="true" size={14} strokeWidth={2.4} className="shrink-0 text-accent" />
+                </div>
+              </div>
+            ) : null}
             <Command.List className="max-h-[320px] overflow-y-auto scrollbar-stable p-1.5">
               <Command.Empty className="px-3 py-6 text-center text-[13.5px] text-text-faint">
                 No models match.
@@ -116,19 +126,7 @@ export function ModelPicker({
                   }}
                   className="flex min-h-11 cursor-pointer items-center gap-3 rounded-[8px] px-2.5 py-1.5 text-text-secondary data-[selected=true]:bg-overlay-ghost data-[selected=true]:text-text"
                 >
-                  <span className="flex min-w-0 flex-1 flex-col leading-tight">
-                    <span className="truncate text-[13.5px]">{modelName(m, m.id)}</span>
-                    <span className="truncate text-[11.5px] text-text-faint">{modelProvider(m)}</span>
-                  </span>
-                  {m.contextLength ? (
-                    <span className="shrink-0 font-mono text-[11.5px] text-text-faint">
-                      {formatContext(m.contextLength)}
-                    </span>
-                  ) : null}
-                  <span className="flex shrink-0 gap-1">
-                    {m.supportsTools && <Badge>Tools</Badge>}
-                    {m.supportsImages && <Badge>Vision</Badge>}
-                  </span>
+                  <ModelDetails model={m} />
                   <Check
                     aria-hidden="true"
                     size={14}
@@ -142,6 +140,25 @@ export function ModelPicker({
         )}
       </PopoverContent>
     </Popover>
+  );
+}
+
+/** Name, provider, context length and capability badges: shared by the pinned current model and each list row. */
+function ModelDetails({ model }: { model: ModelInfo }) {
+  return (
+    <>
+      <span className="flex min-w-0 flex-1 flex-col leading-tight">
+        <span className="truncate text-[13.5px]">{modelName(model, model.id)}</span>
+        <span className="truncate text-[11.5px] text-text-faint">{modelProvider(model)}</span>
+      </span>
+      {model.contextLength ? (
+        <span className="shrink-0 font-mono text-[11.5px] text-text-faint">{formatContext(model.contextLength)}</span>
+      ) : null}
+      <span className="flex shrink-0 gap-1">
+        {model.supportsTools && <Badge>Tools</Badge>}
+        {model.supportsImages && <Badge>Vision</Badge>}
+      </span>
+    </>
   );
 }
 

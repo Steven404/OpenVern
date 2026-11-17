@@ -82,6 +82,8 @@
   --width-panel-diff: 600px;
   --width-panel-diff-split: 800px;
   --height-header: 64px;
+  /* The styled scrollbar (global.css). `scrollbar-stable` reserves it, `scrollbar-stable-centered` gives it back. */
+  --scrollbar-size: 10px;
 }
 
 /* Late Workshop: the original warm theme. Not selectable yet; a future theme setting sets `data-theme` on <html>. */

@@ -37,8 +37,8 @@
   }
 
   ::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
+    width: var(--scrollbar-size);
+    height: var(--scrollbar-size);
     background: transparent;
   }
 
@@ -77,6 +77,16 @@
 
 @utility scrollbar-stable {
   scrollbar-gutter: stable;
+}
+
+/*
+ * For a scroller whose content is centred (the conversation, the New chat hero). The reserved gutter sits between the
+ * border and the padding, so a symmetric `px-6` reads as 24px + the scrollbar on the right: give that width back and
+ * pair it with `pl-6`, and the column keeps the design's 24px side padding on both sides.
+ */
+@utility scrollbar-stable-centered {
+  scrollbar-gutter: stable;
+  padding-right: calc(1.5rem - var(--scrollbar-size));
 }
 
 /* Firefox (dev-only) fallback; Chromium uses the ::-webkit-scrollbar rules. */

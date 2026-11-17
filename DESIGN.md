@@ -320,6 +320,7 @@ Quiet and always there when something can scroll. The thumb is the only mark.
 - **Colour:** the thumb uses `--color-scroll-thumb` at rest, `--color-scroll-thumb-hover` on hover and `--color-scroll-thumb-active` while dragging. In Blue hour these alias border-control (`#343f72`), border-hover (`#46528c`) and border-focus (`#5a68a8`). Lamplight never appears on a thumb, including while dragging; the One Glow Rule holds.
 - **Size:** one size everywhere. Chat, diff, file tree, file viewer and sidebar share a 10px gutter. Horizontal bars are the same metrics turned sideways.
 - **Reserved gutter:** the gutter is reserved even when nothing overflows, so rows and lines do not reflow. Menus, popovers and dialogs generally do not reserve that gutter; the model picker list does.
+- **Centred columns:** a scroller whose column is centred (the conversation, the New chat hero) gives the reserved gutter back on its right padding (`scrollbar-stable-centered`), so the 24px side padding reads the same against the sidebar and the right panel.
 - **Motion:** none. Rest, hover and drag switch instantly.
 - **Anatomy:** 4px end inset, 10px gutter, thumb 6px at rest and 8px on hover and drag, pill ends, 40px minimum length.
 
