@@ -36,7 +36,7 @@ if [ "$(uname -s)" = Darwin ]; then
       E2E_APP="$VALIDATION_APP"
     else
       echo "No E2E_APP set and the validation package is missing: $VALIDATION_APP" >&2
-      echo "Build it (see reports/apple-silicon-as10.md) or set E2E_APP=<path to a .app>." >&2
+      echo "Build it (see README, Installation, macOS (Apple Silicon): npm run dist:mac) or set E2E_APP=<path to a .app>." >&2
       exit 2
     fi
   fi
