@@ -65,7 +65,8 @@ export async function ensureDataDir(root: string): Promise<DataPaths> {
   await fs.mkdir(abs, { recursive: true, mode: 0o700 });
   await Promise.all([
     fs.mkdir(paths.chatsDir, { recursive: true }),
-    fs.mkdir(paths.changesDir, { recursive: true }),
+    // Holds copies of project files, so it is owner-only like the data dir (applies when it is created).
+    fs.mkdir(paths.changesDir, { recursive: true, mode: 0o700 }),
     fs.mkdir(paths.attachmentsDir, { recursive: true }),
     fs.mkdir(paths.cacheDir, { recursive: true }),
   ]);
