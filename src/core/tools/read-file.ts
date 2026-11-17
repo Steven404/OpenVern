@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { PROPOSED_DELETED_NOTE, PROPOSED_VERSION_NOTE } from '../agent/edit-mode';
 import { redactionNote, redactSecrets } from '../security/redact';
 import { resolveInProject, type SandboxOptions } from './sandbox';
-import type { Tool } from './types';
+import type { Tool, ToolResult } from './types';
 import { abortedResult, displayPath, fail, parseArgs, succeed, toParameters } from './util';
 
 const BINARY_SNIFF_BYTES = 8 * 1024;
@@ -78,6 +78,20 @@ export function createReadFileTool(opts: SandboxOptions = {}): Tool {
         return fail(`end_line (${endArg}) is before start_line (${start}).`, summary);
       }
 
+      // The bytes read from disk, for the read record. A proposal's text (staged above) is never recorded.
+      let diskBytes: Buffer | undefined;
+      /**
+       * A READ IS RECORDED ONLY WHEN ITS CONTENT REACHED THE MODEL (invariant): `noteRead` is called here, on the way
+       * out of a result that carries the file (or says it is binary), and on no failure path. In Auto, the record is
+       * what lets a later overwrite or delete through, so a read that failed after loading the file (a range past the
+       * end, say) must not replace it: it would match the user's new bytes while the model still works from the old
+       * ones, and its write would silently undo the user's edit. (The agent loop holds the record until it knows the
+       * result is kept, so a read that Stop replaces with "Interrupted" isn't recorded either.)
+       */
+      const delivered = (result: ToolResult): ToolResult => {
+        if (diskBytes) ctx.changes?.noteRead(res.rel, diskBytes);
+        return result;
+      };
       let source: string;
       if (staged?.kind === 'staged') {
         source = staged.content;
@@ -99,13 +113,11 @@ export function createReadFileTool(opts: SandboxOptions = {}): Tool {
           if (ctx.signal.aborted) return abortedResult(summary);
           return fail(`Cannot read ${relPath}: ${(e as NodeJS.ErrnoException).code ?? 'unknown error'}`, summary);
         }
-        // What this chat has now seen of the file on disk (a proposal's text above is not recorded). In Auto, a later
-        // overwrite or delete is refused unless the file still has these bytes. A binary file counts as seen too: the
-        // model was told what it is.
-        ctx.changes?.noteRead(res.rel, buf);
-
+        diskBytes = buf;
         if (buf.subarray(0, BINARY_SNIFF_BYTES).includes(0)) {
-          return fail(`Binary file: ${relPath} cannot be displayed as text.`, summary);
+          // A binary file counts as seen even though this is a failure: the model is told what the file is, which is
+          // all it needs to delete it.
+          return delivered(fail(`Binary file: ${relPath} cannot be displayed as text.`, summary));
         }
         source = buf.toString('utf8');
       }
@@ -116,7 +128,8 @@ export function createReadFileTool(opts: SandboxOptions = {}): Tool {
       const lines = redacted.text.split('\n');
       if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
       const total = lines.length;
-      if (total === 0) return succeed(`${displayPath(res.rel)} (empty file, 0 lines)${proposedNote}`, summary);
+      if (total === 0)
+        return delivered(succeed(`${displayPath(res.rel)} (empty file, 0 lines)${proposedNote}`, summary));
       if (start > total) {
         return fail(`start_line ${start} is past the end of the file (${total} lines).`, summary);
       }
@@ -165,7 +178,7 @@ export function createReadFileTool(opts: SandboxOptions = {}): Tool {
       }
       if (redacted.count > 0) out.push(redactionNote(redacted.count));
       const range = start === 1 && last === total ? '' : ` (lines ${start}-${last})`;
-      return succeed(out.join('\n'), `${relPath}${range}`);
+      return delivered(succeed(out.join('\n'), `${relPath}${range}`));
     },
   };
 }

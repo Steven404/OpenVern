@@ -352,6 +352,7 @@ export interface Harness {
   agent: AgentService;
   chats: FakeChats;
   attachments: FakeAttachments;
+  projects: ProjectsService;
   provider: FakeProvider;
   tools: Tool[];
   chatId: Id;
@@ -405,6 +406,7 @@ export async function createHarness(opts: HarnessOptions): Promise<Harness> {
     agent,
     chats,
     attachments,
+    projects,
     provider,
     tools,
     chatId: chat.id,

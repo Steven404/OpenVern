@@ -6,8 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { type AutoSetup, setupAuto } from '../changes/auto-test-helpers';
 import type { FakeScript, FakeStep } from '../providers/fake';
 import { getProjectTools } from '../tools';
-import { editPromptLines, editToolDescriptions, retryUndoNote, retryUndoNotice } from './edit-mode';
-import { createHarness, type Harness } from './test-helpers';
+import type { ToolChanges } from '../tools/types';
+import { autoUnreadText, editPromptLines, editToolDescriptions, retryUndoNote, retryUndoNotice } from './edit-mode';
+import { createHarness, type Harness, PROJECT } from './test-helpers';
 
 const reply: FakeStep[] = [
   { type: 'text_delta', delta: 'Done' },
@@ -244,5 +245,175 @@ describe('Auto agent loop with real files', () => {
     expect(events.some((e) => e.type === 'auto_batch_updated')).toBe(false);
     expect(await s.read('a.txt')).toBe('original\n');
     expect((await s.svc.get(h.chatId)).applied).toEqual([]);
+  });
+
+  it('freezes Auto for the whole turn despite a step-one PATCH to Review, then uses Review on the next turn', async () => {
+    await setup((_, index) => {
+      if (index === 0) {
+        void h.chats.update(h.chatId, { editMode: 'review' });
+        return calls(['write_file', { path: 'auto.txt', content: 'written' }]);
+      }
+      if (index === 1) return calls(['write_file', { path: 'auto2.txt', content: 'also written' }]);
+      return index === 3 ? calls(['write_file', { path: 'review.txt', content: 'proposal' }]) : reply;
+    });
+    const contexts = vi.spyOn(s.svc, 'tools');
+    const first = await h.run();
+    for (const req of h.provider.calls.slice(0, 3)) {
+      for (const line of editPromptLines('auto')) expect(req.system).toContain(line);
+      expect(req.tools?.find((t) => t.name === 'write_file')?.description).toBe(editToolDescriptions('auto').write);
+    }
+    expect(contexts.mock.calls.map(([input]) => input.mode)).toEqual(['auto', 'auto', 'auto']);
+    expect(first.filter((e) => e.type === 'auto_batch_updated')).toHaveLength(2);
+    expect(await s.read('auto.txt')).toBe('written');
+    expect(await s.read('auto2.txt')).toBe('also written');
+    expect((await h.chats.get(h.chatId)).editMode).toBe('review');
+
+    await h.run({ newUserMessage: { text: 'next', attachmentIds: [] } });
+    const next = h.provider.calls[3];
+    for (const line of editPromptLines('review')) expect(next?.system).toContain(line);
+    expect(next?.tools?.find((t) => t.name === 'write_file')?.description).toBe(editToolDescriptions('review').write);
+    expect(contexts.mock.calls.slice(3).map(([input]) => input.mode)).toEqual(['review', 'review']);
+    expect(await s.exists('review.txt')).toBe(false);
+    expect((await s.svc.get(h.chatId)).pending?.files.map((f) => f.path)).toEqual(['review.txt']);
+  });
+
+  it('Stop while a write is in flight keeps the real result of the write', async () => {
+    const controller = new AbortController();
+    const original = s.svc.tools.bind(s.svc);
+    vi.spyOn(s.svc, 'tools').mockImplementation((input) => {
+      const inner = original(input);
+      const wrapped: ToolChanges = {
+        ...inner,
+        // Stop lands after the tool has checked the signal and while the change service is writing.
+        write: async (...args) => {
+          const pending = inner.write(...args);
+          controller.abort();
+          return pending;
+        },
+      };
+      return wrapped;
+    });
+    await setup((_, i) => (i === 0 ? calls(['write_file', { path: 'new.txt', content: 'in flight' }]) : reply));
+    const events = await h.run({ signal: controller.signal });
+    expect(controller.signal.aborted).toBe(true);
+    expect(await s.read('new.txt')).toBe('in flight');
+    const result = { ok: true, output: 'Created new.txt (1 line). Written to disk.' };
+    expect(results(events)).toMatchObject([result]);
+    expect(h.messages().filter((m) => m.role === 'tool')).toMatchObject([result]);
+    expect(events.filter((e) => e.type === 'auto_batch_updated')).toHaveLength(1);
+    expect(h.provider.calls.filter((req) => req.maxTokens === undefined)).toHaveLength(1);
+  });
+
+  it('a read that Stop replaced with "Interrupted" does not let a later turn overwrite the file', async () => {
+    const controller = new AbortController();
+    const tools = getProjectTools({ editMode: 'auto' }).map((tool) =>
+      tool.spec.name !== 'read_file'
+        ? tool
+        : {
+            ...tool,
+            run: async (...args: Parameters<typeof tool.run>) => {
+              const result = await tool.run(...args);
+              expect(result.ok).toBe(true);
+              controller.abort();
+              return result;
+            },
+          },
+    );
+    h = await createHarness({
+      script: (_, i) =>
+        i === 0
+          ? calls(['read_file', { path: 'a.txt' }])
+          : i === 1
+            ? calls(['write_file', { path: 'a.txt', content: 'overwrite\n' }])
+            : reply,
+      tools,
+      changes: s.svc,
+      projectRoot: s.root,
+    });
+    await h.chats.update(h.chatId, { title: 'Test', editMode: 'auto' });
+    const stopped = await h.run({ signal: controller.signal });
+    expect(results(stopped)).toMatchObject([{ ok: false, summary: 'Interrupted' }]);
+    const next = await h.run({ newUserMessage: { text: 'go on', attachmentIds: [] } });
+    expect(results(next)).toMatchObject([{ ok: false, output: autoUnreadText('a.txt') }]);
+    expect(await s.read('a.txt')).toBe('original\n');
+  });
+});
+
+describe('Retry failures and chats without a project', () => {
+  const editA = (_: unknown, i: number) =>
+    i === 0 ? calls(['edit_file', { path: 'a.txt', old_string: 'original', new_string: 'changed' }]) : reply;
+
+  it('a failing undo keeps the history and the files and reports the error', async () => {
+    await setup(editA);
+    await h.run();
+    const before = h.messages();
+    const restore = vi.spyOn(s.svc, 'restore');
+    vi.spyOn(s.svc, 'prepareRetry').mockRejectedValueOnce(new Error('store unreadable'));
+    const modelCalls = h.provider.calls.length;
+    const events = await h.run({ newUserMessage: undefined });
+    expect(events.filter((e) => e.type === 'error')).toHaveLength(1);
+    expect(events.at(-1)).toEqual({ type: 'done' });
+    expect(h.messages()).toEqual(before);
+    expect(await s.read('a.txt')).toBe('changed\n');
+    expect(restore).not.toHaveBeenCalled();
+    expect(h.provider.calls).toHaveLength(modelCalls);
+    expect((await s.svc.get(h.chatId)).applied[0]?.undo).toBeUndefined();
+  });
+
+  it('a failing restore after the undo still keeps the skipped-file note', async () => {
+    await s.seed('b.txt', 'before\n');
+    await setup((_, i) =>
+      i === 0
+        ? calls(
+            ['edit_file', { path: 'b.txt', old_string: 'before', new_string: 'after' }],
+            ['edit_file', { path: 'a.txt', old_string: 'original', new_string: 'changed' }],
+          )
+        : reply,
+    );
+    await h.run();
+    await s.seed('a.txt', 'user edit\n');
+    vi.spyOn(s.svc, 'restore').mockRejectedValueOnce(new Error('store unwritable'));
+    const events = await h.run({ newUserMessage: undefined });
+    const undo = { restored: ['b.txt'], skipped: [{ path: 'a.txt', reason: 'changed_since' as const }] };
+    expect(events.filter((e) => e.type === 'error')).toHaveLength(1);
+    expect(events.some((e) => e.type === 'auto_batch_updated')).toBe(true);
+    expect(events.some((e) => e.type === 'chat_updated')).toBe(true);
+    expect(h.messages().find((m) => m.role === 'user')).toMatchObject({ changesNote: retryUndoNote(undo) });
+    expect(await s.read('b.txt')).toBe('before\n');
+    expect(await s.read('a.txt')).toBe('user edit\n');
+  });
+
+  it('retry in a loose chat neither undoes nor restores and answers again', async () => {
+    h = await createHarness({ script: () => reply, project: false, changes: s.svc, getProjectTools });
+    await h.chats.update(h.chatId, { title: 'Test', editMode: 'auto' });
+    await h.run();
+    const prepare = vi.spyOn(s.svc, 'prepareRetry');
+    const restore = vi.spyOn(s.svc, 'restore');
+    const events = await h.run({ newUserMessage: undefined });
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+    expect(prepare).not.toHaveBeenCalled();
+    expect(restore).not.toHaveBeenCalled();
+    expect(h.messages().map((m) => m.role)).toEqual(['user', 'assistant']);
+    expect(h.provider.calls.at(-1)?.tools).toBeUndefined();
+  });
+
+  it.each([
+    ['detached from the chat', true],
+    ['still named by the chat', false],
+  ])('retry after the project was deleted (%s) undoes nothing and answers without tools', async (_, detach) => {
+    await setup(editA);
+    await h.run();
+    expect(await s.read('a.txt')).toBe('changed\n');
+    await h.projects.remove(PROJECT.id);
+    if (detach) await h.chats.detachProject(PROJECT.id);
+    const prepare = vi.spyOn(s.svc, 'prepareRetry');
+    const events = await h.run({ newUserMessage: undefined });
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+    expect(prepare).not.toHaveBeenCalled();
+    expect(events.some((e) => e.type === 'auto_batch_updated')).toBe(false);
+    expect(await s.read('a.txt')).toBe('changed\n');
+    expect((await s.svc.get(h.chatId)).applied[0]?.undo).toBeUndefined();
+    expect(h.messages().map((m) => m.role)).toEqual(['user', 'assistant']);
+    expect(h.provider.calls.at(-1)?.tools).toBeUndefined();
   });
 });

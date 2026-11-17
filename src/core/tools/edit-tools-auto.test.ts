@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { LIMITS } from '@shared/constants';
@@ -161,6 +161,50 @@ describe('Auto refusal boundaries and read records', () => {
   });
   it('refuses deleting an unread existing file', async () => {
     expect(await run('delete_file', { path: 'README.md' })).toMatchObject({
+      ok: false,
+      output: wording.autoUnreadText('README.md'),
+    });
+    expect(await readFile(path.join(fx.root, 'README.md'), 'utf8')).toContain('# Fixture');
+  });
+});
+
+describe('A failed read records nothing', () => {
+  // Each failure must leave the chat's record of README.md as it was: here, the bytes before the user's edit.
+  const failures: [string, () => Promise<unknown>][] = [
+    ['a start_line past the end of the file', () => run('read_file', { path: 'README.md', start_line: 999 })],
+    ['an end_line before start_line', () => run('read_file', { path: 'README.md', start_line: 3, end_line: 2 })],
+    [
+      'an unreadable file',
+      async () => {
+        await chmod(path.join(fx.root, 'README.md'), 0o000);
+        try {
+          return await run('read_file', { path: 'README.md' });
+        } finally {
+          await chmod(path.join(fx.root, 'README.md'), 0o644);
+        }
+      },
+    ],
+  ];
+  const cases = failures.flatMap(([what, read]) =>
+    (['write_file', 'delete_file'] as const).map((tool) => [what, tool, read] as const),
+  );
+
+  it.each(cases)('a read failing on %s does not let %s overwrite the user edit', async (_what, tool, failedRead) => {
+    expect((await run('read_file', { path: 'README.md' })).ok).toBe(true);
+    const userEdit = '# Fixture\nuser edit\n';
+    await write(fx.root, 'README.md', userEdit);
+    expect(await failedRead()).toMatchObject({ ok: false });
+    expect(await run(tool, { path: 'README.md', content: 'model rewrite\n' })).toMatchObject({
+      ok: false,
+      output: wording.autoStaleText('README.md'),
+    });
+    expect(await readFile(path.join(fx.root, 'README.md'), 'utf8')).toBe(userEdit);
+    expect((await svc.get('c')).applied).toEqual([]);
+  });
+
+  it.each(cases)('a read failing on %s does not count as a first read for %s', async (_what, tool, failedRead) => {
+    expect(await failedRead()).toMatchObject({ ok: false });
+    expect(await run(tool, { path: 'README.md', content: 'model rewrite\n' })).toMatchObject({
       ok: false,
       output: wording.autoUnreadText('README.md'),
     });

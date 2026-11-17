@@ -147,16 +147,18 @@ export function toChatSummary(chat: ChatSummary | Chat): ChatSummary {
 
 /**
  * Wraps a `ToolChanges` to notice what a tool call did: staged something (the loop then emits `changes_updated`) or
- * wrote to disk (`auto_batch_updated`, and the result is kept even after Stop).
+ * wrote to disk (`auto_batch_updated`, and the result is kept even after Stop). Reads are held until the loop knows
+ * the result reached the model (`commitReads`).
  */
 function trackChanges(inner: ToolChanges): TrackedChanges {
   let staged: { summary: ChangeSummary | null } | undefined;
   let written: { batchId: Id } | undefined;
+  let reads: [string, Uint8Array][] = [];
   return {
     mode: inner.mode,
     read: (p) => inner.read(p),
     staged: () => inner.staged(),
-    noteRead: (p, bytes) => inner.noteRead(p, bytes),
+    noteRead: (p, bytes) => void reads.push([p, bytes]),
     async stage(p, content) {
       const result = await inner.stage(p, content);
       staged = { summary: result.summary };
@@ -171,6 +173,11 @@ function trackChanges(inner: ToolChanges): TrackedChanges {
     reset: () => {
       staged = undefined;
       written = undefined;
+      reads = [];
+    },
+    commitReads: () => {
+      for (const [p, bytes] of reads) inner.noteRead(p, bytes);
+      reads = [];
     },
     lastStage: () => staged,
     lastWrite: () => written,
@@ -183,6 +190,8 @@ interface TrackedChanges extends ToolChanges {
   lastStage(): { summary: ChangeSummary | null } | undefined;
   /** The current tool call changed a project file (Auto). */
   lastWrite(): { batchId: Id } | undefined;
+  /** Records the current tool call's reads: its result is kept, so the model sees what it read. */
+  commitReads(): void;
 }
 
 /** `extra` appended to a user message's existing note, as its own block. */
@@ -317,15 +326,18 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
       await emit({ type: 'user_message', message });
       chat = await chats.get(chatId);
     } else {
-      chat = await chats.truncateAfterLastUser(chatId);
-      const lastUser = chat.messages.at(-1);
-      if (lastUser?.role !== 'user') {
-        throw new CoreError('invalid_request', 'There is no message to retry in this chat.');
-      }
-      // RETRY UNDOES BEFORE RESTORE (invariant): first the files the previous attempt wrote (Auto) go back to how the
-      // turn found them, whatever mode this retry runs in; only then does the pending set go back to its state at
-      // the turn's start. The retry must start from the project as it was before the turn, and an undo that throws
-      // stops the retry before the proposals change, so they never sit on top of files the attempt left behind.
+      const lastUser = chat.messages.findLast((m): m is UserMessage => m.role === 'user');
+      if (!lastUser) throw new CoreError('invalid_request', 'There is no message to retry in this chat.');
+      // RETRY ORDER (invariant): undo → note → truncate → restore.
+      // 1. Undo: the files the previous attempt wrote (Auto) go back to how the turn found them, whatever mode this
+      //    retry runs in. Nothing else has changed yet, so if the undo throws, the history still holds the previous
+      //    attempt's tool results, which say what is on disk, and the retry ends with the error.
+      // 2. Note: the files the undo had to skip still hold the previous attempt's edits. That is stored on the user
+      //    message (so a replay of the history says it too) before any later step can fail and lose it.
+      // 3. Truncate: only once the disk is back to the turn's start (as far as it could be) does the history drop the
+      //    attempt.
+      // 4. Restore: last, the pending set goes back to its state at the turn's start, so proposals never sit on top
+      //    of files the attempt left behind.
       const undone =
         project && deps.changes
           ? await deps.changes.prepareRetry({
@@ -336,18 +348,17 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
               mode: editMode,
             })
           : null;
-      if (chat.projectId) await deps.changes?.restore(chatId, lastUser.id);
-      state.modified = true;
       if (undone) {
         await emit({ type: 'auto_batch_updated', batchId: undone.batchId });
         retryUndo = undone.undo;
         if (undone.undo.skipped.length > 0) {
-          // The model must know which files still hold the previous attempt's edits; stored on the user message, so
-          // a later replay of the history says the same.
           await chats.setChangesNote(chatId, lastUser.id, appendNote(lastUser.changesNote, retryUndoNote(undone.undo)));
-          chat = await chats.get(chatId);
+          state.modified = true;
         }
       }
+      chat = await chats.truncateAfterLastUser(chatId);
+      state.modified = true;
+      if (chat.projectId) await deps.changes?.restore(chatId, lastUser.id);
     }
     // The user message that started this turn; auto batches are keyed by it.
     const turnId = chat.messages.findLast((m) => m.role === 'user')?.id ?? '';
@@ -645,8 +656,14 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
         // STOP NEVER HIDES A WRITE (invariant): a call that changed a project file keeps its real result even when
         // Stop arrived meanwhile, so the stored history (and the model, on the next turn) says what reached the disk.
         // Any other result that arrives after a stop is replaced, so what is stored never depends on a race.
-        if (changes?.lastWrite()) return result;
-        return signal.aborted ? interrupted() : result;
+        // A READ IS RECORDED ONLY WHEN ITS CONTENT REACHED THE MODEL (invariant): the reads are committed only with a
+        // result that is kept. A read replaced by "Interrupted" must not count as seen, or a later overwrite based on
+        // older content would pass the stale-read guard and undo the user's edit.
+        if (changes?.lastWrite() || !signal.aborted) {
+          changes?.commitReads();
+          return result;
+        }
+        return interrupted();
       } catch {
         // `Tool.run` must not throw; if it does, report it to the model without leaking details.
         return { ok: false, output: `The "${call.name}" tool failed unexpectedly.`, summary: 'Tool failed' };
