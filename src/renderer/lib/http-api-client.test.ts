@@ -259,10 +259,11 @@ describe('HttpApiClient', () => {
       expect(r.init?.body).toBe('{"editMode":"auto"}');
     });
 
-    it('send, retry and a move carry expectedEditMode in their bodies', async () => {
+    it('send, retry and a move carry expectedEditMode, and turning Auto on expectedProjectId, in their bodies', async () => {
       const fetchMock = vi.fn(async (_u: string | URL | Request, _i?: RequestInit) => json({}));
       const api = new HttpApiClient('/api', fetchMock as typeof fetch);
       await api.updateChat('c1', { projectId: 'p2', expectedEditMode: 'auto' });
+      await api.updateChat('c1', { editMode: 'auto', expectedProjectId: 'p1' });
       // A stream request is sent when it is first read; an empty JSON body ends it at once.
       const drain = async (it: AsyncIterable<unknown>) => {
         for await (const _ of it) {
@@ -282,6 +283,7 @@ describe('HttpApiClient', () => {
       const bodies = fetchMock.mock.calls.map(([url, init]) => [url, init?.method, JSON.parse(init?.body as string)]);
       expect(bodies).toEqual([
         ['/api/chats/c1', 'PATCH', { projectId: 'p2', expectedEditMode: 'auto' }],
+        ['/api/chats/c1', 'PATCH', { editMode: 'auto', expectedProjectId: 'p1' }],
         ['/api/chats/c1/messages', 'POST', { text: 'hi', attachmentIds: [], model: 'm', expectedEditMode: 'review' }],
         ['/api/chats/c1/retry', 'POST', { model: 'm', expectedEditMode: 'auto' }],
       ]);

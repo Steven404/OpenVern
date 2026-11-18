@@ -6,10 +6,13 @@
 //   2  One turn that edits, creates and deletes: the disk has the changes, the "Edits applied · Auto" card lists them.
 //   3  Undo → confirm: the three files are byte-identical to the originals.
 //   4  Another Auto turn, then Retry: the file has exactly one marker (the first attempt was undone).
+//   4b Before that Retry, the mode is switched to Review behind the UI's back: the Retry is refused, the Auto card and
+//      its Undo stay, the chip catches up to Review, and the disk is unchanged.
 //   5  Edit a file on disk, then Undo that turn: it is skipped and named in the card; the user's edit is kept.
 //   6  Switch to Review and send an edit: a Proposed edits card, the disk unchanged.
-//   7  Reload: the chat is still Review; a send or retry expecting Auto is refused (409) and stores nothing; a new
-//      chat in the project shows Review; the History lists the auto batches with their undo results.
+//   7  Reload: the chat is still Review; a send or retry expecting Auto is refused (409) and stores nothing; a send or a
+//      move naming no mode in an Auto chat, and turning Auto on for a project the chat isn't in, are refused (409);
+//      a new chat in the project shows Review; the History lists the auto batches with their undo results.
 // Same env as smoke.mjs: E2E_MODE, E2E_BASE, E2E_OUT, CDP_PORT. Run through the runners (after edits.mjs).
 
 import { spawnSync } from 'node:child_process';
@@ -39,6 +42,7 @@ const read = (name) => readFileSync(file(name), 'utf8');
 const bytes = (name) => readFileSync(file(name));
 const MARKER = ' // edited by the fake provider';
 const EDIT_MODE_CHANGED = "This chat's edit mode changed. Check Review / Auto and send again.";
+const CHAT_PROJECT_CHANGED = 'This chat moved to another project. Check Review / Auto and try again.';
 const countOf = (text, part) => text.split(part).length - 1;
 const originalBytes = Object.fromEntries(Object.keys(original).map((n) => [n, bytes(n)]));
 const sameBytes = (name) => existsSync(file(name)) && bytes(name).equals(originalBytes[name]);
@@ -233,7 +237,11 @@ try {
   await waitFor(`!!${dialog}`, 'no-Git dialog again');
   check('1 the dialog shows again after "Keep Review"', true);
   await click(`document.querySelector('[data-testid=no-git-turn-on-auto]')`, 'Turn on Auto');
-  await waitFor(`!${dialog} && ${CHIP}?.getAttribute('data-mode') === 'auto'`, 'Auto on');
+  // The dialog hands focus back to the chip a moment after it closes; typing before that would lose the Enter to it.
+  await waitFor(
+    `!${dialog} && ${CHIP}?.getAttribute('data-mode') === 'auto' && document.activeElement === ${CHIP}`,
+    'Auto on, focus back on the chip',
+  );
   check('1 "Turn on Auto" closes the dialog and the chip reads Auto', (await chipMode()) === 'auto');
 
   // ------------------------------------------------------------------------- 2 one Auto turn writes three files
@@ -321,6 +329,41 @@ try {
     '4 stopping kept the written files and the card',
     countOf(read('a.txt'), MARKER) === 1 && (await cardCount()) === 2,
   );
+  // ------------------------------------------------------------------------- 4b a refused Retry hides nothing
+  // Another window switches the chat to Review; this one still shows Auto, so its Retry expects Auto and is refused.
+  {
+    const chat4 = await chatId();
+    const a4 = read('a.txt');
+    const nExists = existsSync(file('n.txt'));
+    const batches4b = (await autoBatches()).length;
+    const switched = await api(`/chats/${chat4}`, 'PATCH', { editMode: 'review' });
+    check('4b the mode is switched to Review behind the UI', switched.status === 200, `${switched.status}`);
+    check('4b the chip still shows Auto', (await chipMode()) === 'auto');
+    await click(byText('article button', 'Retry', true), 'Retry (refused)');
+    await waitFor(
+      `[...document.querySelectorAll('[role=alert]')].some((a) => a.textContent === ${JSON.stringify(EDIT_MODE_CHANGED)})`,
+      'refusal shown by the composer',
+      15000,
+    );
+    check('4b the refused Retry says why', true);
+    await waitFor(`${CHIP}?.getAttribute('data-mode') === 'review' && ${chipReady}`, 'chip caught up to Review', 15000);
+    check('4b the chip catches up to Review', (await chipMode()) === 'review');
+    check(
+      '4b the earlier Auto card and its Undo are still there',
+      (await cardCount()) === 2 &&
+        (await lastCardAttr('data-undo')) === 'undoable' &&
+        (await ev(`!!${lastCard}.querySelector('[data-testid=undo-button]')`)),
+    );
+    check(
+      '4b the disk and the batches are unchanged',
+      read('a.txt') === a4 && existsSync(file('n.txt')) === nExists && (await autoBatches()).length === batches4b,
+    );
+    await shot('refused-retry');
+    // Back to Auto (the project's warning was already accepted), so the Retry below runs as before.
+    await pickMode('auto');
+    await waitFor(`!!${byText('article button', 'Retry', true)} && ${settled}`, 'Retry offered again', 15000);
+  }
+
   // Waits on the retry's own progress: "not busy" alone is already true before it starts, and the stopped attempt's card
   // matches any card check. The retry adds a third batch, its card replaces the stopped attempt's, then it settles.
   const stoppedBatchId = await lastCardAttr('data-batch-id');
@@ -422,6 +465,30 @@ try {
   check('7 a send expecting Auto in a Review chat is refused (409)', refused(staleSend), `${staleSend.status}`);
   check('7 a retry expecting Auto in a Review chat is refused (409)', refused(staleRetry), `${staleRetry.status}`);
   check('7 the refusals stored nothing', (await chatNow()).messages.length === before7.messages.length);
+  // A request that names no mode expects Review, so it can't run or move an Auto chat.
+  const autoChat = (await api('/chats', 'POST', { projectId: project.id, model: before7.model, editMode: 'auto' }))
+    .body;
+  const noModeSend = await api(`/chats/${autoChat.id}/messages`, 'POST', {
+    text: 'no mode [fake:write=nomode.txt]',
+    attachmentIds: [],
+    model: before7.model,
+  });
+  check('7 a send naming no mode in an Auto chat is refused (409)', refused(noModeSend), `${noModeSend.status}`);
+  check(
+    '7 it stored and wrote nothing',
+    (await api(`/chats/${autoChat.id}`)).body.messages.length === 0 && !existsSync(file('nomode.txt')),
+  );
+  const noModeMove = await api(`/chats/${autoChat.id}`, 'PATCH', { projectId: null });
+  check('7 a move naming no mode of an Auto chat is refused (409)', refused(noModeMove), `${noModeMove.status}`);
+  check('7 the Auto chat did not move', (await api(`/chats/${autoChat.id}`)).body.projectId === project.id);
+  const elsewhere = await api(`/chats/${idBefore}`, 'PATCH', { editMode: 'auto', expectedProjectId: null });
+  check(
+    '7 turning Auto on for a project the chat is not in is refused (409)',
+    elsewhere.status === 409 && elsewhere.body?.error?.message === CHAT_PROJECT_CHANGED,
+    `${elsewhere.status}`,
+  );
+  check('7 that chat is still Review', (await chatNow()).editMode === 'review');
+  await api(`/chats/${autoChat.id}`, 'DELETE');
   check('7 the Proposed edits card is back', await ev(`!!${byText('[data-testid=changes-card]', 'Proposed edits')}`));
 
   await openDiff();

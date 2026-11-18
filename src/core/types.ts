@@ -83,6 +83,10 @@ export interface ChatsService {
    * Bumps `updatedAt` only when `model` or `effort` changes (renames, moves, archive and edit-mode changes don't
    * reorder the sidebar). `archived` applies to any chat, in a project or not. Only `archived` changes the flag: moving a chat
    * between projects, or to and from `projectId: null`, keeps it.
+   *
+   * `expect`: what the client showed when the user acted. Each field that is set is compared with the stored chat
+   * under the lock that commits the write; a mismatch throws `conflict` (`EDIT_MODE_CHANGED` /
+   * `CHAT_PROJECT_CHANGED`) and writes nothing.
    */
   update(
     id: Id,
@@ -94,6 +98,7 @@ export interface ChatsService {
       effort?: ReasoningEffort | null;
       editMode?: EditMode;
     },
+    expect?: { editMode?: EditMode; projectId?: Id | null },
   ): Promise<ChatSummary>;
   /**
    * Replaces one user message's `changesNote` (`undefined` removes it); a retry adds what it couldn't undo. Doesn't
@@ -161,6 +166,12 @@ export interface RunTurnInput {
    * applies from the next turn. Omitted = the agent reads the chat's stored mode once at turn start.
    */
   editMode?: EditMode;
+  /**
+   * The project this turn runs in, read under the start claim together with `editMode`, so a move landing after
+   * that read can't run the checked mode in another project. Omitted = the chat's stored project, read once at
+   * turn start.
+   */
+  projectId?: Id | null;
 }
 
 /** Relays `read_terminal` to the client: a stream event out, an HTTP answer back (terminal plan §3, §4.3). */

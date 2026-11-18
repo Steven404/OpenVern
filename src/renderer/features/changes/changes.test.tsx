@@ -683,9 +683,12 @@ describe('live updates', () => {
     const queryClient = new QueryClient();
     queryClient.setQueryData(queryKeys.chatChanges(chat.id), { pending: null, applied: [] });
     const spy = vi.spyOn(queryClient, 'invalidateQueries');
-    await useRunsStore
-      .getState()
-      .send({ api: client, queryClient }, chat.id, { text: '[mock:edit]', attachments: [], model: chat.model });
+    await useRunsStore.getState().send({ api: client, queryClient }, chat.id, {
+      text: '[mock:edit]',
+      attachments: [],
+      model: chat.model,
+      expectedEditMode: 'review',
+    });
     expect(spy).toHaveBeenCalledWith({ queryKey: queryKeys.chatChanges(chat.id) });
     expect((await client.getChatChanges(chat.id)).pending?.files).toHaveLength(3);
   });

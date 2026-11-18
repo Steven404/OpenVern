@@ -20,7 +20,8 @@ import { NoGitDialog } from '@renderer/features/composer/NoGitDialog';
 import { useApiClient } from '@renderer/lib/api-context';
 import { queryKeys } from '@renderer/lib/query-keys';
 import { paths } from '@renderer/lib/routes';
-import { cachedEditMode, patchChatSummary, useRunsStore } from '@renderer/stores/runs';
+import { forgetEditMode, useEditModeEntry, writeChat } from '@renderer/stores/edit-modes';
+import { patchChatSummary, useRunsStore } from '@renderer/stores/runs';
 import { useUiStore } from '@renderer/stores/ui';
 import type { ChatSummary, EditMode, ProjectListItem } from '@shared/types';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -51,11 +52,15 @@ export function ChatOptionsMenu({ chat }: { chat: ChatSummary }) {
 
   const [moveError, setMoveError] = useState<string | null>(null);
   const move = useMutation({
-    mutationFn: (patch: { projectId: string | null; editMode?: EditMode; expectedEditMode: EditMode }) =>
-      api.updateChat(chat.id, patch),
+    // A move carries the mode, so it goes through the shown-mode store: one mode-carrying PATCH at a time, its answer
+    // is the shown mode, and a failure checks the server's mode again before Move or the chip are enabled.
+    mutationFn: async (patch: { projectId: string | null; editMode?: EditMode; expectedEditMode: EditMode }) => {
+      const summary = await writeChat({ api, queryClient }, chat.id, 'move', () => api.updateChat(chat.id, patch));
+      if (summary) patchChatSummary(queryClient, summary);
+      return summary;
+    },
     onMutate: () => setMoveError(null),
-    // A refused move changed nothing, and nothing is retried here. `onSettled` fetches the chat again, so after a
-    // refusal for a changed edit mode (the message says so) the chip shows the server's mode before the user retries.
+    // A refused move changed nothing, and nothing is retried here.
     onError: (err) => setMoveError(err instanceof Error && err.message ? err.message : "Couldn't move this chat."),
     onSettled: refresh,
   });
@@ -63,21 +68,22 @@ export function ChatOptionsMenu({ chat }: { chat: ChatSummary }) {
   // INVARIANT: an Auto chat never lands in a folder without Git unwarned. Moving it there is the same step as turning
   // Auto on there (the next turn writes to that folder without asking), so it asks the same question, once per
   // project. Switching to Review goes in the same PATCH as the move, so the chat is never in the new folder in Auto.
-  // The question is decided from the mode the chip shows (the chat query, as the composer reads it), and the move
-  // carries that mode as `expectedEditMode`: if the server's mode has changed meanwhile (a mode change whose answer
-  // hasn't arrived yet), it refuses the move, so a skipped warning never rests on a stale mode.
+  // The question is decided from the mode the chip shows (the shown-mode store, rendered here), Move is disabled
+  // until that mode is known (not while a mode change or its check is in flight), and the move carries that same
+  // value as `expectedEditMode`: if the server's mode differs when it commits, it refuses the move, so a skipped
+  // warning never rests on a mode the user wasn't shown.
+  const shown = useEditModeEntry(chat.id);
   const acknowledged = useUiStore((s) => s.autoNoGitAcknowledged);
   const acknowledge = useUiStore((s) => s.acknowledgeAutoNoGit);
   const [noGitTarget, setNoGitTarget] = useState<ProjectListItem | null>(null);
   const moveTo = (projectId: string | null) => {
-    if (projectId === chat.projectId) return;
-    const shown = cachedEditMode(queryClient, chat.id) ?? chat.editMode;
+    if (projectId === chat.projectId || shown.status !== 'known' || shown.mode === null) return;
     const target = projectId === null ? undefined : projects.data?.find((p) => p.id === projectId);
-    if (shown === 'auto' && target && !target.inGitRepo && acknowledged[target.id] !== true) {
+    if (shown.mode === 'auto' && target && !target.inGitRepo && acknowledged[target.id] !== true) {
       setNoGitTarget(target);
       return;
     }
-    move.mutate({ projectId, expectedEditMode: shown });
+    move.mutate({ projectId, expectedEditMode: shown.mode });
   };
 
   // The server rejects archive changes while a reply is in progress, so the item waits for the run to finish.
@@ -97,6 +103,7 @@ export function ChatOptionsMenu({ chat }: { chat: ChatSummary }) {
       navigate(paths.newChat());
       setDeleteOpen(false);
       queryClient.removeQueries({ queryKey: queryKeys.chat(chat.id) });
+      forgetEditMode(chat.id);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.chats }),
         queryClient.invalidateQueries({ queryKey: queryKeys.projects }),
@@ -121,7 +128,9 @@ export function ChatOptionsMenu({ chat }: { chat: ChatSummary }) {
             Rename
           </MenuItem>
           <MenuSub>
-            <MenuSubTrigger icon={<FolderInput size={15} />}>Move to project</MenuSubTrigger>
+            <MenuSubTrigger icon={<FolderInput size={15} />} disabled={shown.status !== 'known'}>
+              Move to project
+            </MenuSubTrigger>
             <MenuSubContent className="max-w-72">
               <MenuRadioGroup
                 value={chat.projectId ?? NO_PROJECT}

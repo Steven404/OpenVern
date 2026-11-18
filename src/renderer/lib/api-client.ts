@@ -46,7 +46,9 @@ export interface ApiClient {
   /**
    * `editMode` is accepted while a run is active; the agent picks it up from the next turn. `expectedEditMode` is the
    * mode the UI showed: when the chat's stored mode differs, nothing changes and this rejects with a 409 `ApiError`
-   * whose message is `EDIT_MODE_CHANGED` (see `isEditModeChanged`). A move sends it.
+   * whose message is `EDIT_MODE_CHANGED` (see `isEditModeChanged`). On a move, omitted means `'review'`.
+   * `expectedProjectId` is the project the UI decided the no-Git warning for when turning Auto on: when the chat has
+   * moved since, nothing changes (409, `CHAT_PROJECT_CHANGED`).
    */
   updateChat(
     id: Id,
@@ -56,13 +58,15 @@ export interface ApiClient {
       archived?: boolean;
       editMode?: EditMode;
       expectedEditMode?: EditMode;
+      expectedProjectId?: Id | null;
     },
   ): Promise<ChatSummary>;
   deleteChat(id: Id): Promise<void>;
   /**
    * `terminal`: this client answers terminal reads (set when the bridge has a terminal), so `read_terminal` is offered.
-   * `expectedEditMode`: the mode the UI showed. The turn runs in exactly that mode, or not at all: when the chat's
-   * stored mode differs, nothing is stored or started and iterating rejects with the 409 of `isEditModeChanged`.
+   * `expectedEditMode`: the mode the UI showed (omitted means `'review'`). The turn runs in exactly that mode, or not
+   * at all: when the chat's stored mode differs, nothing is stored or started and iterating rejects with the 409 of
+   * `isEditModeChanged`.
    */
   sendMessage(
     chatId: Id,

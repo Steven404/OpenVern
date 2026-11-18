@@ -1,8 +1,9 @@
 import type { Id } from '@shared/types';
 import { Fragment, useCallback, useLayoutEffect, useMemo, useRef } from 'react';
 import { Button, Spinner } from '../../components/ui';
-import { selectRun, useRunsStore } from '../../stores/runs';
+import { hideRetriedTail, selectRun, useRunsStore } from '../../stores/runs';
 import { AppliedEditsCard, ProposedEditsCard } from '../changes';
+import { useReplyEditMode } from '../composer/Composer';
 import { useChat, useRunDeps } from '../composer/queries';
 import { useChatChanges } from '../right-panel/queries';
 import { AssistantTurn } from './AssistantTurn';
@@ -30,7 +31,9 @@ export function Conversation({ chatId }: ConversationProps) {
   const running = run?.status === 'running';
   const active = run?.status === 'running' || run?.status === 'settling';
 
-  const messages = useMemo(() => mergeMessages(chat?.messages ?? [], run), [chat?.messages, run]);
+  // A retry hides the persisted tail it replaces until the server is known to have dropped it. The cut comes first:
+  // `mergeMessages` returns the persisted list as it is while the run has no messages yet.
+  const messages = useMemo(() => mergeMessages(hideRetriedTail(chat?.messages ?? [], run), run), [chat?.messages, run]);
   const turns = useMemo(
     () =>
       buildTurns(messages, {
@@ -46,13 +49,17 @@ export function Conversation({ chatId }: ConversationProps) {
   const lastAssistantErrored = lastMessage?.role === 'assistant' && lastMessage.status === 'error';
   const runError = run?.error && !lastAssistantErrored ? run.error : null;
 
+  // Retry runs in the mode the composer's chip shows, through the same gate as a send: it is offered only while that
+  // mode is on screen and confirmed, and it sends the value of this render.
+  const retryModel = selectedModel ?? chat?.model ?? '';
+  const shownMode = useReplyEditMode(chatId, chat?.projectId ?? null, retryModel);
+  const expectedEditMode = shownMode.ready ? shownMode.entry.mode : null;
   const retry = useCallback(() => {
-    if (!chat) return;
+    if (!chat || expectedEditMode === null) return;
     // F3: a retry uses the effort chosen in this chat; otherwise the chat keeps the effort it already stored.
-    const model = selectedModel ?? chat.model;
     const picked = selectedEffort === undefined ? chat.effort : selectedEffort;
-    void retryRun(deps, chatId, model, picked);
-  }, [retryRun, deps, chatId, selectedModel, selectedEffort, chat]);
+    void retryRun(deps, chatId, { model: retryModel, effort: picked, expectedEditMode });
+  }, [retryRun, deps, chatId, retryModel, selectedEffort, chat, expectedEditMode]);
 
   // ── stick to bottom ────────────────────────────────────────────────────────
   const scrollRef = useRef<HTMLElement>(null);
@@ -145,7 +152,7 @@ export function Conversation({ chatId }: ConversationProps) {
                   error={turnError}
                   forceRetry={!!run?.unsent}
                   stopped={turnStopped}
-                  onRetry={isLast && !active ? retry : undefined}
+                  onRetry={isLast && !active && expectedEditMode !== null ? retry : undefined}
                 />
               )}
             </Fragment>

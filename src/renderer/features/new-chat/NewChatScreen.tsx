@@ -7,6 +7,7 @@ import { resolveNewChatProject } from '../../app/queries';
 import { useApiClient } from '../../lib/api-context';
 import { queryKeys } from '../../lib/query-keys';
 import { NEW_CHAT_PROJECT_PARAM, paths } from '../../lib/routes';
+import { noteAnswer } from '../../stores/edit-modes';
 import { useRunsStore } from '../../stores/runs';
 import { Composer, type ComposerSendInput } from '../composer/Composer';
 import { resolveDefaultModel } from '../composer/models';
@@ -57,9 +58,6 @@ export function NewChatScreen() {
   const [editMode, setEditMode] = useState<EditMode>('review');
   // biome-ignore lint/correctness/useExhaustiveDependencies: `openKey` is the trigger
   useLayoutEffect(() => setEditMode('review'), [openKey]);
-  // Only a mode the chip offered is sent: it is hidden in a loose chat and for a model without tools.
-  const toolsModel = modelsQuery.data?.find((m) => m.id === model)?.supportsTools === true;
-  const createMode: EditMode = projectId !== null && toolsModel ? editMode : 'review';
 
   const onProjectChange = useCallback(
     (id: string | null) => {
@@ -69,9 +67,12 @@ export function NewChatScreen() {
   );
 
   const onSend = useCallback(
-    async ({ text, attachments }: ComposerSendInput) => {
-      const chat = await api.createChat({ projectId, model, editMode: createMode });
+    async ({ text, attachments, editMode: shown }: ComposerSendInput) => {
+      // `shown` is the mode the chip rendered (Review when it was hidden): the chat is created in it, and the first
+      // turn expects it, so the server refuses the turn rather than run it in a mode the user wasn't shown.
+      const chat = await api.createChat({ projectId, model, editMode: shown });
       const { messages: _messages, ...summary } = chat;
+      noteAnswer(chat.id, chat.editMode);
       queryClient.setQueryData(queryKeys.chat(chat.id), chat);
       queryClient.setQueryData<ChatSummary[]>(queryKeys.chats, (old) =>
         old ? [summary, ...old.filter((c) => c.id !== chat.id)] : old,
@@ -85,9 +86,9 @@ export function NewChatScreen() {
       usePanelStore.getState().moveChat(DRAFT_PANEL_CHAT_ID, chat.id);
       // The run lives in the store, so it keeps going after this screen unmounts.
       navigate(paths.chat(chat.id));
-      void send(deps, chat.id, { text, attachments, model, effort });
+      void send(deps, chat.id, { text, attachments, model, effort, expectedEditMode: shown });
     },
-    [api, projectId, model, createMode, effort, queryClient, navigate, send, deps],
+    [api, projectId, model, effort, queryClient, navigate, send, deps],
   );
 
   return (

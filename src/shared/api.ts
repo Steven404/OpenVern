@@ -52,15 +52,18 @@ const modelId = z.string().trim().min(1);
 const reasoningEffort = z.enum(REASONING_EFFORTS);
 const editMode = z.enum(EDIT_MODES);
 /**
- * The edit mode the client showed when the user acted. Optional (older clients send none, and nothing is checked).
- * When present and different from the chat's stored mode, the request is refused with a 409 `conflict` and
- * `EDIT_MODE_CHANGED` and changes nothing, so a turn never runs, and a chat never moves, in a mode the user wasn't
- * shown.
+ * The edit mode the client showed when the user acted. A mismatch with the chat's stored mode is refused with a 409
+ * `conflict` and `EDIT_MODE_CHANGED` and changes nothing, so a turn never runs, and a chat never moves or switches,
+ * in a mode the user wasn't shown. On a send, a retry or a move, omitted means `'review'`: a request that showed
+ * nothing can only start a Review turn (which writes nothing without approval) or move a Review chat. Running or
+ * moving an Auto chat needs an explicit `'auto'` that some UI drew.
  */
 const expectedEditMode = editMode.optional();
 
 /** The 409 `conflict` message of a request whose `expectedEditMode` differs from the chat's stored mode. */
 export const EDIT_MODE_CHANGED = "This chat's edit mode changed. Check Review / Auto and send again.";
+/** The 409 `conflict` message of a PATCH whose `expectedProjectId` differs from the chat's stored project. */
+export const CHAT_PROJECT_CHANGED = 'This chat moved to another project. Check Review / Auto and try again.';
 
 /** `PUT /settings/openrouter-key` */
 export const setOpenRouterKeyBody = z.object({ apiKey: z.string().trim().min(1) });
@@ -91,8 +94,17 @@ export const updateChatBody = z.object({
   archived: z.boolean().optional(),
   /** Allowed while a run is active: the agent reads the mode once at turn start, so it applies from the next turn. */
   editMode: editMode.optional(),
-  /** Checked against the stored mode before anything changes (see `expectedEditMode`). A move should send it. */
+  /**
+   * Checked against the stored mode, under the lock that commits the change (see `expectedEditMode`). With
+   * `projectId` (a move), omitted means `'review'`; otherwise omitted means unchecked.
+   */
   expectedEditMode,
+  /**
+   * Checked against the stored project under the same lock; a mismatch is a 409 `CHAT_PROJECT_CHANGED` and changes
+   * nothing. Turning Auto on sends the project whose no-Git warning was decided, so a move that lands first can't
+   * carry Auto into a project the user wasn't warned about.
+   */
+  expectedProjectId: id.nullable().optional(),
 });
 /** `POST /chats/:id/messages` → `text/event-stream` of `AgentEvent` */
 export const sendMessageBody = z
@@ -104,7 +116,10 @@ export const sendMessageBody = z
     effort: reasoningEffort.nullable().optional(),
     /** The client can answer terminal reads (Electron with the terminal bridge), so offer `read_terminal`. */
     terminal: z.boolean().optional(),
-    /** Checked under the turn's start claim; the turn then runs in exactly that mode (see `expectedEditMode`). */
+    /**
+     * Checked under the turn's start claim; the turn then runs in exactly that mode (see `expectedEditMode`).
+     * Omitted means `'review'`.
+     */
     expectedEditMode,
   })
   .refine((b) => b.text.trim().length > 0 || b.attachmentIds.length > 0, {
@@ -116,7 +131,7 @@ export const retryBody = z.object({
   effort: reasoningEffort.nullable().optional(),
   /** As in `sendMessageBody`. */
   terminal: z.boolean().optional(),
-  /** As in `sendMessageBody`. */
+  /** As in `sendMessageBody` (omitted means `'review'`). */
   expectedEditMode,
 });
 /** `POST /projects/:id/files/attach` → `AttachmentRef` */

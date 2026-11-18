@@ -1,6 +1,7 @@
 import { useApiClient } from '@renderer/lib/api-context';
 import { queryKeys } from '@renderer/lib/query-keys';
-import type { Chat, EditMode, Id } from '@shared/types';
+import { chatQueryOptions, useEditModeEntry } from '@renderer/stores/edit-modes';
+import type { EditMode, Id } from '@shared/types';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
 import { DRAFT_PANEL_CHAT_ID } from './panel-store';
@@ -16,17 +17,14 @@ export function useChatChanges(chatId: Id) {
 }
 
 /**
- * The chat's edit mode, from the chat query the conversation holds. `undefined` while it loads, and for the new-chat
- * screen, which has no chat yet.
+ * The chat's shown edit mode (`stores/edit-modes.ts`), the one the chip shows. `undefined` until the chat was read,
+ * and for the new-chat screen, which has no chat yet.
  */
 export function useChatEditMode(chatId: Id): EditMode | undefined {
   const api = useApiClient();
-  return useQuery({
-    queryKey: queryKeys.chat(chatId),
-    queryFn: () => api.getChat(chatId),
-    enabled: chatId !== DRAFT_PANEL_CHAT_ID,
-    select: (chat: Chat) => chat.editMode,
-  }).data;
+  // Subscribed so the chat is read (and its mode fed to the store) even where nothing else mounts the query.
+  useQuery({ ...chatQueryOptions(api, chatId), enabled: chatId !== DRAFT_PANEL_CHAT_ID });
+  return useEditModeEntry(chatId).mode ?? undefined;
 }
 
 /** Diff launcher rule: pending or applied edits exist. */

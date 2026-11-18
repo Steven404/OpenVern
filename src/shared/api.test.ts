@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CHAT_PROJECT_CHANGED,
   createChatBody,
   EDIT_MODE_CHANGED,
   ROUTES,
@@ -42,6 +43,16 @@ describe('api schemas', () => {
       expect(updateChatBody.safeParse({ expectedEditMode }).success).toBe(false);
     }
     expect(EDIT_MODE_CHANGED).toBe("This chat's edit mode changed. Check Review / Auto and send again.");
+  });
+
+  it('takes an optional expectedProjectId on update (a project id or null)', () => {
+    expect(updateChatBody.parse({ editMode: 'auto', expectedProjectId: 'p1' }).expectedProjectId).toBe('p1');
+    expect(updateChatBody.parse({ editMode: 'auto', expectedProjectId: null }).expectedProjectId).toBeNull();
+    expect('expectedProjectId' in updateChatBody.parse({ editMode: 'auto' })).toBe(false);
+    for (const expectedProjectId of ['', 1, false]) {
+      expect(updateChatBody.safeParse({ editMode: 'auto', expectedProjectId }).success).toBe(false);
+    }
+    expect(CHAT_PROJECT_CHANGED).toBe('This chat moved to another project. Check Review / Auto and try again.');
   });
 
   it('exposes the undo route and accepts an empty body', () => {

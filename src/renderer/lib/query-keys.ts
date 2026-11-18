@@ -14,6 +14,10 @@ export const queryKeys = {
   models: ['models'] as const,
   projects: ['projects'] as const,
   chats: ['chats'] as const,
+  /**
+   * Read only through `chatQueryOptions` (`stores/edit-modes.ts`): its queryFn feeds the chip's shown edit mode. Another
+   * queryFn on this key, or a `setQueryData` of a chat the server just returned without `noteAnswer`, would not.
+   */
   chat: (id: Id) => ['chat', id] as const,
   /** Prefix of every Files-panel listing and search of a project (invalidation only). */
   projectFiles: (projectId: Id) => ['projectFiles', projectId] as const,

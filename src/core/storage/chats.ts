@@ -3,6 +3,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
+import { CHAT_PROJECT_CHANGED, EDIT_MODE_CHANGED } from '@shared/api';
 import { NEW_CHAT_TITLE } from '@shared/constants';
 import type { Chat, ChatSummary, Id, UserMessage } from '@shared/types';
 import { CoreError } from '../errors';
@@ -203,10 +204,16 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
       });
     },
 
-    async update(id, patch) {
+    async update(id, patch, expect = {}) {
       await assertProject(patch.projectId);
       return lock.run(async () => {
         const chat = await readChat(id);
+        // MODE GUARD (invariant): the mode and project the client showed are compared under the lock that commits,
+        // so neither can change between the check and the write. A mismatch writes nothing.
+        if (expect.editMode !== undefined && chat.editMode !== expect.editMode)
+          throw new CoreError('conflict', EDIT_MODE_CHANGED);
+        if (expect.projectId !== undefined && chat.projectId !== expect.projectId)
+          throw new CoreError('conflict', CHAT_PROJECT_CHANGED);
         const next: StoredChat = { ...chat };
         if (patch.title !== undefined) next.title = patch.title;
         if (patch.projectId !== undefined) next.projectId = patch.projectId;

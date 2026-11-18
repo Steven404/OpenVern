@@ -1,16 +1,19 @@
 import { openMenu, renderApp, resetUi, seededClient } from '@renderer/app/test-utils';
 import { ApiError } from '@renderer/lib/api-client';
 import { MockApiClient } from '@renderer/lib/mock-api-client';
+import { queryKeys } from '@renderer/lib/query-keys';
+import { useEditModes } from '@renderer/stores/edit-modes';
 import { useUiStore } from '@renderer/stores/ui';
 import { EDIT_MODE_CHANGED } from '@shared/api';
 import { errorInfo } from '@shared/errors';
-import type { EditMode, ProjectListItem } from '@shared/types';
+import type { Chat, EditMode, ProjectListItem } from '@shared/types';
 import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 beforeEach(() => {
   resetUi();
   useUiStore.setState({ autoNoGitAcknowledged: {} });
+  useEditModes.setState({ entries: {} });
 });
 afterEach(() => {
   cleanup();
@@ -123,7 +126,7 @@ describe('moves that never ask', () => {
 });
 
 describe('a move never relies on a mode the server no longer has', () => {
-  it('moving while an Auto change is committed but unanswered is refused, says why, and moves nothing', async () => {
+  it('Move is disabled while an Auto change is unanswered; after the answer, a move to a folder without Git asks', async () => {
     const { header, noGit, client, chat, project } = await renderChat('review');
     useUiStore.setState({ autoNoGitAcknowledged: { [project.id]: true } }); // the chip doesn't ask for this one
     // `renderChat` already spies on `updateChat`, so the real one comes from the class.
@@ -133,7 +136,7 @@ describe('a move never relies on a mode the server no longer has', () => {
       answer = resolve;
     });
     const update = vi.spyOn(client, 'updateChat').mockImplementation(async (id, patch) => {
-      const summary = await real(id, patch); // committed (a refused move throws here)…
+      const summary = await real(id, patch); // committed…
       if (patch.editMode !== undefined && patch.projectId === undefined) await late; // …a mode answer is late
       return summary;
     });
@@ -141,24 +144,53 @@ describe('a move never relies on a mode the server no longer has', () => {
     chip.focus();
     fireEvent.keyDown(chip, { key: 'Enter' });
     fireEvent.click(await screen.findByTestId('edit-mode-auto'));
-    await waitFor(() => expect(update).toHaveBeenCalledWith(chat.id, { editMode: 'auto' }));
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith(chat.id, { editMode: 'auto', expectedProjectId: project.id }),
+    );
     expect((await client.getChat(chat.id)).editMode).toBe('auto');
 
-    // The chip still shows Review, so the menu doesn't warn, but it says which mode it decided from.
+    // The chip still shows Review (busy): Move can't decide from it, so it is disabled.
+    openMenu(within(header).getByRole('button', { name: 'Chat options' }));
+    const sub = await screen.findByRole('menuitem', { name: 'Move to project' });
+    expect(sub.getAttribute('aria-disabled')).toBe('true');
+    fireEvent.keyDown(sub, { key: 'Escape' });
+    await tick();
+    expect(update).toHaveBeenCalledTimes(1);
+
+    answer();
+    await waitFor(() => expect(screen.getByTestId('edit-mode-chip').getAttribute('data-mode')).toBe('auto'));
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+    await moveTo(header, noGit);
+    expect(await screen.findByTestId('no-git-dialog')).toBeTruthy();
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it('decides from the shown mode, not the cache: a cache set to Auto under a Review chip asks nothing and expects Review', async () => {
+    const { header, noGit, update, chat, queryClient } = await renderChat('review');
+    await screen.findByTestId('edit-mode-chip');
+    queryClient.setQueryData<Chat>(queryKeys.chat(chat.id), (old) => (old ? { ...old, editMode: 'auto' } : old));
     await moveTo(header, noGit);
     await waitFor(() =>
       expect(update).toHaveBeenCalledWith(chat.id, { projectId: noGit.id, expectedEditMode: 'review' }),
     );
     expect(screen.queryByTestId('no-git-dialog')).toBeNull();
+  });
+
+  it('a move refused because another window changed the mode says why, moves nothing, and the chip catches up', async () => {
+    const { header, noGit, client, chat, project, update } = await renderChat('review');
+    await screen.findByTestId('edit-mode-chip');
+    await MockApiClient.prototype.updateChat.call(client, chat.id, { editMode: 'auto' }); // not through this window
+    await moveTo(header, noGit);
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith(chat.id, { projectId: noGit.id, expectedEditMode: 'review' }),
+    );
     const dialog = await screen.findByTestId('move-error-dialog');
     expect(within(dialog).getByText("Couldn't move this chat")).toBeTruthy();
     expect(dialog.textContent).toContain(EDIT_MODE_CHANGED);
     expect((await client.getChat(chat.id)).projectId).toBe(project.id);
     await waitFor(() => expect(screen.getByTestId('edit-mode-chip').getAttribute('data-mode')).toBe('auto'));
-
     fireEvent.click(within(dialog).getByRole('button', { name: 'OK' }));
     await waitFor(() => expect(screen.queryByTestId('move-error-dialog')).toBeNull());
-    answer();
     // Tried again with the chip showing Auto, the move asks first.
     await moveTo(header, noGit);
     expect(await screen.findByTestId('no-git-dialog')).toBeTruthy();

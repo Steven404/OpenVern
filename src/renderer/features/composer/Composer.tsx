@@ -1,5 +1,5 @@
 import { IMAGE_ACCEPT, TEXT_ACCEPT } from '@shared/constants';
-import type { AttachmentRef, Chat, ChatSummary, EditMode, Id, ReasoningEffort } from '@shared/types';
+import type { AttachmentRef, EditMode, Id, ReasoningEffort } from '@shared/types';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowUp, Square } from 'lucide-react';
 import {
@@ -17,6 +17,14 @@ import { Button } from '../../components/ui';
 import { ApiError } from '../../lib/api-client';
 import { useApiClient } from '../../lib/api-context';
 import { queryKeys } from '../../lib/query-keys';
+import {
+  chatQueryOptions,
+  confirmEditMode,
+  EDIT_MODE_UNKNOWN,
+  type ModeEntry,
+  useEditModeEntry,
+  writeChat,
+} from '../../stores/edit-modes';
 import { patchChatSummary, useRunsStore } from '../../stores/runs';
 import { useUiStore } from '../../stores/ui';
 import { useTerminalUiStore } from '../terminal/terminal-store';
@@ -34,6 +42,11 @@ export type ComposerVariant = 'reply' | 'new';
 export interface ComposerSendInput {
   text: string;
   attachments: AttachmentRef[];
+  /**
+   * The edit mode the chip rendered when the user sent ('review' when the New chat chip is hidden). It is what the
+   * turn is expected to run in, so it comes from this render, never from a cache read when the send fires.
+   */
+  editMode: EditMode;
 }
 
 export interface ComposerProps {
@@ -69,14 +82,38 @@ export interface ComposerProps {
 const HINT = 'Enter to send · Shift + Enter for a new line';
 const TOOLS_NOTICE = "This model can't use tools, so it won't read your project files.";
 const NO_KEY_NOTICE = 'Add your OpenRouter API key to start chatting.';
-const EDIT_MODE_ERROR = "Couldn't change the edit mode. Try again.";
-const EDIT_MODE_UNKNOWN = "Couldn't check this chat's edit mode, so sending is paused.";
 /** The draft keeps a usable height even when the window is short and the terminal dock takes most of it. */
 const COMPOSER_MIN_MAX_HEIGHT = 96;
 
 /** How tall the growing draft may become: 40% of what the window has left after the terminal dock. */
 export function composerMaxHeight(viewportHeight: number, dockHeight: number): number {
   return Math.max(COMPOSER_MIN_MAX_HEIGHT, Math.round((viewportHeight - dockHeight) * 0.4));
+}
+
+/**
+ * The edit mode a composer shows, and whether a reply may be sent (or a turn retried) in it. Shared by the composer
+ * and Retry, so both act on the same rendered value. `chatId` undefined = the New chat composer, whose mode is the
+ * local `draft`.
+ *
+ * INVARIANT: in a chat that could edit (a project chat whose model isn't known to lack tools), a reply goes out only
+ * with the chip on screen, and only while the chat's mode is `known`: never on a cold load before the chat was read,
+ * and never while a mode change or its check is in flight.
+ */
+export function useReplyEditMode(chatId: Id | undefined, projectId: Id | null, model: string, draft?: EditMode) {
+  const entry: ModeEntry = useEditModeEntry(chatId);
+  const settings = useSettings();
+  const modelsQuery = useModels();
+  const project = useProjects().data?.find((p) => p.id === projectId);
+  const mode = chatId !== undefined ? entry.mode : (draft ?? null);
+  const noKey =
+    (settings.data ? !settings.data.openRouter.configured : false) ||
+    (modelsQuery.error instanceof ApiError && modelsQuery.error.info.code === 'no_api_key');
+  const info = modelsQuery.data?.find((m) => m.id === model);
+  // Unknown capabilities (the model list not loaded yet) count as tools: the chip shows, so the mode is on screen.
+  const editCapable = projectId !== null && info?.supportsTools !== false;
+  const showChip = editCapable && !noKey && project !== undefined && mode !== null;
+  const ready = entry.status === 'known' && entry.mode !== null && (!editCapable || showChip);
+  return { entry, mode, project, showChip, ready, noKey };
 }
 
 /** Shared reply / new-chat composer (D15, D16, D18): textarea, attach, model picker, send / stop, notices and hint. */
@@ -100,13 +137,17 @@ export function Composer({
   const api = useApiClient();
   const queryClient = useQueryClient();
   const openSettings = useUiStore((s) => s.openSettings);
-  const settings = useSettings();
   const modelsQuery = useModels();
 
   const isNew = variant === 'new';
-  const noKey =
-    (settings.data ? !settings.data.openRouter.configured : false) ||
-    (modelsQuery.error instanceof ApiError && modelsQuery.error.info.code === 'no_api_key');
+  // Edit mode. A reply composer's `sinkKey` is its chat id (see `sinkKey`): its mode is the chat's shown mode
+  // (`stores/edit-modes.ts`), changed with a PATCH. The New chat composer gets it from props.
+  const chatId = variant === 'reply' ? sinkKey : undefined;
+  // Subscribed so the chat is read (and its mode fed to the store) even where nothing else mounts the query; its data
+  // is never read here.
+  useQuery({ ...chatQueryOptions(api, chatId ?? ''), enabled: chatId !== undefined });
+  const shown = useReplyEditMode(chatId, projectId, model, draftEditMode);
+  const { entry, project, noKey } = shown;
   const info = modelsQuery.data?.find((m) => m.id === model);
   // Unknown capabilities (list not loaded yet): do not block; the server still validates.
   const supportsImages = info ? info.supportsImages : true;
@@ -118,26 +159,31 @@ export function Composer({
   const effectiveEffort = effort !== null && efforts.includes(effort) ? effort : null;
   const accept = supportsImages ? `${TEXT_ACCEPT},${IMAGE_ACCEPT}` : TEXT_ACCEPT;
 
-  // Edit mode. A reply composer's `sinkKey` is its chat id (see `sinkKey`), so it reads the chat's stored mode from the
-  // chat query the conversation already holds, and changes it with a PATCH. The New chat composer gets it from props.
-  const chatId = variant === 'reply' ? sinkKey : undefined;
-  const chatEditMode = useQuery({
-    queryKey: queryKeys.chat(chatId ?? ''),
-    queryFn: () => api.getChat(chatId ?? ''),
-    enabled: chatId !== undefined,
-    select: (chat: Chat) => chat.editMode,
-  }).data;
-  const modeSync = useChatEditModeSync(chatId);
-  const editMode = chatId !== undefined ? chatEditMode : draftEditMode;
-  const changeEditMode = (mode: EditMode) => {
-    if (chatId !== undefined) modeSync.change(mode);
-    else onEditModeChange?.(mode);
+  const editMode = shown.mode;
+  const changeEditMode = (mode: EditMode, forProject: Id) => {
+    if (chatId === undefined) {
+      onEditModeChange?.(mode);
+      return;
+    }
+    // Turning Auto on names the project whose no-Git warning was decided: if the chat moved meanwhile, the server
+    // refuses instead of turning Auto on somewhere the user wasn't warned about.
+    writeChat({ api, queryClient }, chatId, 'mode', () =>
+      api.updateChat(
+        chatId,
+        mode === 'auto' ? { editMode: 'auto', expectedProjectId: forProject } : { editMode: mode },
+      ),
+    )
+      .then((summary) => {
+        if (summary) patchChatSummary(queryClient, summary);
+      })
+      .catch(() => {
+        // The store keeps the error for the notice below and checks the server's mode again.
+      });
   };
-  const project = useProjects().data?.find((p) => p.id === projectId);
-  // Offered in a project chat, with a key, for a model known to use tools. Hidden otherwise; a stored Auto is kept
-  // (the server still runs it) and shows again with a tools model.
-  const showEditModePicker =
-    projectId !== null && !noKey && info?.supportsTools === true && project !== undefined && editMode !== undefined;
+  const modePending = chatId !== undefined && (entry.status === 'saving' || entry.status === 'confirming');
+  const modeUnknown = chatId !== undefined && entry.status === 'unknown';
+  const modeNotice = modeUnknown ? EDIT_MODE_UNKNOWN : chatId !== undefined ? entry.error : null;
+  const showEditModePicker = shown.showChip;
 
   const [text, setText] = useState('');
   const [imageNotice, setImageNotice] = useState<string | null>(null);
@@ -148,8 +194,8 @@ export function Composer({
 
   useEffect(() => (sinkKey ? registerAttachmentSink(sinkKey, addRef) : undefined), [sinkKey, addRef]);
 
-  // A send or retry the server refused because the chat's edit mode changed: the chip now shows the server's mode
-  // (the chat was fetched again), so say why nothing was sent and give back what was typed. Taken once, so a remount
+  // A send or retry the server refused because the chat's edit mode changed: the chip is catching up with the server's
+  // mode (the runs store checks it again, and sending waits for that), so say why nothing was sent and give back what was typed. Taken once, so a remount
   // (or React's double effect run in development) can't add the text twice. Nothing is resent.
   const refusal = useRunsStore((s) => (chatId !== undefined ? s.modeRefusals[chatId] : undefined));
   useEffect(() => {
@@ -197,9 +243,16 @@ export function Composer({
   }, [text, dockHeight]);
 
   const hasContent = text.trim().length > 0 || ready.length > 0;
-  // INVARIANT: send is blocked while the mode is unconfirmed. Until the server has answered a mode change (or, after a
-  // failed one, a fresh read has said which mode it kept), the chip may not show the mode the next turn would run in.
-  const canSend = hasContent && !uploading && !noKey && !running && !busy && !sending && !modeSync.unconfirmed;
+  // INVARIANT: a reply is sent only in a mode that is on screen and confirmed (see `useReplyEditMode`). Until the chat
+  // was read, while a mode change or its check is in flight, or after that check failed, the chip may not show the
+  // mode the next turn would run in.
+  const canSend = hasContent && !uploading && !noKey && !running && !busy && !sending && (isNew || shown.ready);
+  // What the turn is expected to run in: the value this render shows.
+  const sendMode: EditMode = isNew
+    ? shown.showChip && editMode !== null
+      ? editMode
+      : 'review'
+    : (entry.mode ?? 'review');
 
   const submit = useCallback(async () => {
     if (!canSend) return;
@@ -217,7 +270,7 @@ export function Composer({
     setText('');
     setSending(true);
     try {
-      await onSend({ text: draft.trim(), attachments: refs });
+      await onSend({ text: draft.trim(), attachments: refs, editMode: sendMode });
     } catch (err) {
       setText(draft);
       attachments.restore(taken);
@@ -225,7 +278,7 @@ export function Composer({
     } finally {
       setSending(false);
     }
-  }, [canSend, supportsImages, ready, attachments, text, onSend]);
+  }, [canSend, supportsImages, ready, attachments, text, onSend, sendMode]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key !== 'Enter' || e.shiftKey) return;
@@ -273,7 +326,7 @@ export function Composer({
       : null;
 
   const showToolsNotice = projectId !== null && !supportsTools && !noKey;
-  const hasNotices = imageNotice !== null || sendError !== null || modeSync.error !== null || noKey || showToolsNotice;
+  const hasNotices = imageNotice !== null || sendError !== null || modeNotice !== null || noKey || showToolsNotice;
 
   return (
     <div className="flex flex-col" data-variant={variant}>
@@ -319,13 +372,13 @@ export function Composer({
           />
           {projectSlot}
           <span className="flex-1" />
-          {showEditModePicker && (
+          {showEditModePicker && editMode !== null && project !== undefined && (
             <EditModePicker
               value={editMode}
               onChange={changeEditMode}
               project={project}
               running={running || busy}
-              pending={modeSync.pending}
+              pending={modePending}
             />
           )}
           {showEffortPicker && !noKey && (
@@ -380,11 +433,11 @@ export function Composer({
               {sendError}
             </p>
           )}
-          {modeSync.error && (
+          {modeNotice && (
             <p role="alert" className="m-0 flex flex-wrap items-center gap-x-3 gap-y-1 text-danger">
-              <span>{modeSync.error}</span>
-              {modeSync.canRecheck && (
-                <Button size="sm" onClick={modeSync.recheck}>
+              <span>{modeNotice}</span>
+              {modeUnknown && chatId !== undefined && (
+                <Button size="sm" onClick={() => void confirmEditMode({ api, queryClient }, chatId)}>
                   Try again
                 </Button>
               )}
@@ -417,106 +470,4 @@ export function Composer({
       </p>
     </div>
   );
-}
-
-/**
- * `saving`: a mode PATCH is in flight. `confirming`: it failed and a fresh read of the chat is in flight. `unknown`:
- * that read failed too, so the cache can't be trusted to show the server's mode.
- */
-type ModeSyncState = 'idle' | 'saving' | 'confirming' | 'unknown';
-
-/**
- * Changes a chat's edit mode and keeps the chat caches in step with the server. One change at a time: the chip is
- * disabled while one is in flight, and a choice made anyway is dropped.
- */
-function useChatEditModeSync(chatId: Id | undefined) {
-  const api = useApiClient();
-  const queryClient = useQueryClient();
-  const [state, setState] = useState<ModeSyncState>('idle');
-  const [error, setError] = useState<string | null>(null);
-  // The state is read synchronously too: two picks in one tick must not both start a PATCH.
-  const inFlight = useRef(false);
-
-  // INVARIANT: an older chat response must never overwrite a confirmed mode. A GET of the chat (or the chat list)
-  // that started before the server took the new mode would write the old one back when it lands, so every such
-  // request is cancelled before the cache is written. Cancelling reverts the query to its last settled data.
-  const cancelChatReads = useCallback(
-    (id: Id) =>
-      Promise.all([
-        queryClient.cancelQueries({ queryKey: queryKeys.chat(id) }),
-        queryClient.cancelQueries({ queryKey: queryKeys.chats }),
-      ]),
-    [queryClient],
-  );
-
-  /** After a failed PATCH: read the chat again, so the chip shows the mode the server kept. */
-  const confirm = useCallback(
-    async (id: Id) => {
-      inFlight.current = true;
-      setState('confirming');
-      try {
-        await cancelChatReads(id);
-        // `staleTime: 0` always fetches; an in-flight read was cancelled above, so this one started after the PATCH.
-        const { messages: _messages, ...summary } = await queryClient.fetchQuery({
-          queryKey: queryKeys.chat(id),
-          queryFn: () => api.getChat(id),
-          staleTime: 0,
-        });
-        patchChatSummary(queryClient, summary);
-        setState('idle');
-        void queryClient.invalidateQueries({ queryKey: queryKeys.chats });
-      } catch {
-        // The cache may still hold the mode that was asked for, or the one before it: sending stays blocked.
-        setError(EDIT_MODE_UNKNOWN);
-        setState('unknown');
-      } finally {
-        inFlight.current = false;
-      }
-    },
-    [api, queryClient, cancelChatReads],
-  );
-
-  const change = useCallback(
-    async (mode: EditMode) => {
-      if (chatId === undefined || inFlight.current) return;
-      inFlight.current = true;
-      setError(null);
-      setState('saving');
-      let summary: ChatSummary;
-      try {
-        await cancelChatReads(chatId);
-        summary = await api.updateChat(chatId, { editMode: mode });
-      } catch {
-        inFlight.current = false;
-        setError(EDIT_MODE_ERROR);
-        await confirm(chatId);
-        return;
-      }
-      // A read may have started while the PATCH was in flight and still hold the old mode: cancel it too.
-      await cancelChatReads(chatId);
-      patchChatSummary(queryClient, summary);
-      inFlight.current = false;
-      setState('idle');
-      // Reconcile the rest of the chat. Any read from here on started after the server took the new mode.
-      void queryClient.invalidateQueries({ queryKey: queryKeys.chat(chatId) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.chats });
-    },
-    [api, chatId, queryClient, cancelChatReads, confirm],
-  );
-
-  const recheck = useCallback(() => {
-    if (chatId === undefined || inFlight.current) return;
-    setError(EDIT_MODE_ERROR);
-    void confirm(chatId);
-  }, [chatId, confirm]);
-
-  return {
-    change: (mode: EditMode) => void change(mode),
-    recheck,
-    error,
-    /** The chip is busy: a change or its check is in flight. */
-    pending: state === 'saving' || state === 'confirming',
-    unconfirmed: state !== 'idle',
-    canRecheck: state === 'unknown',
-  };
 }

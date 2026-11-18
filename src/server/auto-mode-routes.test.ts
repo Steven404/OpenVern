@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { EDIT_MODE_CHANGED } from '@shared/api';
+import { CHAT_PROJECT_CHANGED, EDIT_MODE_CHANGED } from '@shared/api';
 import type { AppliedBatch, Chat, EditMode } from '@shared/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { editPromptLines, editToolDescriptions } from '../core/agent/edit-mode';
@@ -280,18 +280,95 @@ describe('expectedEditMode: a turn or a move never relies on a mode the client n
     expect(await h.core.chats.get(chat.id)).toMatchObject({ projectId: other, editMode: 'auto' });
   });
 
-  it('omitting expectedEditMode checks nothing, as before', async () => {
+  it('omitting expectedEditMode expects Review: in an Auto chat, send, retry and move are refused and change nothing', async () => {
+    const before = await oneTurn();
     await h.core.chats.update(chat.id, { editMode: 'auto' });
-    const sent = await send({});
+    const stored = await h.core.chats.get(chat.id);
+    const runTurn = vi.spyOn(h.core.agent, 'runTurn');
+    const prepareRetry = vi.spyOn(h.changes, 'prepareRetry');
+    const calls = h.provider.calls.length;
+    await error(await send({}), 409, 'conflict', EDIT_MODE_CHANGED);
+    await error(await retry({}), 409, 'conflict', EDIT_MODE_CHANGED);
+    const other = (await h.core.projects.create({ rootPath: h.homeDir })).id;
+    await error(await patch({ projectId: other }), 409, 'conflict', EDIT_MODE_CHANGED);
+    expect(runTurn).not.toHaveBeenCalled();
+    expect(prepareRetry).not.toHaveBeenCalled();
+    expect(h.provider.calls).toHaveLength(calls);
+    expect(h.core.agent.isRunning(chat.id)).toBe(false);
+    expect(await h.core.chats.get(chat.id)).toEqual(stored);
+    expect(stored.messages).toEqual(before);
+    // The claim was released: the same send naming Auto goes through.
+    const ok = await send({ expectedEditMode: 'auto' });
+    expect(ok.status).toBe(200);
+    await collectEvents(ok);
+  });
+
+  it('omitting expectedEditMode in a Review chat runs the turn in Review; a mode-only PATCH stays unchecked', async () => {
+    const firstCall = h.provider.calls.length;
+    const sent = await send({ text: '[fake:write=omit.txt]' });
     expect(sent.status).toBe(200);
-    await collectEvents(sent);
+    const events = await collectEvents(sent);
+    expect(events.some((e) => e.type === 'auto_batch_updated')).toBe(false);
+    expect(existsSync(path.join(h.projectDir, 'omit.txt'))).toBe(false);
+    for (const line of editPromptLines('review')) expect(h.provider.calls[firstCall]?.system).toContain(line);
     const retried = await retry({});
     expect(retried.status).toBe(200);
     await collectEvents(retried);
     const other = (await h.core.projects.create({ rootPath: h.homeDir })).id;
     expect((await patch({ projectId: other })).status).toBe(200);
+    expect((await patch({ editMode: 'auto' })).status).toBe(200);
     expect((await patch({ editMode: 'review' })).status).toBe(200);
     expect(await h.core.chats.get(chat.id)).toMatchObject({ projectId: other, editMode: 'review' });
+  });
+
+  it('PATCH: a move held in its pending-edits check loses to a mode change that commits first', async () => {
+    const other = (await h.core.projects.create({ rootPath: h.homeDir })).id;
+    const hold = gate();
+    const original = h.changes.get.bind(h.changes);
+    vi.spyOn(h.changes, 'get').mockImplementation(async (id) => {
+      await hold.hold();
+      return original(id);
+    });
+    const moving = patch({ projectId: other, expectedEditMode: 'review' });
+    await hold.entered;
+    vi.mocked(h.changes.get).mockImplementation(original);
+    expect((await patch({ editMode: 'auto' })).status).toBe(200);
+    hold.open();
+    await error(await moving, 409, 'conflict', EDIT_MODE_CHANGED);
+    expect(await h.core.chats.get(chat.id)).toMatchObject({ projectId, editMode: 'auto' });
+  });
+
+  it('PATCH: turning Auto on names the project it warned about; a move that landed first refuses it', async () => {
+    const other = (await h.core.projects.create({ rootPath: h.homeDir })).id;
+    expect((await patch({ projectId: other, expectedEditMode: 'review' })).status).toBe(200);
+    await error(await patch({ editMode: 'auto', expectedProjectId: projectId }), 409, 'conflict', CHAT_PROJECT_CHANGED);
+    expect(await h.core.chats.get(chat.id)).toMatchObject({ projectId: other, editMode: 'review' });
+    // Naming the project the chat is in goes through.
+    expect((await patch({ editMode: 'auto', expectedProjectId: other })).status).toBe(200);
+    expect(await h.core.chats.get(chat.id)).toMatchObject({ projectId: other, editMode: 'auto' });
+  });
+
+  it('send: a move landing after the check, before the agent reads the chat, does not move the turn', async () => {
+    await h.core.chats.update(chat.id, { editMode: 'auto' });
+    const other = (await h.core.projects.create({ rootPath: h.homeDir })).id;
+    const original = h.core.chats.get.bind(h.core.chats);
+    const hold = gate();
+    let reads = 0;
+    // Read 1 is the route's, under the start claim; read 2 is the agent's first. Hold the agent's.
+    vi.spyOn(h.core.chats, 'get').mockImplementation(async (id) => {
+      reads++;
+      if (reads === 2) await hold.hold();
+      return original(id);
+    });
+    const started = send({ text: '[fake:write=pinned.txt]', expectedEditMode: 'auto' });
+    await hold.entered;
+    expect((await patch({ projectId: other, expectedEditMode: 'auto' })).status).toBe(200);
+    hold.open();
+    await collectEvents(await started);
+    // The turn ran in the project that was checked with its mode, not the one the chat moved to.
+    expect(existsSync(path.join(h.projectDir, 'pinned.txt'))).toBe(true);
+    expect(existsSync(path.join(h.homeDir, 'pinned.txt'))).toBe(false);
+    expect((await original(chat.id)).projectId).toBe(other);
   });
 
   it.each(['send', 'retry'] as const)(

@@ -2,14 +2,17 @@ import { EDIT_MODE_CHANGED } from '@shared/api';
 import { DEFAULT_MODEL } from '@shared/constants';
 import { errorInfo } from '@shared/errors';
 import type { Chat, ChatSummary, Id } from '@shared/types';
-import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { renderApp, resetUi, seededClient } from '../../app/test-utils';
 import { ApiError } from '../../lib/api-client';
 import { MockApiClient } from '../../lib/mock-api-client';
 import { queryKeys } from '../../lib/query-keys';
-import { useRunsStore } from '../../stores/runs';
+import { useEditModes } from '../../stores/edit-modes';
+import { patchChatSummary, useRunsStore } from '../../stores/runs';
 import { STORAGE_KEYS, useUiStore } from '../../stores/ui';
+import { EditModePicker } from './EditModePicker';
 import { ReplyComposer } from './ReplyComposer';
 import { installDomStubs, renderWithProviders, resetStores } from './test-utils';
 
@@ -141,7 +144,8 @@ describe('choosing a mode in a chat', () => {
     await choose('auto');
     await waitFor(() => expect(chip().getAttribute('data-mode')).toBe('auto'));
     expect(update).toHaveBeenCalledTimes(1);
-    expect(update).toHaveBeenCalledWith(chat.id, { editMode: 'auto' });
+    // Turning Auto on names the project it was decided for.
+    expect(update).toHaveBeenCalledWith(chat.id, { editMode: 'auto', expectedProjectId: git.id });
     expect(queryClient.getQueryData<Chat>(queryKeys.chat(chat.id))?.editMode).toBe('auto');
     expect(queryClient.getQueryData<ChatSummary[]>(queryKeys.chats)?.find((c) => c.id === chat.id)?.editMode).toBe(
       'auto',
@@ -258,7 +262,7 @@ describe('the no-Git dialog', () => {
     await choose('auto');
     fireEvent.click(await screen.findByTestId('no-git-turn-on-auto'));
     await waitFor(() => expect(chip().getAttribute('data-mode')).toBe('auto'));
-    expect(update).toHaveBeenCalledWith(chat.id, { editMode: 'auto' });
+    expect(update).toHaveBeenCalledWith(chat.id, { editMode: 'auto', expectedProjectId: noGit.id });
     expect(useUiStore.getState().autoNoGitAcknowledged).toEqual({ [noGit.id]: true });
     expect(JSON.parse(window.localStorage.getItem(STORAGE_KEYS.autoNoGitAcknowledged) ?? 'null')).toEqual([noGit.id]);
     expect(screen.queryByTestId('no-git-dialog')).toBeNull();
@@ -454,7 +458,7 @@ describe('send is blocked while the mode is unconfirmed', () => {
 });
 
 describe('an older chat response never overwrites a confirmed mode', () => {
-  it('a read that captured Review before the switch lands after it: the chat and the chat list stay Auto', async () => {
+  it('a read that captured Review before the switch lands after it: the chip stays Auto', async () => {
     const api = new MockApiClient({ delayMs: 0 });
     const { git } = await projects(api);
     const chat = await chatIn(api, git.id);
@@ -485,10 +489,7 @@ describe('an older chat response never overwrites a confirmed mode', () => {
     await tick();
     await tick();
     expect(chip().getAttribute('data-mode')).toBe('auto');
-    expect(queryClient.getQueryData<Chat>(queryKeys.chat(chat.id))?.editMode).toBe('auto');
-    expect(queryClient.getQueryData<ChatSummary[]>(queryKeys.chats)?.find((c) => c.id === chat.id)?.editMode).toBe(
-      'auto',
-    );
+    expect(useEditModes.getState().entries[chat.id]).toMatchObject({ mode: 'auto', status: 'known' });
   });
 
   it('a PATCH the server took but whose answer was lost: the check ignores an older read and finds Auto', async () => {
@@ -520,10 +521,10 @@ describe('an older chat response never overwrites a confirmed mode', () => {
     await tick();
     await tick();
     expect(chip().getAttribute('data-mode')).toBe('auto');
-    expect(queryClient.getQueryData<Chat>(queryKeys.chat(chat.id))?.editMode).toBe('auto');
     expect(sendButton().disabled).toBe(true); // no text yet
     typeAndEnter('go');
     await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({ expectedEditMode: 'auto' });
     await waitFor(() => expect(useRunsStore.getState().runs[chat.id]).toBeUndefined(), { timeout: 4000 });
   });
 
@@ -558,7 +559,7 @@ describe('an older chat response never overwrites a confirmed mode', () => {
     await tick();
     await tick();
     expect(chip().getAttribute('data-mode')).toBe('auto');
-    expect(queryClient.getQueryData<Chat>(queryKeys.chat(chat.id))?.editMode).toBe('auto');
+    expect(useEditModes.getState().entries[chat.id]).toMatchObject({ mode: 'auto', status: 'known' });
   });
 });
 
@@ -579,7 +580,7 @@ describe('the server refuses a turn in a mode the chip did not show', () => {
   beforeEach(() => useRunsStore.setState({ modeRefusals: {} }));
   const alertText = async () => (await screen.findByRole('alert')).textContent;
 
-  it('a composer remounted while an Auto PATCH is committed but unanswered: the send is refused, the chip catches up, the draft comes back', async () => {
+  it('a composer remounted while an Auto PATCH is held stays busy: the chip is disabled and nothing can be sent', async () => {
     const api = new MockApiClient({ delayMs: 0 });
     const { git } = await projects(api);
     const chat = await chatIn(api, git.id);
@@ -596,9 +597,32 @@ describe('the server refuses a turn in a mode the chip did not show', () => {
     await choose('auto');
     await waitFor(() => expect(chip().getAttribute('aria-busy')).toBe('true'));
     fireEvent.click(screen.getByRole('button', { name: 'remount' }));
-    await waitFor(() => expect(chip().getAttribute('aria-busy')).toBeNull());
-    expect(chip().getAttribute('data-mode')).toBe('review');
+    await tick();
+    // The write in flight lives in the store, not the composer: the new composer sees it.
+    expect(chip().getAttribute('aria-busy')).toBe('true');
+    expect((chip() as HTMLButtonElement).disabled).toBe(true);
+    typeAndEnter('make the edits');
+    await tick();
+    expect(sendButton().disabled).toBe(true);
+    expect(sendMessage).not.toHaveBeenCalled();
 
+    response.open();
+    await waitFor(() => expect(chip().getAttribute('data-mode')).toBe('auto'));
+    expect(chip().getAttribute('aria-busy')).toBeNull();
+    fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' });
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({ text: 'make the edits', expectedEditMode: 'auto' });
+    await waitFor(() => expect(useRunsStore.getState().runs[chat.id]).toBeUndefined(), { timeout: 4000 });
+  });
+
+  it('a send the server refuses (another window changed the mode): the draft comes back and the chip catches up', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const { git } = await projects(api);
+    const chat = await chatIn(api, git.id);
+    const sendMessage = vi.spyOn(api, 'sendMessage');
+    renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    await findChip();
+    await api.updateChat(chat.id, { editMode: 'auto' }); // not through this window
     typeAndEnter('make the edits');
     await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
     expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({ expectedEditMode: 'review' });
@@ -607,18 +631,6 @@ describe('the server refuses a turn in a mode the chip did not show', () => {
     expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('make the edits');
     expect((await api.getChat(chat.id)).messages).toEqual([]);
     expect(useRunsStore.getState().runs[chat.id]).toBeUndefined();
-    await tick();
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-
-    response.open();
-    await tick();
-    expect(chip().getAttribute('data-mode')).toBe('auto');
-    // Sending again now runs, in the mode the chip shows.
-    fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' });
-    await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(2));
-    expect(sendMessage.mock.calls[1]?.[1]).toMatchObject({ text: 'make the edits', expectedEditMode: 'auto' });
-    await waitFor(() => expect(useRunsStore.getState().runs[chat.id]).toBeUndefined(), { timeout: 4000 });
-    expect((await api.getChat(chat.id)).messages[0]).toMatchObject({ role: 'user', text: 'make the edits' });
   });
 
   it('a refusal waiting when the composer mounts is shown once, with the text and files put back', async () => {
@@ -644,5 +656,116 @@ describe('the server refuses a turn in a mode the chip did not show', () => {
     await waitFor(() => expect(useRunsStore.getState().modeRefusals).toEqual({}));
     expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('look at notes');
     expect(await alertText()).toBe(EDIT_MODE_CHANGED);
+  });
+});
+
+describe('a reply goes out only in the mode on screen', () => {
+  it('cold load: with the chat GET held, the composer shows but nothing can be sent; after it, the send carries Auto', async () => {
+    resetUi();
+    const seed = await seededClient();
+    await seed.client.updateChat(seed.chat.id, { editMode: 'auto' });
+    const real = seed.client.getChat.bind(seed.client);
+    const read = gate();
+    vi.spyOn(seed.client, 'getChat').mockImplementation(async (id) => {
+      await read.promise;
+      return real(id);
+    });
+    const sendMessage = vi.spyOn(seed.client, 'sendMessage');
+    renderApp({ client: seed.client, route: `/chat/${seed.chat.id}` });
+    // The chats list is loaded, so the header and the composer render before the chat itself.
+    await screen.findByRole('heading', { level: 1, name: seed.chat.title });
+    await screen.findByLabelText('Message');
+    expect(chipEl()).toBeNull();
+    typeAndEnter('make the edits');
+    await tick();
+    expect(sendButton().disabled).toBe(true);
+    fireEvent.submit(sendButton().closest('form') as HTMLFormElement);
+    await tick();
+    expect(sendMessage).not.toHaveBeenCalled();
+
+    read.open();
+    await waitFor(() => expect(chipEl()?.getAttribute('data-mode')).toBe('auto'));
+    fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' });
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({ text: 'make the edits', expectedEditMode: 'auto' });
+  });
+
+  it('with the model list still loading, the chip shows the stored mode and a send carries it', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const { git } = await projects(api);
+    const chat = await chatIn(api, git.id);
+    await api.updateChat(chat.id, { editMode: 'auto' });
+    const models = gate();
+    const realModels = api.listModels.bind(api);
+    vi.spyOn(api, 'listModels').mockImplementation(async () => {
+      await models.promise;
+      return realModels();
+    });
+    const sendMessage = vi.spyOn(api, 'sendMessage');
+    renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    expect((await findChip()).getAttribute('data-mode')).toBe('auto');
+    typeAndEnter('go');
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({ expectedEditMode: 'auto' });
+    models.open();
+    await waitFor(() => expect(useRunsStore.getState().runs[chat.id]).toBeUndefined(), { timeout: 4000 });
+  });
+
+  it('a cache or a run report carrying Auto leaves the chip on Review, and the send carries Review', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const { git } = await projects(api);
+    const chat = await chatIn(api, git.id);
+    const { queryClient } = renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    await findChip();
+    const { messages: _messages, ...summary } = await api.getChat(chat.id);
+    act(() => {
+      queryClient.setQueryData<Chat>(queryKeys.chat(chat.id), (old) => (old ? { ...old, editMode: 'auto' } : old));
+      patchChatSummary(queryClient, { ...summary, editMode: 'auto' });
+    });
+    // A run whose report says Auto (a chat_updated from the server's side of the turn).
+    const realSend = api.sendMessage.bind(api);
+    const sendMessage = vi.spyOn(api, 'sendMessage').mockImplementationOnce(async function* () {
+      yield { type: 'chat_updated', chat: { ...summary, editMode: 'auto' } };
+      yield { type: 'done' };
+    });
+    typeAndEnter('first');
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+    // The fake turn stored nothing, so its run stays (idle) with the unsent message.
+    await waitFor(() => expect(useRunsStore.getState().runs[chat.id]?.status).toBe('idle'));
+    expect(chip().getAttribute('data-mode')).toBe('review');
+    sendMessage.mockImplementation(realSend);
+    typeAndEnter('second');
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(2));
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({ expectedEditMode: 'review' });
+    expect(sendMessage.mock.calls[1]?.[1]).toMatchObject({ expectedEditMode: 'review' });
+    await waitFor(() => expect(useRunsStore.getState().runs[chat.id]).toBeUndefined(), { timeout: 4000 });
+  });
+});
+
+describe('the warning and Auto name the same project', () => {
+  it('with the dialog open, a change of project does not move the decision: confirming acknowledges and sends the first project', () => {
+    const first = { id: 'p-first', name: 'First folder', inGitRepo: false };
+    const second = { id: 'p-second', name: 'Second folder', inGitRepo: false };
+    const onChange = vi.fn();
+    const view = render(<EditModePicker value="review" onChange={onChange} project={first} />);
+    openMenu();
+    fireEvent.click(screen.getByTestId('edit-mode-auto'));
+    const dialog = screen.getByTestId('no-git-dialog');
+    expect(dialog.textContent).toContain(`${first.name} isn't a Git repository`);
+    view.rerender(<EditModePicker value="review" onChange={onChange} project={second} />);
+    expect(screen.getByTestId('no-git-dialog').textContent).toContain(`${first.name} isn't a Git repository`);
+    fireEvent.click(screen.getByTestId('no-git-turn-on-auto'));
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith('auto', first.id);
+    expect(useUiStore.getState().autoNoGitAcknowledged).toEqual({ [first.id]: true });
+  });
+
+  it('a pick that needs no dialog sends the project of the same render', () => {
+    const git = { id: 'p-git', name: 'Repo', inGitRepo: true };
+    const onChange = vi.fn();
+    render(<EditModePicker value="review" onChange={onChange} project={git} />);
+    openMenu();
+    fireEvent.click(screen.getByTestId('edit-mode-auto'));
+    expect(onChange).toHaveBeenCalledWith('auto', git.id);
   });
 });

@@ -4,6 +4,7 @@
 import {
   type ApplyChangesBody,
   type ApplyChangesResponse,
+  CHAT_PROJECT_CHANGED,
   EDIT_MODE_CHANGED,
   type UndoBatchResponse,
 } from '@shared/api';
@@ -289,12 +290,16 @@ export class MockApiClient implements ApiClient {
       archived?: boolean;
       editMode?: EditMode;
       expectedEditMode?: EditMode;
+      expectedProjectId?: Id | null;
     },
   ) {
     // Same rules as `PATCH /chats/:id`. Everything is validated before anything is mutated.
     const c = this.chat(id);
-    if (patch.expectedEditMode !== undefined && patch.expectedEditMode !== c.editMode)
-      fail('conflict', 409, EDIT_MODE_CHANGED);
+    // A move that names no mode expects Review; any other PATCH that names none is unchecked.
+    const expected = patch.expectedEditMode ?? (patch.projectId !== undefined ? 'review' : undefined);
+    if (expected !== undefined && expected !== c.editMode) fail('conflict', 409, EDIT_MODE_CHANGED);
+    if (patch.expectedProjectId !== undefined && patch.expectedProjectId !== c.projectId)
+      fail('conflict', 409, CHAT_PROJECT_CHANGED);
     if (patch.archived !== undefined && this.running.has(id))
       fail('conflict', 409, 'Wait for the response to finish before archiving or unarchiving this chat.');
     // A move (alone or with `archived`) is refused while edits are pending; archiving alone is not.
@@ -357,9 +362,10 @@ export class MockApiClient implements ApiClient {
     // Backfill the totals before a retry truncates the messages, so the discarded turn keeps counting.
     this.usageOf(chatId, chat.messages);
     if (this.running.has(chatId)) fail('conflict', 409, 'A reply is already in progress.');
-    // Like the server: the turn runs in the mode the UI showed, or not at all (nothing stored, truncated or undone).
+    // Like the server: the turn runs in the mode the UI showed (omitted means Review), or not at all (nothing stored,
+    // truncated or undone).
     const mode: EditMode = chat.editMode;
-    if (expectedEditMode !== undefined && expectedEditMode !== mode) fail('conflict', 409, EDIT_MODE_CHANGED);
+    if ((expectedEditMode ?? 'review') !== mode) fail('conflict', 409, EDIT_MODE_CHANGED);
     if (!this.apiKey) fail('no_api_key', 400);
     const info = SAMPLE_MODELS.find((m) => m.id === model);
     // F3: the body's effort wins; omitted = the chat's stored effort.

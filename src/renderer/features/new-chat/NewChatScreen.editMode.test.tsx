@@ -1,3 +1,4 @@
+import { EDIT_MODE_CHANGED } from '@shared/api';
 import { DEFAULT_MODEL } from '@shared/constants';
 import type { Chat } from '@shared/types';
 import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
@@ -5,6 +6,7 @@ import { Route, Routes, useLocation, useNavigate } from 'react-router';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MockApiClient } from '../../lib/mock-api-client';
 import { paths } from '../../lib/routes';
+import { useRunsStore } from '../../stores/runs';
 import { useUiStore } from '../../stores/ui';
 import { installDomStubs, renderWithProviders, resetStores } from '../composer/test-utils';
 import { Conversation } from '../conversation';
@@ -19,6 +21,7 @@ beforeEach(() => {
   window.localStorage.clear();
   useUiStore.setState({ autoNoGitAcknowledged: {} });
   usePanelStore.setState({ chats: {} });
+  useRunsStore.setState({ modeRefusals: {} });
 });
 afterEach(cleanup);
 
@@ -237,6 +240,58 @@ describe('New chat: the edit mode chip', () => {
     expect(create).toHaveBeenCalledWith({ projectId: gitA.id, model: NO_TOOLS_MODEL, editMode: 'review' });
   });
 });
+
+describe('New chat: the mode on screen is the mode sent', () => {
+  it('the first send expects the mode the chip showed, even when createChat answers otherwise, and is refused', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const { gitA } = await projectsOf(api);
+    const realCreate = api.createChat.bind(api);
+    // A server that ignored the pick: the chat is created in Review.
+    vi.spyOn(api, 'createChat').mockImplementation((input) => realCreate({ ...input, editMode: 'review' }));
+    const send = vi.spyOn(api, 'sendMessage');
+    renderWithProviders(<App />, { api, route: paths.newChat(gitA.id) });
+    await ready(gitA.name);
+    await pick('auto');
+    sendText('make the edits');
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    expect(send.mock.calls[0]?.[1]).toMatchObject({ text: 'make the edits', expectedEditMode: 'auto' });
+    const chatId = screen.getByTestId('location').textContent?.split('/').at(-1) ?? '';
+    await waitFor(() => expect(useRunsStore.getState().modeRefusals[chatId]?.message).toBe(EDIT_MODE_CHANGED));
+    expect((await api.getChat(chatId)).messages).toEqual([]);
+  });
+
+  it('the chip shows while the model list is still loading, and createChat gets the mode it shows', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const { gitA } = await projectsOf(api);
+    const models = gate();
+    const realModels = api.listModels.bind(api);
+    vi.spyOn(api, 'listModels').mockImplementation(async () => {
+      await models.promise;
+      return realModels();
+    });
+    const create = vi.spyOn(api, 'createChat');
+    const send = vi.spyOn(api, 'sendMessage');
+    renderWithProviders(<App />, { api, route: paths.newChat(gitA.id) });
+    await waitFor(() => expect(projectChip().textContent).toBe(gitA.name));
+    await screen.findByTestId('edit-mode-chip');
+    await pick('auto');
+    expect(modeChip().getAttribute('data-mode')).toBe('auto');
+    sendText('make the edits');
+    await waitFor(() => expect(create).toHaveBeenCalled());
+    expect(create.mock.calls[0]?.[0]).toMatchObject({ projectId: gitA.id, editMode: 'auto' });
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    expect(send.mock.calls[0]?.[1]).toMatchObject({ expectedEditMode: 'auto' });
+    models.open();
+  });
+});
+
+function gate() {
+  let open: () => void = () => {};
+  const promise = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { promise, open };
+}
 
 describe('New chat: the no-Git warning', () => {
   it('"Turn on Auto" sets Auto for the new chat and records the project; the next open does not ask again', async () => {

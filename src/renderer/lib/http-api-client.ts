@@ -129,6 +129,7 @@ export class HttpApiClient implements ApiClient {
       archived?: boolean;
       editMode?: EditMode;
       expectedEditMode?: EditMode;
+      expectedProjectId?: Id | null;
     },
   ) {
     return this.json<ChatSummary>('PATCH', `/chats/${enc(id)}`, patch);

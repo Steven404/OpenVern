@@ -1,4 +1,4 @@
-import { EDIT_MODE_CHANGED } from '@shared/api';
+import { CHAT_PROJECT_CHANGED, EDIT_MODE_CHANGED } from '@shared/api';
 import { LIMITS, NEW_CHAT_TITLE } from '@shared/constants';
 import type { AgentEvent } from '@shared/events';
 import { describe, expect, it } from 'vitest';
@@ -591,8 +591,11 @@ describe('MockApiClient Auto mode', () => {
     return { api, git, noGit, autoChat };
   }
 
-  const editTurn = (api: MockApiClient, chatId: string, text = 'do it [mock:edit]') =>
-    collect(api.sendMessage(chatId, { text, attachmentIds: [], model: MODEL }, sig()));
+  /** A turn sent with the chat's mode, as the UI would show it. */
+  const editTurn = async (api: MockApiClient, chatId: string, text = 'do it [mock:edit]') => {
+    const expectedEditMode = (await api.getChat(chatId)).editMode;
+    return collect(api.sendMessage(chatId, { text, attachmentIds: [], model: MODEL, expectedEditMode }, sig()));
+  };
 
   async function autoChatIn(api: MockApiClient, projectId: string) {
     const chat = await api.createChat({ projectId, model: MODEL, editMode: 'auto' });
@@ -612,7 +615,7 @@ describe('MockApiClient Auto mode', () => {
     expect((await api.getChat(plain.id)).editMode).toBe('auto');
 
     const iter = api
-      .sendMessage(plain.id, { text: 'hi', attachmentIds: [], model: MODEL }, sig())
+      .sendMessage(plain.id, { text: 'hi', attachmentIds: [], model: MODEL, expectedEditMode: 'auto' }, sig())
       [Symbol.asyncIterator]();
     await iter.next();
     await expect(api.updateChat(plain.id, { editMode: 'review' })).resolves.toMatchObject({ editMode: 'review' });
@@ -687,7 +690,7 @@ describe('MockApiClient Auto mode', () => {
     const { api, autoChat } = await seeded();
     const batch = (await api.getChatChanges(autoChat.id)).applied[0];
     const iter = api
-      .sendMessage(autoChat.id, { text: 'continue', attachmentIds: [], model: MODEL }, sig())
+      .sendMessage(autoChat.id, { text: 'continue', attachmentIds: [], model: MODEL, expectedEditMode: 'auto' }, sig())
       [Symbol.asyncIterator]();
     await iter.next();
     const err = await api.undoChatBatch(autoChat.id, batch?.id ?? '').catch((e: unknown) => e);
@@ -700,7 +703,7 @@ describe('MockApiClient Auto mode', () => {
   it('an undo is refused once the chat moved to another project', async () => {
     const { api, git, autoChat } = await seeded();
     const other = (await api.listProjects()).find((p) => p.inGitRepo && p.id !== autoChat.projectId) ?? git;
-    await api.updateChat(autoChat.id, { projectId: other.id });
+    await api.updateChat(autoChat.id, { projectId: other.id, expectedEditMode: 'auto' });
     const batch = (await api.getChatChanges(autoChat.id)).applied[0];
     expect(batch?.undoable).toBe(false);
     await expect(api.undoChatBatch(autoChat.id, batch?.id ?? '')).rejects.toMatchObject({ status: 409 });
@@ -768,13 +771,47 @@ describe('MockApiClient Auto mode', () => {
     await refused(api.updateChat(chat.id, { editMode: 'review', expectedEditMode: 'review' }));
     expect(await api.getChat(chat.id)).toEqual(before);
     expect(await api.getChatChanges(chat.id)).toEqual(changes);
-    // A match, or no field at all, goes through.
+    // A match goes through; a mode-only PATCH that names no mode is unchecked.
     const ran = await collect(api.retry(chat.id, { model: MODEL, expectedEditMode: 'auto' }, sig()));
     expect(ran.at(-1)).toEqual({ type: 'done' });
     await expect(api.updateChat(chat.id, { projectId: noGit.id, expectedEditMode: 'auto' })).resolves.toMatchObject({
       projectId: noGit.id,
     });
     await expect(api.updateChat(chat.id, { editMode: 'review' })).resolves.toMatchObject({ editMode: 'review' });
+  });
+
+  it('a send, retry or move that names no mode expects Review, like the server', async () => {
+    const { api, git, noGit } = await seeded();
+    const chat = await autoChatIn(api, git.id);
+    await editTurn(api, chat.id);
+    const before = await api.getChat(chat.id);
+    const changes = await api.getChatChanges(chat.id);
+    for (const p of [
+      collect(api.sendMessage(chat.id, { text: 'x [mock:edit]', attachmentIds: [], model: MODEL }, sig())),
+      collect(api.retry(chat.id, { model: MODEL }, sig())),
+      api.updateChat(chat.id, { projectId: noGit.id }),
+    ]) {
+      expect(isEditModeChanged(await p.catch((e: unknown) => e))).toBe(true);
+    }
+    expect(await api.getChat(chat.id)).toEqual(before);
+    expect(await api.getChatChanges(chat.id)).toEqual(changes);
+    // In a Review chat the same calls go through.
+    const review = await api.createChat({ projectId: git.id, model: MODEL });
+    await collect(api.sendMessage(review.id, { text: 'hi', attachmentIds: [], model: MODEL }, sig()));
+    await collect(api.retry(review.id, { model: MODEL }, sig()));
+    await expect(api.updateChat(review.id, { projectId: noGit.id })).resolves.toMatchObject({ projectId: noGit.id });
+  });
+
+  it('turning Auto on with an expectedProjectId the chat has left is refused, like the server', async () => {
+    const { api, git, noGit } = await seeded();
+    const chat = await api.createChat({ projectId: git.id, model: MODEL });
+    await api.updateChat(chat.id, { projectId: noGit.id, expectedEditMode: 'review' });
+    const err = await api.updateChat(chat.id, { editMode: 'auto', expectedProjectId: git.id }).catch((e: unknown) => e);
+    expect(err).toMatchObject({ status: 409, info: { code: 'conflict', message: CHAT_PROJECT_CHANGED } });
+    expect(await api.getChat(chat.id)).toMatchObject({ projectId: noGit.id, editMode: 'review' });
+    await expect(api.updateChat(chat.id, { editMode: 'auto', expectedProjectId: noGit.id })).resolves.toMatchObject({
+      editMode: 'auto',
+    });
   });
 
   it('the mode a turn starts with holds for the whole turn, a change applies from the next one', async () => {
@@ -810,7 +847,7 @@ describe('MockApiClient Auto mode', () => {
     await editTurn(api, chat.id);
     const first = (await api.getChatChanges(chat.id)).applied[0];
     const seqBefore = (await api.getChatChanges(chat.id)).diskSeq;
-    const events = await collect(api.retry(chat.id, { model: MODEL }, sig()));
+    const events = await collect(api.retry(chat.id, { model: MODEL, expectedEditMode: 'auto' }, sig()));
     expect(events[0]).toMatchObject({ type: 'auto_batch_updated', batchId: first?.id });
     const changes = await api.getChatChanges(chat.id);
     const undone = changes.applied.find((b) => b.id === first?.id);
@@ -819,7 +856,7 @@ describe('MockApiClient Auto mode', () => {
     expect(undone?.undo?.restored).toHaveLength(3);
     expect(changes.diskSeq).toBeGreaterThan(seqBefore);
     // The next retry has nothing left to undo.
-    const again = await collect(api.retry(chat.id, { model: MODEL }, sig()));
+    const again = await collect(api.retry(chat.id, { model: MODEL, expectedEditMode: 'auto' }, sig()));
     expect(again.some((e) => e.type === 'auto_batch_updated')).toBe(false);
   });
 
