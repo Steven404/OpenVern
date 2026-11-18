@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   createChatBody,
+  EDIT_MODE_CHANGED,
   ROUTES,
   retryBody,
   sendMessageBody,
@@ -23,6 +24,24 @@ describe('api schemas', () => {
       expect(createChatBody.safeParse({ projectId: null, model: 'm', editMode }).success).toBe(false);
       expect(updateChatBody.safeParse({ editMode }).success).toBe(false);
     }
+  });
+
+  it('takes an optional expectedEditMode on send, retry and update', () => {
+    const send = { text: 'hi', attachmentIds: [], model: 'm' };
+    for (const expectedEditMode of ['review', 'auto']) {
+      expect(sendMessageBody.parse({ ...send, expectedEditMode }).expectedEditMode).toBe(expectedEditMode);
+      expect(retryBody.parse({ model: 'm', expectedEditMode }).expectedEditMode).toBe(expectedEditMode);
+      expect(updateChatBody.parse({ projectId: null, expectedEditMode }).expectedEditMode).toBe(expectedEditMode);
+    }
+    expect('expectedEditMode' in sendMessageBody.parse(send)).toBe(false);
+    expect('expectedEditMode' in retryBody.parse({ model: 'm' })).toBe(false);
+    expect('expectedEditMode' in updateChatBody.parse({ projectId: null })).toBe(false);
+    for (const expectedEditMode of ['bogus', '', null, 1]) {
+      expect(sendMessageBody.safeParse({ ...send, expectedEditMode }).success).toBe(false);
+      expect(retryBody.safeParse({ model: 'm', expectedEditMode }).success).toBe(false);
+      expect(updateChatBody.safeParse({ expectedEditMode }).success).toBe(false);
+    }
+    expect(EDIT_MODE_CHANGED).toBe("This chat's edit mode changed. Check Review / Auto and send again.");
   });
 
   it('exposes the undo route and accepts an empty body', () => {

@@ -14,6 +14,7 @@ import type {
   Chat,
   ChatSummary,
   ChatUsage,
+  EditMode,
   Id,
   Message,
   ReasoningEffort,
@@ -21,7 +22,7 @@ import type {
 } from '@shared/types';
 import type { QueryClient } from '@tanstack/react-query';
 import { create } from 'zustand';
-import { type ApiClient, ApiError } from '../lib/api-client';
+import { type ApiClient, ApiError, isEditModeChanged } from '../lib/api-client';
 import { queryKeys } from '../lib/query-keys';
 
 export const PENDING_PREFIX = 'pending-';
@@ -222,8 +223,22 @@ export interface SendInput {
   effort?: ReasoningEffort | null;
 }
 
+/**
+ * A send or retry the server refused because the chat's edit mode was no longer the one the UI showed. Nothing was
+ * stored or started. The reply composer shows `message` in its error line and puts `unsent` (what was typed, when the
+ * message never reached the server) back in the draft. Nothing is resent: the user checks Review / Auto first.
+ */
+export interface ModeRefusal {
+  message: string;
+  unsent: UnsentMessage | null;
+}
+
 export interface RunsState {
   runs: Record<Id, RunState>;
+  /** Per chat, until the reply composer takes it (`takeModeRefusal`). */
+  modeRefusals: Record<Id, ModeRefusal>;
+  /** Removes and returns the chat's refusal, so it is shown once. */
+  takeModeRefusal(chatId: Id): ModeRefusal | undefined;
   /** Model last chosen in each chat's composer (survives navigation; `retry` uses it). */
   chatModels: Record<Id, string>;
   setChatModel(chatId: Id, model: string): void;
@@ -254,14 +269,42 @@ export function toErrorInfo(err: unknown): ApiErrorInfo {
 
 /** Patches cached summaries immediately (sidebar title, header, ordering). */
 export function patchChatSummary(queryClient: QueryClient, summary: ChatSummary) {
+  writeChatSummary(queryClient, summary, false);
+}
+
+/**
+ * INVARIANT: what a run reports never changes the cached edit mode. A run's `chat_updated` summaries and its settle
+ * read were taken by the server at some point during the turn, and can land after the answer to a mode PATCH made
+ * meanwhile: writing their `editMode` would put the old mode back on the chip while the server keeps the new one, and
+ * the next turn would run in a mode the user wasn't shown. The cached mode comes only from the chat queries' own
+ * fetches, the PATCH answers, and the refetch after a refused send; this keeps it and takes everything else.
+ */
+export function patchRunSummary(queryClient: QueryClient, summary: ChatSummary) {
+  writeChatSummary(queryClient, summary, true);
+}
+
+function writeChatSummary(queryClient: QueryClient, summary: ChatSummary, keepEditMode: boolean) {
+  const merge = <T extends ChatSummary>(old: T): T => ({
+    ...old,
+    ...summary,
+    ...(keepEditMode ? { editMode: old.editMode } : {}),
+  });
   queryClient.setQueryData<ChatSummary[]>(queryKeys.chats, (old) => {
     if (!old) return old;
     const next = old.some((c) => c.id === summary.id)
-      ? old.map((c) => (c.id === summary.id ? { ...c, ...summary } : c))
+      ? old.map((c) => (c.id === summary.id ? merge(c) : c))
       : [summary, ...old];
     return [...next].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   });
-  queryClient.setQueryData<Chat>(queryKeys.chat(summary.id), (old) => (old ? { ...old, ...summary } : old));
+  queryClient.setQueryData<Chat>(queryKeys.chat(summary.id), (old) => (old ? merge(old) : old));
+}
+
+/**
+ * The edit mode the reply composer shows for the chat (its chip reads the chat query), sent as `expectedEditMode`:
+ * the server refuses the turn when its mode differs. `undefined` when the chat isn't cached (nothing is checked).
+ */
+export function cachedEditMode(queryClient: QueryClient, chatId: Id): EditMode | undefined {
+  return queryClient.getQueryData<Chat>(queryKeys.chat(chatId))?.editMode;
 }
 
 /**
@@ -298,7 +341,10 @@ export const useRunsStore = create<RunsState>()((set, get) => {
       if (waitForServer) await sleep(i === 0 ? 250 : 400);
       try {
         const chat = await deps.api.getChat(chatId);
-        deps.queryClient.setQueryData(queryKeys.chat(chatId), chat);
+        // A run's read: it keeps the cached edit mode (see `patchRunSummary`).
+        deps.queryClient.setQueryData<Chat>(queryKeys.chat(chatId), (old) =>
+          old ? { ...chat, editMode: old.editMode } : chat,
+        );
         refreshed = true;
         const run = get().runs[chatId];
         if (!run || run.token !== token || covered(chat, run)) break;
@@ -335,18 +381,57 @@ export const useRunsStore = create<RunsState>()((set, get) => {
     });
   };
 
+  /**
+   * The server refused the turn because the chat's edit mode changed (a 409 before anything was stored). The run is
+   * dropped as if it never started, the run it replaced comes back, what was typed goes to the composer with the
+   * reason, and the chat is fetched again so Review / Auto shows the server's mode. Nothing is resent.
+   */
+  const refuse = (deps: RunDeps, chatId: Id, token: number, previous: RunState | undefined, message: string) => {
+    set((s) => {
+      const run = s.runs[chatId];
+      if (!run || run.token !== token) return s;
+      const { [chatId]: _refused, ...rest } = s.runs;
+      return {
+        runs: previous ? { ...rest, [chatId]: previous } : rest,
+        modeRefusals: { ...s.modeRefusals, [chatId]: { message, unsent: run.unsent } },
+      };
+    });
+    void refetchChat(deps, chatId);
+  };
+
+  /**
+   * After a refusal: the chat query fetched again, so Review / Auto shows the server's mode (and the messages a retry
+   * hid come back). A read already in flight may have started before the server took the new mode, so it is
+   * cancelled first and this one is started after the refusal.
+   */
+  const refetchChat = async (deps: RunDeps, chatId: Id) => {
+    try {
+      await deps.queryClient.cancelQueries({ queryKey: queryKeys.chat(chatId) });
+      await deps.queryClient.fetchQuery({
+        queryKey: queryKeys.chat(chatId),
+        queryFn: () => deps.api.getChat(chatId),
+        staleTime: 0,
+      });
+    } catch {
+      // The chat query refetches on its own; the server still refuses a turn in a mode it doesn't have.
+      void deps.queryClient.invalidateQueries({ queryKey: queryKeys.chat(chatId) });
+    }
+    void deps.queryClient.invalidateQueries({ queryKey: queryKeys.chats });
+  };
+
   const consume = async (
     deps: RunDeps,
     chatId: Id,
     token: number,
     controller: AbortController,
     open: () => AsyncIterable<AgentEvent>,
+    previous: RunState | undefined,
   ) => {
     try {
       for await (const ev of open()) {
         apply(chatId, token, ev);
         if (ev.type === 'terminal_read_request') void relayTerminalRead(deps, chatId, ev);
-        if (ev.type === 'chat_updated') patchChatSummary(deps.queryClient, ev.chat);
+        if (ev.type === 'chat_updated') patchRunSummary(deps.queryClient, ev.chat);
         if (ev.type === 'changes_updated' || ev.type === 'auto_batch_updated') {
           void deps.queryClient.invalidateQueries({ queryKey: queryKeys.chatChanges(chatId) });
         }
@@ -360,7 +445,11 @@ export const useRunsStore = create<RunsState>()((set, get) => {
       }
     } catch (err) {
       if (controller.signal.aborted) apply(chatId, token, { type: 'aborted' });
-      else apply(chatId, token, { type: 'error', error: toErrorInfo(err) });
+      else if (isEditModeChanged(err)) {
+        if (controllers.get(chatId) === controller) controllers.delete(chatId);
+        refuse(deps, chatId, token, previous, err.info.message);
+        return;
+      } else apply(chatId, token, { type: 'error', error: toErrorInfo(err) });
     }
     if (controller.signal.aborted && !get().runs[chatId]?.stopped) apply(chatId, token, { type: 'aborted' });
     if (controllers.get(chatId) === controller) controllers.delete(chatId);
@@ -382,6 +471,17 @@ export const useRunsStore = create<RunsState>()((set, get) => {
 
   return {
     runs: {},
+    modeRefusals: {},
+    takeModeRefusal(chatId) {
+      const refusal = get().modeRefusals[chatId];
+      if (refusal) {
+        set((s) => {
+          const { [chatId]: _taken, ...rest } = s.modeRefusals;
+          return { modeRefusals: rest };
+        });
+      }
+      return refusal;
+    },
     chatModels: {},
     setChatModel: (chatId, model) => set((s) => ({ chatModels: { ...s.chatModels, [chatId]: model } })),
     chatEfforts: {},
@@ -397,21 +497,30 @@ export const useRunsStore = create<RunsState>()((set, get) => {
         attachments: input.attachments,
       };
       const usageBefore = cachedUsage(deps.queryClient, chatId);
+      const expectedEditMode = cachedEditMode(deps.queryClient, chatId);
+      const previous = get().runs[chatId];
       const { token, controller } = start(chatId, (t) => createRun(t, pending, input, usageBefore));
       get().setChatModel(chatId, input.model);
       if (input.effort !== undefined) get().setChatEffort(chatId, input.effort);
-      await consume(deps, chatId, token, controller, () =>
-        deps.api.sendMessage(
-          chatId,
-          {
-            text: input.text,
-            attachmentIds: input.attachments.map((a) => a.id),
-            model: input.model,
-            ...(input.effort !== undefined ? { effort: input.effort } : {}),
-            ...(deps.terminal ? { terminal: true } : {}),
-          },
-          controller.signal,
-        ),
+      await consume(
+        deps,
+        chatId,
+        token,
+        controller,
+        () =>
+          deps.api.sendMessage(
+            chatId,
+            {
+              text: input.text,
+              attachmentIds: input.attachments.map((a) => a.id),
+              model: input.model,
+              ...(input.effort !== undefined ? { effort: input.effort } : {}),
+              ...(deps.terminal ? { terminal: true } : {}),
+              ...(expectedEditMode !== undefined ? { expectedEditMode } : {}),
+            },
+            controller.signal,
+          ),
+        previous,
       );
     },
 
@@ -430,6 +539,9 @@ export const useRunsStore = create<RunsState>()((set, get) => {
         });
       }
       const usageBefore = cachedUsage(deps.queryClient, chatId);
+      // The mode the chip shows now: the retry runs in it or not at all.
+      const expectedEditMode = cachedEditMode(deps.queryClient, chatId);
+      const previous = get().runs[chatId];
       // The server drops the trailing assistant/tool messages; mirror that in the cache straight away.
       deps.queryClient.setQueryData<Chat>(queryKeys.chat(chatId), (old) => {
         if (!old) return old;
@@ -439,12 +551,23 @@ export const useRunsStore = create<RunsState>()((set, get) => {
       const { token, controller } = start(chatId, (t) => createRun(t, undefined, undefined, usageBefore));
       get().setChatModel(chatId, model);
       if (effort !== undefined) get().setChatEffort(chatId, effort);
-      await consume(deps, chatId, token, controller, () =>
-        deps.api.retry(
-          chatId,
-          { model, ...(effort !== undefined ? { effort } : {}), ...(deps.terminal ? { terminal: true } : {}) },
-          controller.signal,
-        ),
+      await consume(
+        deps,
+        chatId,
+        token,
+        controller,
+        () =>
+          deps.api.retry(
+            chatId,
+            {
+              model,
+              ...(effort !== undefined ? { effort } : {}),
+              ...(deps.terminal ? { terminal: true } : {}),
+              ...(expectedEditMode !== undefined ? { expectedEditMode } : {}),
+            },
+            controller.signal,
+          ),
+        previous,
       );
     },
 

@@ -1,6 +1,12 @@
 // The renderer's only way to talk to the backend (plan §4.9).
 
-import type { ApplyChangesBody, ApplyChangesResponse, HealthResponse, UndoBatchResponse } from '@shared/api';
+import {
+  type ApplyChangesBody,
+  type ApplyChangesResponse,
+  EDIT_MODE_CHANGED,
+  type HealthResponse,
+  type UndoBatchResponse,
+} from '@shared/api';
 import type { ApiErrorInfo } from '@shared/errors';
 import type { AgentEvent } from '@shared/events';
 import type { TerminalBridge, TerminalReadAnswer } from '@shared/terminal';
@@ -37,21 +43,43 @@ export interface ApiClient {
   /** `editMode` omitted = 'review'. */
   createChat(input: { projectId: Id | null; model: string; editMode?: EditMode }): Promise<Chat>;
   getChat(id: Id): Promise<Chat>;
-  /** `editMode` is accepted while a run is active; the agent picks it up from the next turn. */
+  /**
+   * `editMode` is accepted while a run is active; the agent picks it up from the next turn. `expectedEditMode` is the
+   * mode the UI showed: when the chat's stored mode differs, nothing changes and this rejects with a 409 `ApiError`
+   * whose message is `EDIT_MODE_CHANGED` (see `isEditModeChanged`). A move sends it.
+   */
   updateChat(
     id: Id,
-    patch: { title?: string; projectId?: Id | null; archived?: boolean; editMode?: EditMode },
+    patch: {
+      title?: string;
+      projectId?: Id | null;
+      archived?: boolean;
+      editMode?: EditMode;
+      expectedEditMode?: EditMode;
+    },
   ): Promise<ChatSummary>;
   deleteChat(id: Id): Promise<void>;
-  /** `terminal`: this client answers terminal reads (set when the bridge has a terminal), so `read_terminal` is offered. */
+  /**
+   * `terminal`: this client answers terminal reads (set when the bridge has a terminal), so `read_terminal` is offered.
+   * `expectedEditMode`: the mode the UI showed. The turn runs in exactly that mode, or not at all: when the chat's
+   * stored mode differs, nothing is stored or started and iterating rejects with the 409 of `isEditModeChanged`.
+   */
   sendMessage(
     chatId: Id,
-    input: { text: string; attachmentIds: Id[]; model: string; effort?: ReasoningEffort | null; terminal?: boolean },
+    input: {
+      text: string;
+      attachmentIds: Id[];
+      model: string;
+      effort?: ReasoningEffort | null;
+      terminal?: boolean;
+      expectedEditMode?: EditMode;
+    },
     signal: AbortSignal,
   ): AsyncIterable<AgentEvent>;
+  /** `expectedEditMode` as in `sendMessage`; a refused retry truncates and undoes nothing. */
   retry(
     chatId: Id,
-    input: { model: string; effort?: ReasoningEffort | null; terminal?: boolean },
+    input: { model: string; effort?: ReasoningEffort | null; terminal?: boolean; expectedEditMode?: EditMode },
     signal: AbortSignal,
   ): AsyncIterable<AgentEvent>;
   uploadAttachment(file: File): Promise<AttachmentRef>;
@@ -88,6 +116,11 @@ export class ApiError extends Error {
     super(info.message);
     this.name = 'ApiError';
   }
+}
+
+/** The server refused a send, retry or move because the chat's edit mode is no longer the one the UI showed. */
+export function isEditModeChanged(err: unknown): err is ApiError {
+  return err instanceof ApiError && err.info.code === 'conflict' && err.info.message === EDIT_MODE_CHANGED;
 }
 
 /** Platform bridge: set by preload in Electron, `undefined` in the browser. */

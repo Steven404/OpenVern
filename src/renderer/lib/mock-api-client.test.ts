@@ -1,7 +1,8 @@
+import { EDIT_MODE_CHANGED } from '@shared/api';
 import { LIMITS, NEW_CHAT_TITLE } from '@shared/constants';
 import type { AgentEvent } from '@shared/events';
 import { describe, expect, it } from 'vitest';
-import { ApiError } from './api-client';
+import { ApiError, isEditModeChanged } from './api-client';
 import { MockApiClient } from './mock-api-client';
 
 async function collect(it: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
@@ -740,6 +741,40 @@ describe('MockApiClient Auto mode', () => {
     expect(changes.pending?.files).toHaveLength(3);
     expect(changes.applied).toEqual([]);
     expect(changes.diskSeq).toBe(0);
+  });
+
+  it('refuses a send, retry or PATCH whose expectedEditMode differs, like the server, and changes nothing', async () => {
+    const { api, git, noGit } = await seeded();
+    const chat = await autoChatIn(api, git.id);
+    await editTurn(api, chat.id);
+    const before = await api.getChat(chat.id);
+    const changes = await api.getChatChanges(chat.id);
+    const refused = async (p: Promise<unknown>) => {
+      const err = await p.catch((e: unknown) => e);
+      expect(isEditModeChanged(err)).toBe(true);
+      expect(err).toMatchObject({ status: 409, info: { code: 'conflict', message: EDIT_MODE_CHANGED } });
+    };
+    await refused(
+      collect(
+        api.sendMessage(
+          chat.id,
+          { text: 'x [mock:edit]', attachmentIds: [], model: MODEL, expectedEditMode: 'review' },
+          sig(),
+        ),
+      ),
+    );
+    await refused(collect(api.retry(chat.id, { model: MODEL, expectedEditMode: 'review' }, sig())));
+    await refused(api.updateChat(chat.id, { projectId: noGit.id, expectedEditMode: 'review' }));
+    await refused(api.updateChat(chat.id, { editMode: 'review', expectedEditMode: 'review' }));
+    expect(await api.getChat(chat.id)).toEqual(before);
+    expect(await api.getChatChanges(chat.id)).toEqual(changes);
+    // A match, or no field at all, goes through.
+    const ran = await collect(api.retry(chat.id, { model: MODEL, expectedEditMode: 'auto' }, sig()));
+    expect(ran.at(-1)).toEqual({ type: 'done' });
+    await expect(api.updateChat(chat.id, { projectId: noGit.id, expectedEditMode: 'auto' })).resolves.toMatchObject({
+      projectId: noGit.id,
+    });
+    await expect(api.updateChat(chat.id, { editMode: 'review' })).resolves.toMatchObject({ editMode: 'review' });
   });
 
   it('the mode a turn starts with holds for the whole turn, a change applies from the next one', async () => {

@@ -51,6 +51,16 @@ const modelId = z.string().trim().min(1);
 /** F3: `null` is Default (no `reasoning` field); omitted means "keep what the chat already has". */
 const reasoningEffort = z.enum(REASONING_EFFORTS);
 const editMode = z.enum(EDIT_MODES);
+/**
+ * The edit mode the client showed when the user acted. Optional (older clients send none, and nothing is checked).
+ * When present and different from the chat's stored mode, the request is refused with a 409 `conflict` and
+ * `EDIT_MODE_CHANGED` and changes nothing, so a turn never runs, and a chat never moves, in a mode the user wasn't
+ * shown.
+ */
+const expectedEditMode = editMode.optional();
+
+/** The 409 `conflict` message of a request whose `expectedEditMode` differs from the chat's stored mode. */
+export const EDIT_MODE_CHANGED = "This chat's edit mode changed. Check Review / Auto and send again.";
 
 /** `PUT /settings/openrouter-key` */
 export const setOpenRouterKeyBody = z.object({ apiKey: z.string().trim().min(1) });
@@ -81,6 +91,8 @@ export const updateChatBody = z.object({
   archived: z.boolean().optional(),
   /** Allowed while a run is active: the agent reads the mode once at turn start, so it applies from the next turn. */
   editMode: editMode.optional(),
+  /** Checked against the stored mode before anything changes (see `expectedEditMode`). A move should send it. */
+  expectedEditMode,
 });
 /** `POST /chats/:id/messages` → `text/event-stream` of `AgentEvent` */
 export const sendMessageBody = z
@@ -92,6 +104,8 @@ export const sendMessageBody = z
     effort: reasoningEffort.nullable().optional(),
     /** The client can answer terminal reads (Electron with the terminal bridge), so offer `read_terminal`. */
     terminal: z.boolean().optional(),
+    /** Checked under the turn's start claim; the turn then runs in exactly that mode (see `expectedEditMode`). */
+    expectedEditMode,
   })
   .refine((b) => b.text.trim().length > 0 || b.attachmentIds.length > 0, {
     message: 'A message needs text or at least one attachment.',
@@ -102,6 +116,8 @@ export const retryBody = z.object({
   effort: reasoningEffort.nullable().optional(),
   /** As in `sendMessageBody`. */
   terminal: z.boolean().optional(),
+  /** As in `sendMessageBody`. */
+  expectedEditMode,
 });
 /** `POST /projects/:id/files/attach` → `AttachmentRef` */
 export const attachProjectFileBody = z.object({ path: z.string().min(1) });

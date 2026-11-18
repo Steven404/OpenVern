@@ -1,11 +1,13 @@
 vi.mock('@renderer/features/terminal/registry', () => ({ terminalRegistry: { read: vi.fn() } }));
 
 import { terminalRegistry } from '@renderer/features/terminal/registry';
+import { EDIT_MODE_CHANGED } from '@shared/api';
 import { errorInfo } from '@shared/errors';
 import type { AgentEvent } from '@shared/events';
 import type { TerminalReadAnswer } from '@shared/terminal';
 import type {
   AssistantMessage,
+  Chat,
   ChatSummary,
   ModelInfo,
   ReasoningEffort,
@@ -18,7 +20,16 @@ import { FakeTerminalBridge } from '../features/terminal/test-fakes';
 import { ApiError } from '../lib/api-client';
 import { MockApiClient } from '../lib/mock-api-client';
 import { queryKeys } from '../lib/query-keys';
-import { createRun, PENDING_PREFIX, type RunEvent, type RunState, reduceRun, toErrorInfo, useRunsStore } from './runs';
+import {
+  createRun,
+  PENDING_PREFIX,
+  patchChatSummary,
+  type RunEvent,
+  type RunState,
+  reduceRun,
+  toErrorInfo,
+  useRunsStore,
+} from './runs';
 
 const user: UserMessage = { id: 'u1', role: 'user', createdAt: '', text: 'hi', attachments: [] };
 const pending: UserMessage = { ...user, id: `${PENDING_PREFIX}1` };
@@ -404,11 +415,11 @@ describe('useRunsStore', () => {
     const retrySpy = vi.spyOn(api, 'retry');
     await useRunsStore.getState().retry(deps, chat.id, chat.model, 'max');
     expect(useRunsStore.getState().chatEfforts[chat.id]).toBe('max');
-    expect(retrySpy.mock.calls[0]?.[1]).toEqual({ model: chat.model, effort: 'max' });
+    expect(retrySpy.mock.calls[0]?.[1]).toEqual({ model: chat.model, effort: 'max', expectedEditMode: 'review' });
 
     await useRunsStore.getState().retry(deps, chat.id, chat.model);
     expect(useRunsStore.getState().chatEfforts[chat.id]).toBe('max');
-    expect(retrySpy.mock.calls[1]?.[1]).toEqual({ model: chat.model });
+    expect(retrySpy.mock.calls[1]?.[1]).toEqual({ model: chat.model, expectedEditMode: 'review' });
   });
 
   it('retry of an unsent message carries the effort it is given', async () => {
@@ -468,11 +479,11 @@ describe('useRunsStore', () => {
       queryClient.setQueryData(queryKeys.models, [withLevels(chat.model, ['low', 'high'])]);
       const retrySpy = vi.spyOn(api, 'retry');
       await useRunsStore.getState().retry(deps, chat.id, chat.model, 'max');
-      expect(retrySpy.mock.calls[0]?.[1]).toEqual({ model: chat.model, effort: 'max' });
+      expect(retrySpy.mock.calls[0]?.[1]).toEqual({ model: chat.model, effort: 'max', expectedEditMode: 'review' });
       expect(useRunsStore.getState().chatEfforts[chat.id]).toBe('max');
 
       await useRunsStore.getState().retry(deps, chat.id, chat.model, 'low');
-      expect(retrySpy.mock.calls[1]?.[1]).toEqual({ model: chat.model, effort: 'low' });
+      expect(retrySpy.mock.calls[1]?.[1]).toEqual({ model: chat.model, effort: 'low', expectedEditMode: 'review' });
       expect(useRunsStore.getState().chatEfforts[chat.id]).toBe('low');
     });
 
@@ -667,5 +678,158 @@ describe('terminal relay (T3.6)', () => {
     const sendSpy = vi.spyOn(api, 'sendMessage').mockImplementation(() => streamOf([]));
     await useRunsStore.getState().retry({ api, queryClient, terminal: new FakeTerminalBridge() }, chat.id, chat.model);
     expect(sendSpy.mock.calls[0]?.[1]).toMatchObject({ text: 'hello', terminal: true });
+  });
+});
+
+describe('edit mode: what the UI showed, and what a run may not change', () => {
+  beforeEach(() => useRunsStore.setState({ runs: {}, chatModels: {}, chatEfforts: {}, modeRefusals: {} }));
+  afterEach(() => vi.restoreAllMocks());
+
+  /** The seed's newest chat (in a project), cached as the conversation and the sidebar cache it, in `mode`. */
+  async function setup(mode: 'review' | 'auto' = 'review') {
+    const api = new MockApiClient({ delayMs: 0 });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const listed = (await api.listChats())[0];
+    if (!listed) throw new Error('no seeded chat');
+    await api.updateChat(listed.id, { editMode: mode });
+    const chat = await api.getChat(listed.id);
+    queryClient.setQueryData(queryKeys.chat(chat.id), chat);
+    queryClient.setQueryData(queryKeys.chats, await api.listChats());
+    return { api, queryClient, chat, deps: { api, queryClient } };
+  }
+  const cachedChat = (queryClient: QueryClient, id: string) => queryClient.getQueryData<Chat>(queryKeys.chat(id));
+  const listedChat = (queryClient: QueryClient, id: string) =>
+    queryClient.getQueryData<ChatSummary[]>(queryKeys.chats)?.find((c) => c.id === id);
+  /** Holds a request open until `open()`. */
+  function gate() {
+    let open: () => void = () => {};
+    const promise = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    return { promise, open };
+  }
+
+  it.each(['review', 'auto'] as const)(
+    'send and retry pass the cached chat mode (%s) as expectedEditMode',
+    async (mode) => {
+      const { api, chat, deps } = await setup(mode);
+      const send = vi.spyOn(api, 'sendMessage');
+      const retry = vi.spyOn(api, 'retry');
+      await useRunsStore.getState().send(deps, chat.id, { text: 'hi', attachments: [], model: chat.model });
+      await useRunsStore.getState().retry(deps, chat.id, chat.model);
+      expect(send.mock.calls[0]?.[1]).toMatchObject({ expectedEditMode: mode });
+      expect(retry.mock.calls[0]?.[1]).toMatchObject({ expectedEditMode: mode });
+    },
+  );
+
+  it('sends no expectedEditMode when the chat is not cached', async () => {
+    const { api, chat, deps, queryClient } = await setup();
+    queryClient.removeQueries({ queryKey: queryKeys.chat(chat.id) });
+    const send = vi.spyOn(api, 'sendMessage');
+    await useRunsStore.getState().send(deps, chat.id, { text: 'hi', attachments: [], model: chat.model });
+    expect(send.mock.calls[0]?.[1]).not.toHaveProperty('expectedEditMode');
+  });
+
+  it('a refused send: no overlay, the typed message is handed back once, the chat is fetched again, nothing resent', async () => {
+    const { api, chat, deps, queryClient } = await setup('review');
+    await api.updateChat(chat.id, { editMode: 'auto' }); // the server moved on; the cache still shows Review
+    const earlier = { ...createRun(7), status: 'idle' as const, error: errorInfo('provider_error') };
+    useRunsStore.setState({ runs: { [chat.id]: earlier } });
+    const send = vi.spyOn(api, 'sendMessage');
+    const getChat = vi.spyOn(api, 'getChat');
+    const attachment = { id: 'att', name: 'a.txt', mime: 'text/plain', size: 1, kind: 'text' as const };
+    await useRunsStore
+      .getState()
+      .send(deps, chat.id, { text: 'make the edits', attachments: [attachment], model: chat.model, effort: 'low' });
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]?.[1]).toMatchObject({ expectedEditMode: 'review' });
+    // The run it replaced is back, untouched; no pending bubble, no error card for the refusal.
+    expect(useRunsStore.getState().runs[chat.id]).toEqual(earlier);
+    await vi.waitFor(() => expect(cachedChat(queryClient, chat.id)?.editMode).toBe('auto'));
+    expect(getChat).toHaveBeenCalled();
+    expect((await api.getChat(chat.id)).messages).toEqual(chat.messages);
+    const refusal = useRunsStore.getState().takeModeRefusal(chat.id);
+    expect(refusal).toEqual({
+      message: EDIT_MODE_CHANGED,
+      unsent: { text: 'make the edits', attachments: [attachment], model: chat.model, effort: 'low' },
+    });
+    expect(useRunsStore.getState().takeModeRefusal(chat.id)).toBeUndefined();
+  });
+
+  it('a refused retry: the stopped run comes back, the hidden messages are fetched back, nothing is resent', async () => {
+    const { api, chat, deps, queryClient } = await setup('review');
+    await api.updateChat(chat.id, { editMode: 'auto' });
+    const stopped = { ...createRun(3), status: 'idle' as const, stopped: true };
+    useRunsStore.setState({ runs: { [chat.id]: stopped } });
+    const retry = vi.spyOn(api, 'retry');
+    await useRunsStore.getState().retry(deps, chat.id, chat.model);
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(useRunsStore.getState().runs[chat.id]).toEqual(stopped);
+    await vi.waitFor(() => expect(cachedChat(queryClient, chat.id)?.editMode).toBe('auto'));
+    // The optimistic truncation is undone by the refetch; the server truncated nothing.
+    expect(cachedChat(queryClient, chat.id)?.messages).toEqual(chat.messages);
+    expect((await api.getChat(chat.id)).messages).toEqual(chat.messages);
+    expect(useRunsStore.getState().takeModeRefusal(chat.id)).toEqual({ message: EDIT_MODE_CHANGED, unsent: null });
+  });
+
+  it('any other refusal stays a run error, as before', async () => {
+    const { api, chat, deps } = await setup();
+    vi.spyOn(api, 'sendMessage').mockImplementation(() => {
+      throw new ApiError(errorInfo('conflict', 'A reply is already in progress.'), 409);
+    });
+    await useRunsStore.getState().send(deps, chat.id, { text: 'hi', attachments: [], model: chat.model });
+    expect(useRunsStore.getState().runs[chat.id]?.error?.message).toBe('A reply is already in progress.');
+    expect(useRunsStore.getState().modeRefusals).toEqual({});
+  });
+
+  it("a delayed chat_updated carrying the old mode doesn't overwrite a confirmed mode change", async () => {
+    const { api, chat, deps, queryClient } = await setup('review');
+    const late = gate();
+    const after = gate();
+    const old: ChatSummary = { ...(listedChat(queryClient, chat.id) as ChatSummary), title: 'Named by the run' };
+    vi.spyOn(api, 'sendMessage').mockImplementation(async function* () {
+      await late.promise;
+      yield { type: 'chat_updated', chat: old }; // taken by the server before the mode change
+      await after.promise;
+      yield { type: 'done' };
+    });
+    const running = useRunsStore.getState().send(deps, chat.id, { text: 'hi', attachments: [], model: chat.model });
+    // The PATCH answer is written (what the composer does), then the old summary arrives.
+    patchChatSummary(queryClient, await api.updateChat(chat.id, { editMode: 'auto' }));
+    late.open();
+    await vi.waitFor(() => expect(cachedChat(queryClient, chat.id)?.title).toBe('Named by the run'));
+    expect(cachedChat(queryClient, chat.id)?.editMode).toBe('auto');
+    expect(listedChat(queryClient, chat.id)).toMatchObject({ title: 'Named by the run', editMode: 'auto' });
+    after.open();
+    await running;
+    expect(cachedChat(queryClient, chat.id)?.editMode).toBe('auto');
+  });
+
+  it("a settle read that captured the old mode doesn't overwrite a confirmed mode change", async () => {
+    const { api, chat, deps, queryClient } = await setup('review');
+    const real = api.getChat.bind(api);
+    const answer = gate();
+    const getChat = vi.spyOn(api, 'getChat').mockImplementation(async (id) => {
+      const snapshot = await real(id); // the server answers with Review…
+      await answer.promise; // …and the answer lands late
+      return snapshot;
+    });
+    const running = useRunsStore.getState().send(deps, chat.id, { text: 'hi', attachments: [], model: chat.model });
+    await vi.waitFor(() => expect(getChat).toHaveBeenCalled());
+    patchChatSummary(queryClient, await api.updateChat(chat.id, { editMode: 'auto' }));
+    answer.open();
+    await running;
+    const cached = cachedChat(queryClient, chat.id);
+    expect(cached?.editMode).toBe('auto');
+    // Everything else the read brought is taken: the new turn's messages.
+    expect(cached?.messages.length).toBeGreaterThan(chat.messages.length);
+  });
+
+  it('a mode change answered by a PATCH still writes the mode (only run reports keep it)', async () => {
+    const { api, chat, queryClient } = await setup('review');
+    patchChatSummary(queryClient, await api.updateChat(chat.id, { editMode: 'auto' }));
+    expect(cachedChat(queryClient, chat.id)?.editMode).toBe('auto');
+    expect(listedChat(queryClient, chat.id)?.editMode).toBe('auto');
   });
 });

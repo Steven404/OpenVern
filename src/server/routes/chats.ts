@@ -3,6 +3,7 @@
 import {
   applyChangesBody,
   createChatBody,
+  EDIT_MODE_CHANGED,
   ROUTES,
   retryBody,
   sendMessageBody,
@@ -12,7 +13,7 @@ import {
 } from '@shared/api';
 import { LIMITS } from '@shared/constants';
 import { TERMINAL } from '@shared/terminal';
-import type { Id } from '@shared/types';
+import type { EditMode, Id } from '@shared/types';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { CoreError } from '../../core/errors';
@@ -64,6 +65,15 @@ export function chatRoutes(core: Core): Hono {
     }
   };
 
+  /**
+   * `expected` is the edit mode the client showed when the user acted (omitted by older clients: nothing to check).
+   * A mismatch is refused before anything changes, so the user can look at Review / Auto and act again.
+   */
+  const checkEditMode = (stored: EditMode, expected: EditMode | undefined): EditMode => {
+    if (expected !== undefined && expected !== stored) throw new CoreError('conflict', EDIT_MODE_CHANGED);
+    return stored;
+  };
+
   r.get(ROUTES.chats, async (c) => c.json(await core.chats.list()));
 
   // `editMode` omitted = 'review'.
@@ -76,39 +86,45 @@ export function chatRoutes(core: Core): Hono {
 
   /**
    * Rename, move, archive, or change the edit mode. `editMode` takes no run claim and is accepted while a run is
-   * active: the agent reads the mode once at turn start, so a change applies from the next turn.
+   * active: the agent reads the mode once at turn start, so a change applies from the next turn. `expectedEditMode`,
+   * when sent, must match the stored mode or nothing changes (409): a move decides whether to warn about a folder
+   * without Git from the mode the client showed, so it must not go through on a mode the chat no longer has.
    */
   r.patch(ROUTES.chat, async (c) => {
     const id = c.req.param('id');
-    const body = await readJson(c, updateChatBody);
-    if (body.projectId !== undefined || body.archived !== undefined) {
+    const { expectedEditMode, ...patch } = await readJson(c, updateChatBody);
+    if (patch.projectId !== undefined || patch.archived !== undefined) {
       const chat = await core.chats.get(id); // 404 before any claim
       const rejectPendingMove = async (projectId: Id | null) => {
-        if (body.projectId !== undefined && projectId !== body.projectId && (await core.changes.get(id)).pending)
+        if (patch.projectId !== undefined && projectId !== patch.projectId && (await core.changes.get(id)).pending)
           throw new CoreError('conflict', 'Apply or discard the proposed edits first.');
       };
       // Only `archived` changes the flag (a move keeps it). Archive changes need the chat idle: hold the run
       // claim across a fresh read so a turn can't start between the check and the write.
-      if (body.archived !== undefined) {
+      if (patch.archived !== undefined) {
         if (starting.has(id))
           throw new CoreError('conflict', 'Wait for the response to finish before archiving or unarchiving this chat.');
         starting.add(id);
         try {
           const fresh = await core.chats.get(id);
+          checkEditMode(fresh.editMode, expectedEditMode);
           await rejectPendingMove(fresh.projectId);
           if (core.agent.isRunning(id))
             throw new CoreError(
               'conflict',
               'Wait for the response to finish before archiving or unarchiving this chat.',
             );
-          return c.json(await core.chats.update(id, body));
+          return c.json(await core.chats.update(id, patch));
         } finally {
           starting.delete(id);
         }
       }
+      checkEditMode(chat.editMode, expectedEditMode);
       await rejectPendingMove(chat.projectId);
+    } else if (expectedEditMode !== undefined) {
+      checkEditMode((await core.chats.get(id)).editMode, expectedEditMode);
     }
-    return c.json(await core.chats.update(id, body));
+    return c.json(await core.chats.update(id, patch));
   });
 
   r.delete(ROUTES.chat, async (c) => {
@@ -124,12 +140,19 @@ export function chatRoutes(core: Core): Hono {
     return c.body(null, 204);
   });
 
+  // CHECKED MODE IS THE TURN'S MODE (invariant), for both routes that start a turn: the chat is read once, under the
+  // start claim; the mode the client showed (`expectedEditMode`) is checked against that read, and the turn is handed
+  // that same value to run in. A mode PATCH takes no claim and can land at any time, so a check here followed by a
+  // second read in the agent could start a turn in a mode the user wasn't shown. A mismatch is refused (409) before
+  // anything is stored or started.
   r.post(ROUTES.chatMessages, async (c) => {
     const chatId = c.req.param('id');
     const body = await readJson(c, sendMessageBody);
-    const chat = await core.chats.get(chatId);
     const release = claim(chatId);
+    let editMode: EditMode;
     try {
+      const chat = await core.chats.get(chatId);
+      editMode = checkEditMode(chat.editMode, body.expectedEditMode);
       if (body.attachmentIds.length > LIMITS.attachmentsPerMessage)
         throw new CoreError('invalid_request', `At most ${LIMITS.attachmentsPerMessage} attachments per message.`);
       let hasImage = false;
@@ -150,6 +173,7 @@ export function chatRoutes(core: Core): Hono {
       newUserMessage: { text: body.text, attachmentIds: body.attachmentIds },
       effort: body.effort,
       terminal: body.terminal,
+      editMode,
       release,
     });
   });
@@ -157,11 +181,25 @@ export function chatRoutes(core: Core): Hono {
   r.post(ROUTES.chatRetry, async (c) => {
     const chatId = c.req.param('id');
     const body = await readJson(c, retryBody);
-    const chat = await core.chats.get(chatId);
-    if (!chat.messages.some((m) => m.role === 'user'))
-      throw new CoreError('invalid_request', 'There is no message to retry in this chat.');
     const release = claim(chatId);
-    return streamTurn(c, core, { chatId, model: body.model, effort: body.effort, terminal: body.terminal, release });
+    let editMode: EditMode;
+    try {
+      const chat = await core.chats.get(chatId);
+      if (!chat.messages.some((m) => m.role === 'user'))
+        throw new CoreError('invalid_request', 'There is no message to retry in this chat.');
+      editMode = checkEditMode(chat.editMode, body.expectedEditMode);
+    } catch (err) {
+      release();
+      throw err;
+    }
+    return streamTurn(c, core, {
+      chatId,
+      model: body.model,
+      effort: body.effort,
+      terminal: body.terminal,
+      editMode,
+      release,
+    });
   });
 
   // The client's answer to a `terminal_read_request` (terminal plan §4.2, T2.5). The body is validated before the

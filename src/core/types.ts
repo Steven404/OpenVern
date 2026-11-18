@@ -155,6 +155,12 @@ export interface RunTurnInput {
   emit: (event: AgentEvent) => void | Promise<void>;
   /** The client can answer terminal reads (Electron), so `read_terminal` is offered (terminal plan §2). */
   terminal?: boolean;
+  /**
+   * The edit mode this turn runs in. The HTTP routes read it under the turn's start claim and check it against the
+   * mode the client showed, so the turn uses the very value that was checked: a PATCH landing after that read
+   * applies from the next turn. Omitted = the agent reads the chat's stored mode once at turn start.
+   */
+  editMode?: EditMode;
 }
 
 /** Relays `read_terminal` to the client: a stream event out, an HTTP answer back (terminal plan §3, §4.3). */

@@ -17,7 +17,7 @@ import { Button } from '../../components/ui';
 import { ApiError } from '../../lib/api-client';
 import { useApiClient } from '../../lib/api-context';
 import { queryKeys } from '../../lib/query-keys';
-import { patchChatSummary } from '../../stores/runs';
+import { patchChatSummary, useRunsStore } from '../../stores/runs';
 import { useUiStore } from '../../stores/ui';
 import { useTerminalUiStore } from '../terminal/terminal-store';
 import { AttachMenu } from './AttachMenu';
@@ -147,6 +147,21 @@ export function Composer({
   const { items, uploading, ready, addRef } = attachments;
 
   useEffect(() => (sinkKey ? registerAttachmentSink(sinkKey, addRef) : undefined), [sinkKey, addRef]);
+
+  // A send or retry the server refused because the chat's edit mode changed: the chip now shows the server's mode
+  // (the chat was fetched again), so say why nothing was sent and give back what was typed. Taken once, so a remount
+  // (or React's double effect run in development) can't add the text twice. Nothing is resent.
+  const refusal = useRunsStore((s) => (chatId !== undefined ? s.modeRefusals[chatId] : undefined));
+  useEffect(() => {
+    if (chatId === undefined || !refusal) return;
+    const taken = useRunsStore.getState().takeModeRefusal(chatId);
+    if (!taken) return;
+    setSendError(taken.message);
+    const unsent = taken.unsent;
+    if (!unsent) return;
+    setText((current) => (current.trim() === '' ? unsent.text : `${unsent.text}\n\n${current}`));
+    for (const ref of unsent.attachments) addRef(ref);
+  }, [chatId, refusal, addRef]);
 
   // An open terminal dock is fixed space under the composer: the draft grows into what is left of the column instead
   // of pushing the dock (and its prompt) below the window. `sinkKey` is the chat id for a reply composer and

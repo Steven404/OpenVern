@@ -1,7 +1,9 @@
+import { EDIT_MODE_CHANGED } from '@shared/api';
 import { DEFAULT_MODEL } from '@shared/constants';
 import { errorInfo } from '@shared/errors';
 import type { Chat, ChatSummary, Id } from '@shared/types';
-import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { useState } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../../lib/api-client';
 import { MockApiClient } from '../../lib/mock-api-client';
@@ -557,5 +559,90 @@ describe('an older chat response never overwrites a confirmed mode', () => {
     await tick();
     expect(chip().getAttribute('data-mode')).toBe('auto');
     expect(queryClient.getQueryData<Chat>(queryKeys.chat(chat.id))?.editMode).toBe('auto');
+  });
+});
+
+/** Remounting gives the composer a fresh mode sync, which knows nothing of a PATCH still in flight. */
+function RemountableComposer({ chat }: { chat: Chat }) {
+  const [mount, setMount] = useState(0);
+  return (
+    <>
+      <button type="button" onClick={() => setMount((n) => n + 1)}>
+        remount
+      </button>
+      <ReplyComposer key={mount} chat={chat} />
+    </>
+  );
+}
+
+describe('the server refuses a turn in a mode the chip did not show', () => {
+  beforeEach(() => useRunsStore.setState({ modeRefusals: {} }));
+  const alertText = async () => (await screen.findByRole('alert')).textContent;
+
+  it('a composer remounted while an Auto PATCH is committed but unanswered: the send is refused, the chip catches up, the draft comes back', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const { git } = await projects(api);
+    const chat = await chatIn(api, git.id);
+    const real = api.updateChat.bind(api);
+    const response = gate();
+    vi.spyOn(api, 'updateChat').mockImplementation(async (id, patch) => {
+      const summary = await real(id, patch); // the server commits Auto now…
+      await response.promise; // …and the answer is late
+      return summary;
+    });
+    const sendMessage = vi.spyOn(api, 'sendMessage');
+    renderWithProviders(<RemountableComposer chat={chat} />, { api });
+    await findChip();
+    await choose('auto');
+    await waitFor(() => expect(chip().getAttribute('aria-busy')).toBe('true'));
+    fireEvent.click(screen.getByRole('button', { name: 'remount' }));
+    await waitFor(() => expect(chip().getAttribute('aria-busy')).toBeNull());
+    expect(chip().getAttribute('data-mode')).toBe('review');
+
+    typeAndEnter('make the edits');
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({ expectedEditMode: 'review' });
+    expect(await alertText()).toBe(EDIT_MODE_CHANGED);
+    await waitFor(() => expect(chip().getAttribute('data-mode')).toBe('auto'));
+    expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('make the edits');
+    expect((await api.getChat(chat.id)).messages).toEqual([]);
+    expect(useRunsStore.getState().runs[chat.id]).toBeUndefined();
+    await tick();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+
+    response.open();
+    await tick();
+    expect(chip().getAttribute('data-mode')).toBe('auto');
+    // Sending again now runs, in the mode the chip shows.
+    fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' });
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(2));
+    expect(sendMessage.mock.calls[1]?.[1]).toMatchObject({ text: 'make the edits', expectedEditMode: 'auto' });
+    await waitFor(() => expect(useRunsStore.getState().runs[chat.id]).toBeUndefined(), { timeout: 4000 });
+    expect((await api.getChat(chat.id)).messages[0]).toMatchObject({ role: 'user', text: 'make the edits' });
+  });
+
+  it('a refusal waiting when the composer mounts is shown once, with the text and files put back', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const { git } = await projects(api);
+    const chat = await chatIn(api, git.id);
+    const ref = { id: 'att-1', name: 'notes.txt', mime: 'text/plain', size: 5, kind: 'text' as const };
+    useRunsStore.setState({
+      modeRefusals: {
+        [chat.id]: {
+          message: EDIT_MODE_CHANGED,
+          unsent: { text: 'look at notes', attachments: [ref], model: DEFAULT_MODEL },
+        },
+      },
+    });
+    renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    expect(await alertText()).toBe(EDIT_MODE_CHANGED);
+    expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('look at notes');
+    expect(await screen.findByText('notes.txt')).toBeTruthy();
+    expect(useRunsStore.getState().modeRefusals).toEqual({});
+    // A refusal for a retry (nothing typed) only says why.
+    act(() => useRunsStore.setState({ modeRefusals: { [chat.id]: { message: EDIT_MODE_CHANGED, unsent: null } } }));
+    await waitFor(() => expect(useRunsStore.getState().modeRefusals).toEqual({}));
+    expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('look at notes');
+    expect(await alertText()).toBe(EDIT_MODE_CHANGED);
   });
 });

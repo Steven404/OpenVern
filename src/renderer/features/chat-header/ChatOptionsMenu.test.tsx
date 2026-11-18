@@ -1,5 +1,9 @@
 import { openMenu, renderApp, resetUi, seededClient } from '@renderer/app/test-utils';
+import { ApiError } from '@renderer/lib/api-client';
+import { MockApiClient } from '@renderer/lib/mock-api-client';
 import { useUiStore } from '@renderer/stores/ui';
+import { EDIT_MODE_CHANGED } from '@shared/api';
+import { errorInfo } from '@shared/errors';
 import type { EditMode, ProjectListItem } from '@shared/types';
 import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -58,7 +62,7 @@ describe('moving an Auto chat to a project without Git', () => {
     await moveTo(header, noGit);
     fireEvent.click(await screen.findByTestId('no-git-keep-review'));
     await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
-    expect(update).toHaveBeenCalledWith(chat.id, { projectId: noGit.id, editMode: 'review' });
+    expect(update).toHaveBeenCalledWith(chat.id, { projectId: noGit.id, editMode: 'review', expectedEditMode: 'auto' });
     await waitFor(() => expect(screen.queryByTestId('no-git-dialog')).toBeNull());
     const stored = await client.getChat(chat.id);
     expect([stored.projectId, stored.editMode]).toEqual([noGit.id, 'review']);
@@ -70,7 +74,7 @@ describe('moving an Auto chat to a project without Git', () => {
     await moveTo(header, noGit);
     fireEvent.click(await screen.findByTestId('no-git-turn-on-auto'));
     await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
-    expect(update).toHaveBeenCalledWith(chat.id, { projectId: noGit.id });
+    expect(update).toHaveBeenCalledWith(chat.id, { projectId: noGit.id, expectedEditMode: 'auto' });
     await waitFor(() => expect(screen.queryByTestId('no-git-dialog')).toBeNull());
     const stored = await client.getChat(chat.id);
     expect([stored.projectId, stored.editMode]).toEqual([noGit.id, 'auto']);
@@ -93,7 +97,9 @@ describe('moving an Auto chat to a project without Git', () => {
     const { header, noGit, update, chat } = await renderChat('auto');
     useUiStore.setState({ autoNoGitAcknowledged: { [noGit.id]: true } });
     await moveTo(header, noGit);
-    await waitFor(() => expect(update).toHaveBeenCalledWith(chat.id, { projectId: noGit.id }));
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith(chat.id, { projectId: noGit.id, expectedEditMode: 'auto' }),
+    );
     expect(screen.queryByTestId('no-git-dialog')).toBeNull();
   });
 });
@@ -102,14 +108,69 @@ describe('moves that never ask', () => {
   it('a Review chat to a project without Git', async () => {
     const { header, noGit, update, chat } = await renderChat('review');
     await moveTo(header, noGit);
-    await waitFor(() => expect(update).toHaveBeenCalledWith(chat.id, { projectId: noGit.id }));
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith(chat.id, { projectId: noGit.id, expectedEditMode: 'review' }),
+    );
     expect(screen.queryByTestId('no-git-dialog')).toBeNull();
   });
 
   it('an Auto chat to a project inside Git', async () => {
     const { header, git, update, chat } = await renderChat('auto');
     await moveTo(header, git);
-    await waitFor(() => expect(update).toHaveBeenCalledWith(chat.id, { projectId: git.id }));
+    await waitFor(() => expect(update).toHaveBeenCalledWith(chat.id, { projectId: git.id, expectedEditMode: 'auto' }));
     expect(screen.queryByTestId('no-git-dialog')).toBeNull();
+  });
+});
+
+describe('a move never relies on a mode the server no longer has', () => {
+  it('moving while an Auto change is committed but unanswered is refused, says why, and moves nothing', async () => {
+    const { header, noGit, client, chat, project } = await renderChat('review');
+    useUiStore.setState({ autoNoGitAcknowledged: { [project.id]: true } }); // the chip doesn't ask for this one
+    // `renderChat` already spies on `updateChat`, so the real one comes from the class.
+    const real = MockApiClient.prototype.updateChat.bind(client);
+    let answer: () => void = () => {};
+    const late = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+    const update = vi.spyOn(client, 'updateChat').mockImplementation(async (id, patch) => {
+      const summary = await real(id, patch); // committed (a refused move throws here)…
+      if (patch.editMode !== undefined && patch.projectId === undefined) await late; // …a mode answer is late
+      return summary;
+    });
+    const chip = await screen.findByTestId('edit-mode-chip');
+    chip.focus();
+    fireEvent.keyDown(chip, { key: 'Enter' });
+    fireEvent.click(await screen.findByTestId('edit-mode-auto'));
+    await waitFor(() => expect(update).toHaveBeenCalledWith(chat.id, { editMode: 'auto' }));
+    expect((await client.getChat(chat.id)).editMode).toBe('auto');
+
+    // The chip still shows Review, so the menu doesn't warn, but it says which mode it decided from.
+    await moveTo(header, noGit);
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith(chat.id, { projectId: noGit.id, expectedEditMode: 'review' }),
+    );
+    expect(screen.queryByTestId('no-git-dialog')).toBeNull();
+    const dialog = await screen.findByTestId('move-error-dialog');
+    expect(within(dialog).getByText("Couldn't move this chat")).toBeTruthy();
+    expect(dialog.textContent).toContain(EDIT_MODE_CHANGED);
+    expect((await client.getChat(chat.id)).projectId).toBe(project.id);
+    await waitFor(() => expect(screen.getByTestId('edit-mode-chip').getAttribute('data-mode')).toBe('auto'));
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'OK' }));
+    await waitFor(() => expect(screen.queryByTestId('move-error-dialog')).toBeNull());
+    answer();
+    // Tried again with the chip showing Auto, the move asks first.
+    await moveTo(header, noGit);
+    expect(await screen.findByTestId('no-git-dialog')).toBeTruthy();
+  });
+
+  it('any other refused move says so too', async () => {
+    const { header, git, client } = await renderChat('review');
+    vi.spyOn(client, 'updateChat').mockRejectedValue(
+      new ApiError(errorInfo('conflict', 'Apply or discard the proposed edits first.'), 409),
+    );
+    await moveTo(header, git);
+    const dialog = await screen.findByTestId('move-error-dialog');
+    expect(dialog.textContent).toContain('Apply or discard the proposed edits first.');
   });
 });

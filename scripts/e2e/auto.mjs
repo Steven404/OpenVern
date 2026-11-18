@@ -8,8 +8,8 @@
 //   4  Another Auto turn, then Retry: the file has exactly one marker (the first attempt was undone).
 //   5  Edit a file on disk, then Undo that turn: it is skipped and named in the card; the user's edit is kept.
 //   6  Switch to Review and send an edit: a Proposed edits card, the disk unchanged.
-//   7  Reload: the chat is still Review; a new chat in the project shows Review; the History lists the auto batches
-//      with their undo results.
+//   7  Reload: the chat is still Review; a send or retry expecting Auto is refused (409) and stores nothing; a new
+//      chat in the project shows Review; the History lists the auto batches with their undo results.
 // Same env as smoke.mjs: E2E_MODE, E2E_BASE, E2E_OUT, CDP_PORT. Run through the runners (after edits.mjs).
 
 import { spawnSync } from 'node:child_process';
@@ -38,6 +38,7 @@ for (const [name, content] of Object.entries(original)) writeFileSync(file(name)
 const read = (name) => readFileSync(file(name), 'utf8');
 const bytes = (name) => readFileSync(file(name));
 const MARKER = ' // edited by the fake provider';
+const EDIT_MODE_CHANGED = "This chat's edit mode changed. Check Review / Auto and send again.";
 const countOf = (text, part) => text.split(part).length - 1;
 const originalBytes = Object.fromEntries(Object.keys(original).map((n) => [n, bytes(n)]));
 const sameBytes = (name) => existsSync(file(name)) && bytes(name).equals(originalBytes[name]);
@@ -412,6 +413,15 @@ try {
   await waitFor(`!!document.querySelector('[data-testid=edit-mode-chip]')`, 'chip after reload', 20000);
   check('7 after a reload the chat is still Review', (await chipMode()) === 'review' && (await chatId()) === idBefore);
   check('7 the server still says Review', (await chatNow()).editMode === 'review');
+  // A turn that expects a mode the chat no longer has is refused by the server before anything is stored.
+  const before7 = await chatNow();
+  const stale = { model: before7.model, expectedEditMode: 'auto' };
+  const staleSend = await api(`/chats/${idBefore}/messages`, 'POST', { text: 'stale', attachmentIds: [], ...stale });
+  const staleRetry = await api(`/chats/${idBefore}/retry`, 'POST', stale);
+  const refused = (r) => r.status === 409 && r.body?.error?.message === EDIT_MODE_CHANGED;
+  check('7 a send expecting Auto in a Review chat is refused (409)', refused(staleSend), `${staleSend.status}`);
+  check('7 a retry expecting Auto in a Review chat is refused (409)', refused(staleRetry), `${staleRetry.status}`);
+  check('7 the refusals stored nothing', (await chatNow()).messages.length === before7.messages.length);
   check('7 the Proposed edits card is back', await ev(`!!${byText('[data-testid=changes-card]', 'Proposed edits')}`));
 
   await openDiff();

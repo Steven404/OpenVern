@@ -9,6 +9,7 @@
 // pre-stream validation) never fires its listener, so it counts as a disconnect too and the run never starts.
 
 import type { AgentEvent } from '@shared/events';
+import type { EditMode } from '@shared/types';
 import type { Context } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import type { Core, RunTurnInput } from '../core/types';
@@ -23,6 +24,8 @@ export interface StreamTurnInput {
   effort?: RunTurnInput['effort'];
   /** The client can answer terminal reads, so the run offers `read_terminal` (terminal plan T2). */
   terminal?: boolean;
+  /** The edit mode the route read under the start claim and checked; the turn runs in exactly this mode. */
+  editMode: EditMode;
   /** Called as soon as `agent.runTurn` has registered the run (or the stream gave up), to drop the pre-run claim. */
   release: () => void;
 }
@@ -50,6 +53,7 @@ export function streamTurn(c: Context, core: Core, input: StreamTurnInput): Resp
         model: input.model,
         ...(input.effort !== undefined ? { effort: input.effort } : {}),
         ...(input.terminal ? { terminal: true } : {}),
+        editMode: input.editMode,
         signal: controller.signal,
         emit: async (event: AgentEvent) => {
           await stream.writeSSE({ data: JSON.stringify(event) });

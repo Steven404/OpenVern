@@ -1,6 +1,9 @@
 import { useProjects } from '@renderer/app/queries';
 import {
+  Button,
   ConfirmDialog,
+  Dialog,
+  DialogContent,
   IconButton,
   Menu,
   MenuContent,
@@ -17,7 +20,7 @@ import { NoGitDialog } from '@renderer/features/composer/NoGitDialog';
 import { useApiClient } from '@renderer/lib/api-context';
 import { queryKeys } from '@renderer/lib/query-keys';
 import { paths } from '@renderer/lib/routes';
-import { patchChatSummary, useRunsStore } from '@renderer/stores/runs';
+import { cachedEditMode, patchChatSummary, useRunsStore } from '@renderer/stores/runs';
 import { useUiStore } from '@renderer/stores/ui';
 import type { ChatSummary, EditMode, ProjectListItem } from '@shared/types';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -46,25 +49,35 @@ export function ChatOptionsMenu({ chat }: { chat: ChatSummary }) {
       queryClient.invalidateQueries({ queryKey: queryKeys.projects }),
     ]);
 
+  const [moveError, setMoveError] = useState<string | null>(null);
   const move = useMutation({
-    mutationFn: (patch: { projectId: string | null; editMode?: EditMode }) => api.updateChat(chat.id, patch),
+    mutationFn: (patch: { projectId: string | null; editMode?: EditMode; expectedEditMode: EditMode }) =>
+      api.updateChat(chat.id, patch),
+    onMutate: () => setMoveError(null),
+    // A refused move changed nothing, and nothing is retried here. `onSettled` fetches the chat again, so after a
+    // refusal for a changed edit mode (the message says so) the chip shows the server's mode before the user retries.
+    onError: (err) => setMoveError(err instanceof Error && err.message ? err.message : "Couldn't move this chat."),
     onSettled: refresh,
   });
 
   // INVARIANT: an Auto chat never lands in a folder without Git unwarned. Moving it there is the same step as turning
   // Auto on there (the next turn writes to that folder without asking), so it asks the same question, once per
   // project. Switching to Review goes in the same PATCH as the move, so the chat is never in the new folder in Auto.
+  // The question is decided from the mode the chip shows (the chat query, as the composer reads it), and the move
+  // carries that mode as `expectedEditMode`: if the server's mode has changed meanwhile (a mode change whose answer
+  // hasn't arrived yet), it refuses the move, so a skipped warning never rests on a stale mode.
   const acknowledged = useUiStore((s) => s.autoNoGitAcknowledged);
   const acknowledge = useUiStore((s) => s.acknowledgeAutoNoGit);
   const [noGitTarget, setNoGitTarget] = useState<ProjectListItem | null>(null);
   const moveTo = (projectId: string | null) => {
     if (projectId === chat.projectId) return;
+    const shown = cachedEditMode(queryClient, chat.id) ?? chat.editMode;
     const target = projectId === null ? undefined : projects.data?.find((p) => p.id === projectId);
-    if (chat.editMode === 'auto' && target && !target.inGitRepo && acknowledged[target.id] !== true) {
+    if (shown === 'auto' && target && !target.inGitRepo && acknowledged[target.id] !== true) {
       setNoGitTarget(target);
       return;
     }
-    move.mutate({ projectId });
+    move.mutate({ projectId, expectedEditMode: shown });
   };
 
   // The server rejects archive changes while a reply is in progress, so the item waits for the run to finish.
@@ -163,18 +176,37 @@ export function ChatOptionsMenu({ chat }: { chat: ChatSummary }) {
         projectName={noGitTarget?.name ?? ''}
         reason="move"
         returnFocusRef={triggerRef}
+        // The dialog only opens for a chat shown in Auto, so both choices expect Auto.
         onReview={() => {
-          if (noGitTarget) move.mutate({ projectId: noGitTarget.id, editMode: 'review' });
+          if (noGitTarget) move.mutate({ projectId: noGitTarget.id, editMode: 'review', expectedEditMode: 'auto' });
           setNoGitTarget(null);
         }}
         onAuto={() => {
           if (noGitTarget) {
             acknowledge(noGitTarget.id);
-            move.mutate({ projectId: noGitTarget.id });
+            move.mutate({ projectId: noGitTarget.id, expectedEditMode: 'auto' });
           }
           setNoGitTarget(null);
         }}
       />
+      <Dialog
+        open={moveError !== null}
+        onOpenChange={(open) => {
+          if (!open) setMoveError(null);
+        }}
+      >
+        <DialogContent
+          title="Couldn't move this chat"
+          description={moveError}
+          returnFocusRef={triggerRef}
+          data-testid="move-error-dialog"
+          footer={
+            <Button variant="primary" onClick={() => setMoveError(null)}>
+              OK
+            </Button>
+          }
+        />
+      </Dialog>
       <ConfirmDialog
         open={deleteOpen}
         onOpenChange={setDeleteOpen}

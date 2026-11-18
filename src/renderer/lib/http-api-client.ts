@@ -121,7 +121,16 @@ export class HttpApiClient implements ApiClient {
   getChat(id: Id) {
     return this.json<Chat>('GET', `/chats/${enc(id)}`);
   }
-  updateChat(id: Id, patch: { title?: string; projectId?: Id | null; archived?: boolean; editMode?: EditMode }) {
+  updateChat(
+    id: Id,
+    patch: {
+      title?: string;
+      projectId?: Id | null;
+      archived?: boolean;
+      editMode?: EditMode;
+      expectedEditMode?: EditMode;
+    },
+  ) {
     return this.json<ChatSummary>('PATCH', `/chats/${enc(id)}`, patch);
   }
   deleteChat(id: Id) {
@@ -136,6 +145,7 @@ export class HttpApiClient implements ApiClient {
       effort?: ReasoningEffort | null;
       /** This client can answer terminal reads, so the server may offer `read_terminal` (terminal plan §4.2). */
       terminal?: boolean;
+      expectedEditMode?: EditMode;
     },
     signal: AbortSignal,
   ) {
@@ -143,7 +153,7 @@ export class HttpApiClient implements ApiClient {
   }
   retry(
     chatId: Id,
-    input: { model: string; effort?: ReasoningEffort | null; terminal?: boolean },
+    input: { model: string; effort?: ReasoningEffort | null; terminal?: boolean; expectedEditMode?: EditMode },
     signal: AbortSignal,
   ) {
     return this.stream(`/chats/${enc(chatId)}/retry`, input, signal);

@@ -285,11 +285,15 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
   async function execute(input: RunTurnInput, signal: AbortSignal, emit: Emit, state: RunState): Promise<void> {
     const { chatId, model } = input;
     let chat = await chats.get(chatId);
-    // MODE READ ONCE PER TURN (invariant): the edit mode is taken from this read and used for the whole run: the tool
-    // descriptions, the system prompt, the note and the write path. A PATCH during the run is stored but applies
-    // from the next turn; reading it again mid-run could tell the model its edits are proposals while they are
-    // written to disk, or the other way round.
-    const editMode: EditMode = chat.editMode;
+    // MODE READ ONCE PER TURN (invariant): the edit mode is read once, at turn start, and used for the whole run: the
+    // tool descriptions, the system prompt, the note, the retry undo and the write path. The HTTP routes do that
+    // read themselves, under the turn's start claim, check it against the mode the client showed, and pass it in as
+    // `input.editMode`; the turn must use that very value, because a PATCH can land between their read and this one
+    // (a PATCH takes no run claim), and the turn would then run in a mode the user wasn't shown. Only a caller that
+    // passes no mode (tests, direct use) gets this read. A PATCH during the run is stored but applies from the next
+    // turn; reading it again mid-run could tell the model its edits are proposals while they are written to disk, or
+    // the other way round.
+    const editMode: EditMode = input.editMode ?? chat.editMode;
 
     let project: Project | undefined;
     if (chat.projectId) {

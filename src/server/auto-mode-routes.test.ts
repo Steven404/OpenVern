@@ -1,5 +1,9 @@
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { EDIT_MODE_CHANGED } from '@shared/api';
 import type { AppliedBatch, Chat, EditMode } from '@shared/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { editPromptLines, editToolDescriptions } from '../core/agent/edit-mode';
 import { gate } from '../core/changes/auto-test-helpers';
 import { CoreError } from '../core/errors';
 import { collectEvents, createHarness, type Harness, PNG_BYTES } from './test-helpers';
@@ -193,4 +197,136 @@ describe('Auto mode public routes', () => {
     );
     expect(h.changes.undoCalls).toEqual([]);
   });
+});
+
+describe('expectedEditMode: a turn or a move never relies on a mode the client no longer shows', () => {
+  const send = (json: object) =>
+    h.call(`/api/chats/${chat.id}/messages`, {
+      method: 'POST',
+      json: { text: 'hello', model: MODEL, attachmentIds: [], ...json },
+    });
+  const retry = (json: object) =>
+    h.call(`/api/chats/${chat.id}/retry`, { method: 'POST', json: { model: MODEL, ...json } });
+  /** One finished turn in the chat, so there is something to retry. */
+  async function oneTurn() {
+    const res = await send({});
+    expect(res.status).toBe(200);
+    await collectEvents(res);
+    return (await h.core.chats.get(chat.id)).messages;
+  }
+
+  it('send: a mismatch is a 409 and stores, binds and starts nothing; the claim is released', async () => {
+    await h.core.chats.update(chat.id, { editMode: 'auto' });
+    const attachment = await h.core.attachments.create({ name: 'note.txt', bytes: new TextEncoder().encode('hi') });
+    const runTurn = vi.spyOn(h.core.agent, 'runTurn');
+    await error(
+      await send({ expectedEditMode: 'review', attachmentIds: [attachment.id] }),
+      409,
+      'conflict',
+      EDIT_MODE_CHANGED,
+    );
+    expect(runTurn).not.toHaveBeenCalled();
+    expect(h.provider.calls).toEqual([]);
+    expect(h.core.agent.isRunning(chat.id)).toBe(false);
+    expect((await h.core.chats.get(chat.id)).messages).toEqual([]);
+    expect((await h.core.attachments.get(attachment.id)).chatId).toBeNull();
+    // Released: the same send with the mode the chat has goes through.
+    const ok = await send({ expectedEditMode: 'auto' });
+    expect(ok.status).toBe(200);
+    expect((await collectEvents(ok)).map((e) => e.type)).toContain('user_message');
+  });
+
+  it('retry: a mismatch is a 409 and neither truncates, undoes nor starts anything', async () => {
+    const before = await oneTurn();
+    expect(before.length).toBeGreaterThan(1);
+    await h.core.chats.update(chat.id, { editMode: 'auto' });
+    const runTurn = vi.spyOn(h.core.agent, 'runTurn');
+    const calls = h.provider.calls.length;
+    await error(await retry({ expectedEditMode: 'review' }), 409, 'conflict', EDIT_MODE_CHANGED);
+    expect(runTurn).not.toHaveBeenCalled();
+    expect(h.provider.calls).toHaveLength(calls);
+    expect(h.core.agent.isRunning(chat.id)).toBe(false);
+    expect((await h.core.chats.get(chat.id)).messages).toEqual(before);
+    const ok = await retry({ expectedEditMode: 'auto' });
+    expect(ok.status).toBe(200);
+    expect((await collectEvents(ok)).map((e) => e.type)).toContain('assistant_start');
+  });
+
+  it.each([
+    ['a move', (other: string) => ({ projectId: other })],
+    ['a move to no project', () => ({ projectId: null })],
+    ['a move that also archives', (other: string) => ({ projectId: other, archived: true })],
+    ['a mode change', () => ({ editMode: 'review' })],
+    ['a rename', () => ({ title: 'Renamed' })],
+  ])('PATCH: %s with a mismatched expectedEditMode is a 409 and changes nothing', async (_, body) => {
+    const other = (await h.core.projects.create({ rootPath: h.homeDir })).id;
+    await h.core.chats.update(chat.id, { editMode: 'auto' });
+    const stored = await h.core.chats.get(chat.id);
+    await error(await patch({ ...body(other), expectedEditMode: 'review' }), 409, 'conflict', EDIT_MODE_CHANGED);
+    expect(await h.core.chats.get(chat.id)).toEqual(stored);
+  });
+
+  it('a matching expectedEditMode goes through on send, retry and move', async () => {
+    await h.core.chats.update(chat.id, { editMode: 'auto' });
+    const sent = await send({ expectedEditMode: 'auto' });
+    expect(sent.status).toBe(200);
+    await collectEvents(sent);
+    const retried = await retry({ expectedEditMode: 'auto' });
+    expect(retried.status).toBe(200);
+    await collectEvents(retried);
+    const other = (await h.core.projects.create({ rootPath: h.homeDir })).id;
+    const moved = await patch({ projectId: other, expectedEditMode: 'auto' });
+    expect(moved.status).toBe(200);
+    expect(await h.core.chats.get(chat.id)).toMatchObject({ projectId: other, editMode: 'auto' });
+  });
+
+  it('omitting expectedEditMode checks nothing, as before', async () => {
+    await h.core.chats.update(chat.id, { editMode: 'auto' });
+    const sent = await send({});
+    expect(sent.status).toBe(200);
+    await collectEvents(sent);
+    const retried = await retry({});
+    expect(retried.status).toBe(200);
+    await collectEvents(retried);
+    const other = (await h.core.projects.create({ rootPath: h.homeDir })).id;
+    expect((await patch({ projectId: other })).status).toBe(200);
+    expect((await patch({ editMode: 'review' })).status).toBe(200);
+    expect(await h.core.chats.get(chat.id)).toMatchObject({ projectId: other, editMode: 'review' });
+  });
+
+  it.each(['send', 'retry'] as const)(
+    '%s: a PATCH to Auto landing after the check, before the agent reads the chat, does not change the turn',
+    async (kind) => {
+      const text = '[fake:write=race.txt]';
+      // A retry needs a turn whose user message asks for the write (proposed in Review, so nothing on disk yet).
+      if (kind === 'retry') await collectEvents(await send({ text }));
+      const firstCall = h.provider.calls.length;
+      const original = h.core.chats.get.bind(h.core.chats);
+      const hold = gate();
+      let reads = 0;
+      // Read 1 is the route's, under the start claim; read 2 is the agent's first. Hold the agent's.
+      vi.spyOn(h.core.chats, 'get').mockImplementation(async (id) => {
+        reads++;
+        if (reads === 2) await hold.hold();
+        return original(id);
+      });
+      const started =
+        kind === 'send' ? send({ text, expectedEditMode: 'review' }) : retry({ expectedEditMode: 'review' });
+      await hold.entered;
+      expect((await patch({ editMode: 'auto' })).status).toBe(200);
+      hold.open();
+      const events = await collectEvents(await started);
+      // The turn ran in Review, the mode that was checked: proposed, not written; Review wording to the model.
+      expect(events.some((e) => e.type === 'tool_result' && e.message.name === 'write_file')).toBe(true);
+      expect(existsSync(path.join(h.projectDir, 'race.txt'))).toBe(false);
+      expect(events.some((e) => e.type === 'auto_batch_updated')).toBe(false);
+      const request = h.provider.calls[firstCall];
+      for (const line of editPromptLines('review')) expect(request?.system).toContain(line);
+      expect(request?.tools?.find((t) => t.name === 'write_file')?.description).toBe(
+        editToolDescriptions('review').write,
+      );
+      // The PATCH is kept and applies from the next turn.
+      expect((await original(chat.id)).editMode).toBe('auto');
+    },
+  );
 });

@@ -1,7 +1,12 @@
 // In-memory `ApiClient` for UI work without a server (`VITE_API=mock`). Seeded with the design's sample data;
 // streams a fake turn (text → read_file → text with a code block) for any message.
 
-import type { ApplyChangesBody, ApplyChangesResponse, UndoBatchResponse } from '@shared/api';
+import {
+  type ApplyChangesBody,
+  type ApplyChangesResponse,
+  EDIT_MODE_CHANGED,
+  type UndoBatchResponse,
+} from '@shared/api';
 import { sniffAttachmentBytes } from '@shared/attachment-sniff';
 import { DEFAULT_MODEL, LIMITS, NEW_CHAT_TITLE } from '@shared/constants';
 import { type ErrorCode, errorInfo } from '@shared/errors';
@@ -276,9 +281,20 @@ export class MockApiClient implements ApiClient {
   async getChat(id: Id) {
     return clone(this.chat(id));
   }
-  async updateChat(id: Id, patch: { title?: string; projectId?: Id | null; archived?: boolean; editMode?: EditMode }) {
+  async updateChat(
+    id: Id,
+    patch: {
+      title?: string;
+      projectId?: Id | null;
+      archived?: boolean;
+      editMode?: EditMode;
+      expectedEditMode?: EditMode;
+    },
+  ) {
     // Same rules as `PATCH /chats/:id`. Everything is validated before anything is mutated.
     const c = this.chat(id);
+    if (patch.expectedEditMode !== undefined && patch.expectedEditMode !== c.editMode)
+      fail('conflict', 409, EDIT_MODE_CHANGED);
     if (patch.archived !== undefined && this.running.has(id))
       fail('conflict', 409, 'Wait for the response to finish before archiving or unarchiving this chat.');
     // A move (alone or with `archived`) is refused while edits are pending; archiving alone is not.
@@ -315,23 +331,25 @@ export class MockApiClient implements ApiClient {
       effort?: ReasoningEffort | null;
       /** Ignored here: the mock never asks for terminal reads (see `answerTerminalRead`). */
       terminal?: boolean;
+      expectedEditMode?: EditMode;
     },
     signal: AbortSignal,
   ) {
-    return this.run(chatId, input.model, input.effort, signal, input);
+    return this.run(chatId, input.model, input.effort, input.expectedEditMode, signal, input);
   }
   retry(
     chatId: Id,
-    input: { model: string; effort?: ReasoningEffort | null; terminal?: boolean },
+    input: { model: string; effort?: ReasoningEffort | null; terminal?: boolean; expectedEditMode?: EditMode },
     signal: AbortSignal,
   ) {
-    return this.run(chatId, input.model, input.effort, signal);
+    return this.run(chatId, input.model, input.effort, input.expectedEditMode, signal);
   }
 
   private async *run(
     chatId: Id,
     model: string,
     effortInput: ReasoningEffort | null | undefined,
+    expectedEditMode: EditMode | undefined,
     signal: AbortSignal,
     input?: { text: string; attachmentIds: Id[] },
   ): AsyncIterable<AgentEvent> {
@@ -339,6 +357,9 @@ export class MockApiClient implements ApiClient {
     // Backfill the totals before a retry truncates the messages, so the discarded turn keeps counting.
     this.usageOf(chatId, chat.messages);
     if (this.running.has(chatId)) fail('conflict', 409, 'A reply is already in progress.');
+    // Like the server: the turn runs in the mode the UI showed, or not at all (nothing stored, truncated or undone).
+    const mode: EditMode = chat.editMode;
+    if (expectedEditMode !== undefined && expectedEditMode !== mode) fail('conflict', 409, EDIT_MODE_CHANGED);
     if (!this.apiKey) fail('no_api_key', 400);
     const info = SAMPLE_MODELS.find((m) => m.id === model);
     // F3: the body's effort wins; omitted = the chat's stored effort.
@@ -349,8 +370,8 @@ export class MockApiClient implements ApiClient {
     if (info && !info.supportsImages && refs.some((r) => r.kind === 'image')) fail('model_no_image_input', 400);
 
     this.running.add(chatId);
-    // The turn reads the edit mode once, here: a mode change during the run applies from the next turn.
-    const mode: EditMode = chat.editMode;
+    // The turn uses the mode it checked above for the whole run: a mode change during the run applies from the next
+    // turn.
     let turnId: Id;
     let retryNotice: string | undefined;
     try {

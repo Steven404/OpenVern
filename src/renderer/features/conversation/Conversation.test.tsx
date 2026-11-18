@@ -1,3 +1,4 @@
+import { EDIT_MODE_CHANGED } from '@shared/api';
 import { TREE_UNAVAILABLE_NOTICE } from '@shared/constants';
 import { errorInfo } from '@shared/errors';
 import { SAMPLE_MODELS } from '@shared/sample-data';
@@ -8,6 +9,7 @@ import { MockApiClient } from '../../lib/mock-api-client';
 import { createRun, PENDING_PREFIX, useRunsStore } from '../../stores/runs';
 import { useUiStore } from '../../stores/ui';
 import { formatDuration } from '../composer/format';
+import { ReplyComposer } from '../composer/ReplyComposer';
 import { installDomStubs, renderWithProviders, resetStores } from '../composer/test-utils';
 import { Conversation } from './Conversation';
 import { findOpenFence, Markdown } from './Markdown';
@@ -315,7 +317,11 @@ describe('Conversation run overlay', () => {
       fireEvent.click(within(card).getByRole('button', { name: 'Retry' }));
     });
     expect(retry).toHaveBeenCalledTimes(1);
-    expect(retry.mock.calls[0]?.[1]).toEqual({ model: chat.model, effort: chat.effort });
+    expect(retry.mock.calls[0]?.[1]).toEqual({
+      model: chat.model,
+      effort: chat.effort,
+      expectedEditMode: chat.editMode,
+    });
     await waitFor(() => expect(screen.queryByTestId('error-card')).toBeNull());
   });
 
@@ -333,7 +339,7 @@ describe('Conversation run overlay', () => {
     await act(async () => {
       fireEvent.click(within(card).getByRole('button', { name: 'Retry' }));
     });
-    expect(retry.mock.calls[0]?.[1]).toEqual({ model: chat.model, effort: 'high' });
+    expect(retry.mock.calls[0]?.[1]).toEqual({ model: chat.model, effort: 'high', expectedEditMode: chat.editMode });
     await waitFor(() => expect(screen.queryByTestId('error-card')).toBeNull());
   });
 
@@ -349,7 +355,7 @@ describe('Conversation run overlay', () => {
     await act(async () => {
       fireEvent.click(within(card).getByRole('button', { name: 'Retry' }));
     });
-    expect(retry.mock.calls[0]?.[1]).toEqual({ model: chat.model, effort: 'low' });
+    expect(retry.mock.calls[0]?.[1]).toEqual({ model: chat.model, effort: 'low', expectedEditMode: chat.editMode });
     await waitFor(() => expect(screen.queryByTestId('error-card')).toBeNull());
   });
 
@@ -370,7 +376,7 @@ describe('Conversation run overlay', () => {
     await act(async () => {
       fireEvent.click(within(card).getByRole('button', { name: 'Retry' }));
     });
-    expect(retry.mock.calls[0]?.[1]).toEqual({ model: chat.model, effort: 'high' });
+    expect(retry.mock.calls[0]?.[1]).toEqual({ model: chat.model, effort: 'high', expectedEditMode: chat.editMode });
     await waitFor(() => expect(screen.queryByTestId('error-card')).toBeNull());
   });
 
@@ -387,5 +393,63 @@ describe('Conversation run overlay', () => {
     const cards = await screen.findAllByTestId('error-card');
     expect(cards).toHaveLength(1);
     expect(within(cards[0] as HTMLElement).getByRole('button', { name: 'Open settings' })).toBeTruthy();
+  });
+});
+
+describe('Retry and the edit mode the chip shows', () => {
+  beforeEach(() => useRunsStore.setState({ modeRefusals: {} }));
+
+  it('Retry on a stopped turn while an Auto PATCH is committed but unanswered is refused, and says so by the composer', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const project = (await api.listProjects()).find((p) => p.inGitRepo);
+    if (!project) throw new Error('seed needs a Git project');
+    const created = await api.createChat({ projectId: project.id, model: 'anthropic/claude-sonnet-5.5' });
+    for await (const _ of api.sendMessage(
+      created.id,
+      { text: 'first', attachmentIds: [], model: created.model },
+      new AbortController().signal,
+    )) {
+      // play the whole turn
+    }
+    const before = (await api.getChat(created.id)).messages;
+    const real = api.updateChat.bind(api);
+    let answer: () => void = () => {};
+    const late = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+    vi.spyOn(api, 'updateChat').mockImplementation(async (id, patch) => {
+      const summary = await real(id, patch); // committed…
+      await late; // …answer pending
+      return summary;
+    });
+    const retry = vi.spyOn(api, 'retry');
+    const stopped = { ...createRun(1), status: 'idle' as const, stopped: true };
+    useRunsStore.setState({ runs: { [created.id]: stopped } });
+    renderWithProviders(
+      <>
+        <Conversation chatId={created.id} />
+        <ReplyComposer chat={created} />
+      </>,
+      { api },
+    );
+    const chip = await screen.findByTestId('edit-mode-chip');
+    chip.focus();
+    fireEvent.keyDown(chip, { key: 'Enter' });
+    fireEvent.click(await screen.findByTestId('edit-mode-auto'));
+    await waitFor(() => expect(screen.getByTestId('edit-mode-chip').getAttribute('aria-busy')).toBe('true'));
+    expect(screen.getByTestId('edit-mode-chip').getAttribute('data-mode')).toBe('review');
+
+    const label = (await screen.findByTestId('stopped-label')).parentElement as HTMLElement;
+    fireEvent.click(within(label).getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(retry).toHaveBeenCalledTimes(1));
+    expect(retry.mock.calls[0]?.[1]).toMatchObject({ expectedEditMode: 'review' });
+    expect((await screen.findByRole('alert')).textContent).toBe(EDIT_MODE_CHANGED);
+    await waitFor(() => expect(screen.getByTestId('edit-mode-chip').getAttribute('data-mode')).toBe('auto'));
+    // Nothing was truncated or undone, and the stopped turn is still there to retry.
+    expect((await api.getChat(created.id)).messages).toEqual(before);
+    expect(useRunsStore.getState().runs[created.id]).toEqual(stopped);
+    expect(await screen.findByTestId('stopped-label')).toBeTruthy();
+    expect(retry).toHaveBeenCalledTimes(1);
+    answer();
   });
 });
