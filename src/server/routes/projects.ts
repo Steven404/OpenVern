@@ -80,7 +80,12 @@ export function projectRoutes(core: Core): Hono {
         // Moved away (or removed) since the list: not this project's chat any more.
         if (current?.projectId !== id) return;
         if (pending) await discard();
-        await core.chats.update(chat.id, { projectId: null });
+        // A chat deleted between the read above and this update is already gone from the project: that must not abort
+        // the removal halfway, after other chats were detached and their proposals discarded.
+        await core.chats.update(chat.id, { projectId: null }).catch((err) => {
+          if (err instanceof CoreError && err.code === 'not_found') return;
+          throw err;
+        });
       });
     }
     await core.projects.remove(id);

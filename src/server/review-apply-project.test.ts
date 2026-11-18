@@ -283,6 +283,28 @@ describe('a move or a detach can never land between Apply’s project check and 
     expect((await call(`/api/chats/${chatId}/changes`, { method: 'DELETE' })).status).toBe(200);
   });
 
+  it('a chat deleted while its project is being removed does not abort the removal', async () => {
+    const other = (await core.chats.create({ projectId: projectA, model: MODEL })).id;
+    const update = core.chats.update.bind(core.chats);
+    let deleted = false;
+    vi.spyOn(core.chats, 'update').mockImplementation(async (id, patch, expect) => {
+      // The first detach races a delete of that chat: the chat is gone by the time the update runs.
+      if (!deleted && patch.projectId === null) {
+        deleted = true;
+        await core.chats.remove(id);
+      }
+      return update(id, patch, expect);
+    });
+
+    const res = await call(`/api/projects/${projectA}`, { method: 'DELETE' });
+    expect(res.status).toBe(204);
+    expect(deleted).toBe(true);
+    expect((await core.projects.list()).map((p) => p.id)).not.toContain(projectA);
+    const left = (await core.chats.list()).filter((c) => c.id === chatId || c.id === other);
+    expect(left).toHaveLength(1);
+    expect(left[0]?.projectId).toBeNull();
+  });
+
   it('a stage racing a move: the move commits only if nothing was pending when it committed', async () => {
     const turnHold = gate();
     scriptStage(turnHold);
