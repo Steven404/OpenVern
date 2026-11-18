@@ -278,6 +278,69 @@ describe('a write is never hidden by a failed save of the change history', () =>
   });
 });
 
+describe('stored originals outlive the saved history that references them', () => {
+  it('a write that drops the oldest batch from retention but can’t be saved keeps its original for the saved history', async () => {
+    const s = await setup();
+    // Batch 1 modifies old.txt, so its Undo needs the stored original.
+    await s.seed('A', 'old.txt', 'the original, unique bytes\n');
+    await s.noteRead('A', 'old.txt', { turnId: 't0' });
+    const first = await s.put('A', 'old.txt', 'changed\n', { turnId: 't0' });
+    // Batches 2–20 fill the retention window.
+    for (let i = 1; i < LIMITS.autoUndoTurns; i++) await s.put('A', `f${i}.txt`, `${i}\n`, { turnId: `t${i}` });
+    expect((await s.blobs()).length).toBe(1);
+
+    // Batch 21 reaches the disk, but its history can't be saved.
+    let fail = false;
+    s.hooks.beforeWrite = () => {
+      fail = true;
+    };
+    s.hooks.beforeStoreWrite = () => {
+      if (!fail) return;
+      fail = false;
+      throw new Error('disk full');
+    };
+    expect(await s.put('A', 'last.txt', 'last\n', { turnId: 'tlast' })).toMatchObject({ unsaved: true });
+    s.hooks.beforeWrite = undefined;
+    expect((await s.blobs()).length).toBe(1);
+
+    // A fresh service (a restart) reads the last saved history: batch 1 is still undoable, and its original is there.
+    const fresh = s.make();
+    const saved = await fresh.get(CHAT);
+    expect(saved.applied.find((b) => b.id === first.batchId)?.undoable).toBe(true);
+    const undone = await fresh.undoBatch({
+      chatId: CHAT,
+      projectId: 'A',
+      projectRoot: s.roots.A,
+      batchId: first.batchId ?? '',
+    });
+    expect(undone.batch.undo).toMatchObject({ restored: ['old.txt'], skipped: [] });
+    expect(await s.read('A', 'old.txt')).toBe('the original, unique bytes\n');
+  });
+
+  it('once a history without the batch is saved, its original is collected', async () => {
+    const s = await setup();
+    await s.seed('A', 'old.txt', 'the original\n');
+    await s.noteRead('A', 'old.txt', { turnId: 't0' });
+    await s.put('A', 'old.txt', 'changed\n', { turnId: 't0' });
+    for (let i = 1; i < LIMITS.autoUndoTurns; i++) await s.put('A', `f${i}.txt`, `${i}\n`, { turnId: `t${i}` });
+    let fail = false;
+    s.hooks.beforeWrite = () => {
+      fail = true;
+    };
+    s.hooks.beforeStoreWrite = () => {
+      if (!fail) return;
+      fail = false;
+      throw new Error('disk full');
+    };
+    await s.put('A', 'last.txt', 'last\n', { turnId: 'tlast' });
+    s.hooks.beforeWrite = undefined;
+    expect((await s.blobs()).length).toBe(1);
+    // The next file operation saves the history first, then collects.
+    await s.put('A', 'next.txt', 'next\n', { turnId: 'tnext' });
+    expect(await s.blobs()).toEqual([]);
+  });
+});
+
 describe('Undo reads the chat’s project under the store lock', () => {
   it('the caller read A, the chat is in B (or has none): refused, nothing restored', async () => {
     const s = await setup();

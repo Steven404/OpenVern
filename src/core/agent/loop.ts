@@ -11,7 +11,8 @@
 //   ran). Stop while tools run: the in-flight tool and every not-yet-started call of that message get a persisted
 //   `ok:false` "Interrupted" ToolMessage (with `tool_call` + `tool_result` events), so the stored chat is self-consistent.
 //   `history.ts` still synthesises "Interrupted" results for legacy/dangling calls. A tool call that wrote to disk
-//   (Auto) keeps its real result even when Stop arrived meanwhile.
+//   (Auto) keeps its real result even when Stop arrived meanwhile, and even when the chat couldn't be saved: then the
+//   result is still emitted, held in memory and appended before the chat's next turn replays the history.
 
 import { CHAT_PROJECT_CHANGED, RETRY_OTHER_PROJECT } from '@shared/api';
 import {
@@ -243,6 +244,11 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
   const { chats, attachments, projects, models, provider } = deps;
   const now = deps.now ?? (() => new Date());
   const runs = new Map<Id, AbortController>();
+  /**
+   * Results of tool calls that changed a project file but couldn't be appended to the chat, per chat, in call order.
+   * In memory only (lost on a quit or crash, like an unsaved change history). Only touched by the chat's run.
+   */
+  const unrecorded = new Map<Id, ToolMessage[]>();
 
   async function runTurn(input: RunTurnInput): Promise<void> {
     const { chatId } = input;
@@ -317,6 +323,11 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
         throw err;
       });
     }
+    // A write an earlier run couldn't record goes into the chat first, before anything of this turn (a retry's
+    // check, undo and truncation included) and before the history is replayed: the model is never told "Interrupted"
+    // about a write that reached the disk. If it still can't be appended, this turn fails here, before anything of
+    // its own is stored.
+    if (unrecorded.has(chatId)) chat = await recordHeld(chatId);
 
     /** What a retry undid before starting over, for the notice on its first assistant message. */
     let retryUndo: BatchUndo | undefined;
@@ -588,11 +599,22 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
       for (const call of toolCalls) {
         stepChanges?.reset();
         const toolMessage = await runTool(call, messageId, tools, toolContext, emit, stepChanges);
-        await chats.appendMessage(chatId, toolMessage);
+        const written = stepChanges?.lastWrite();
+        try {
+          await chats.appendMessage(chatId, toolMessage);
+        } catch (err) {
+          if (!written) throw err;
+          // STOP NEVER HIDES A WRITE, a failed transcript save included: the client still gets the write's real
+          // result and the batch update, the result is held in memory (`recordHeld` appends it before the next turn
+          // replays the history), and the run ends with the storage error.
+          unrecorded.set(chatId, [...(unrecorded.get(chatId) ?? []), toolMessage]);
+          await emit({ type: 'tool_result', message: toolMessage });
+          await emit({ type: 'auto_batch_updated', batchId: written.batchId });
+          throw err;
+        }
         await emit({ type: 'tool_result', message: toolMessage });
         const staged = stepChanges?.lastStage();
         if (staged) await emit({ type: 'changes_updated', messageId, changes: staged.summary });
-        const written = stepChanges?.lastWrite();
         if (written) await emit({ type: 'auto_batch_updated', batchId: written.batchId });
         if (toolsOffered) history.push({ role: 'tool', toolCallId: call.id, content: toolMessage.output });
         else flattened.push(flattenToolCall(call, toolMessage));
@@ -619,6 +641,28 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
     }
 
     await emit({ type: 'error', error: errorInfo('max_steps_reached') });
+  }
+
+  /**
+   * Appends the held results of earlier writes (`unrecorded`) and returns the chat. A result whose assistant message is
+   * gone (a retry truncated that attempt after undoing it) or that the chat already holds is dropped. Throws, keeping
+   * what is still unappended, when an append fails.
+   */
+  async function recordHeld(chatId: Id): Promise<Chat> {
+    const chat = await chats.get(chatId);
+    const held = unrecorded.get(chatId) ?? [];
+    while (held.length > 0) {
+      const m = held[0] as ToolMessage;
+      const owner = chat.messages.some((x) => x.role === 'assistant' && x.toolCalls.some((c) => c.id === m.toolCallId));
+      const present = chat.messages.some((x) => x.id === m.id);
+      if (owner && !present) {
+        await chats.appendMessage(chatId, m);
+        chat.messages.push(m);
+      }
+      held.shift();
+    }
+    unrecorded.delete(chatId);
+    return chats.get(chatId);
   }
 
   /** Stop before any model call: records the same empty `stopped` assistant message a stop at stream start does. */

@@ -552,6 +552,77 @@ describe('the turn’s project, and a retry after a move', () => {
   });
 });
 
+describe('a write is never hidden when both the change history and the chat can’t be saved', () => {
+  /** After the project file changed: the change history's save and the chat's appends fail until `recover()`. */
+  function failStorageAfterTheWrite(controller?: AbortController) {
+    let failing = false;
+    s.hooks.beforeWrite = () => {
+      failing = true;
+      controller?.abort();
+    };
+    s.hooks.beforeStoreWrite = () => {
+      if (failing) throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+    };
+    const append = h.chats.appendMessage.bind(h.chats);
+    vi.spyOn(h.chats, 'appendMessage').mockImplementation(async (chatId, message) => {
+      if (failing) throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+      return append(chatId, message);
+    });
+    return {
+      recover: () => {
+        failing = false;
+        s.hooks.beforeWrite = undefined;
+      },
+    };
+  }
+  const written = { ok: true, output: `Created new.txt (1 line). Written to disk.\n${autoUnsavedText()}` };
+
+  it('Stop: the client gets the real result and the batch, and the next turn records it before the model sees it', async () => {
+    const controller = new AbortController();
+    await setup((_, i) => (i === 0 ? calls(['write_file', { path: 'new.txt', content: 'real write' }]) : reply));
+    const storage = failStorageAfterTheWrite(controller);
+    const events = await h.run({ signal: controller.signal });
+    expect(controller.signal.aborted).toBe(true);
+    expect(await s.read('new.txt')).toBe('real write');
+    expect(results(events)).toMatchObject([written]);
+    expect(events.filter((e) => e.type === 'auto_batch_updated')).toHaveLength(1);
+    expect(events.some((e) => e.type === 'error')).toBe(true);
+    expect(h.messages().filter((m) => m.role === 'tool')).toEqual([]);
+
+    storage.recover();
+    await h.run({ newUserMessage: { text: 'next', attachmentIds: [] } });
+    expect(h.messages().filter((m) => m.role === 'tool')).toMatchObject([written]);
+    const replayed = h.provider.calls.at(-1)?.messages.find((m) => m.role === 'tool');
+    expect(replayed).toMatchObject({ role: 'tool', content: written.output });
+    // The change history was saved by the next store operation.
+    expect((await s.svc.get(h.chatId)).applied.map((b) => b.written.map((f) => f.path))).toEqual([['new.txt']]);
+  });
+
+  it('while the chat still can’t be saved, the next turn fails before anything of its own is stored', async () => {
+    await setup((_, i) => (i === 0 ? calls(['write_file', { path: 'new.txt', content: 'real write' }]) : reply));
+    failStorageAfterTheWrite();
+    await h.run();
+    const before = h.messages();
+    const modelCalls = h.provider.calls.length;
+    const events = await h.run({ newUserMessage: { text: 'next', attachmentIds: [] } });
+    expect(events.some((e) => e.type === 'error')).toBe(true);
+    expect(events.some((e) => e.type === 'user_message')).toBe(false);
+    expect(h.messages()).toEqual(before);
+    expect(h.provider.calls).toHaveLength(modelCalls);
+  });
+
+  it('a retry of that turn records the result, then undoes the write and drops the attempt', async () => {
+    await setup((_, i) => (i === 0 ? calls(['write_file', { path: 'new.txt', content: 'real write' }]) : reply));
+    const storage = failStorageAfterTheWrite();
+    await h.run();
+    storage.recover();
+    const events = await h.run({ newUserMessage: undefined });
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+    expect(await s.exists('new.txt')).toBe(false);
+    expect(h.messages().filter((m) => m.role === 'tool')).toEqual([]);
+  });
+});
+
 describe('a retry’s mode line is made true for the mode it runs in', () => {
   const lastUserNote = () => h.messages().findLast((m) => m.role === 'user')?.changesNote;
 

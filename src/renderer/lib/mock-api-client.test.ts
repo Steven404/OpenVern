@@ -1109,6 +1109,22 @@ describe('MockApiClient: a project change resets Auto state, like the server', (
     expect((await api.getChatChanges(chat.id)).applied.find((x) => x.id === latest?.id)).not.toHaveProperty('undo');
   });
 
+  it('a move to no project right after the user message keeps the pinned turn’s tools: it still writes in A', async () => {
+    const { api, a, chat, send } = await twoGitProjects();
+    const events: AgentEvent[] = [];
+    for await (const e of send()) {
+      events.push(e);
+      if (e.type === 'user_message') {
+        await api.updateChat(chat.id, { projectId: null, expectedEditMode: 'auto', expectedProjectId: a.id });
+      }
+    }
+    expect((await api.getChat(chat.id)).projectId).toBeNull();
+    expect(events.filter((e) => e.type === 'tool_result')).toHaveLength(3);
+    expect(events.some((e) => e.type === 'auto_batch_updated')).toBe(true);
+    const applied = (await api.getChatChanges(chat.id)).applied;
+    expect(applied.flatMap((x) => x.written.map((f) => f.path))).toHaveLength(3);
+  });
+
   it('removing a project discards its chats’ pending proposals', async () => {
     const api = new MockApiClient({ delayMs: 0 });
     const [a] = (await api.listProjects()).filter((p) => p.inGitRepo);

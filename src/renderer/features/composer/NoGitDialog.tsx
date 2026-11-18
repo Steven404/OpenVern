@@ -21,7 +21,7 @@ export interface NoGitDialogProps {
   onAuto: () => void;
 }
 
-const NO_GIT_HISTORY = `OpenVern can undo each of the last ${LIMITS.autoUndoTurns} turns in this chat, but there is no other history to go back to.`;
+const NO_GIT_HISTORY = `OpenVern can undo each of the last ${LIMITS.autoUndoTurns} sets of edits in this chat, but there is no other history to go back to.`;
 
 const COPY = {
   'turn-on': {
@@ -42,7 +42,7 @@ const COPY = {
   'move-hidden': {
     title: 'Keep this chat in Auto?',
     body: (project: string) =>
-      `This chat is in Auto. After the move to ${project}, the model's edits are written to your files as it works. OpenVern can undo each of the last ${LIMITS.autoUndoTurns} turns in this chat.`,
+      `This chat is in Auto. After the move to ${project}, the model's edits are written to your files as it works. OpenVern can undo each of the last ${LIMITS.autoUndoTurns} sets of edits in this chat.`,
     review: 'Switch to Review',
     auto: 'Keep Auto',
   },

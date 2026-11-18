@@ -672,6 +672,10 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
    *    builds the error; an unsafe store keeps its own) before any project file is touched, so a chat never has more
    *    than one unrecorded mutation.
    * 2. Then as `mutate`, except for the failed save after `diskChanged()` above.
+   * BLOBS OUTLIVE THE SAVED STORE (invariant): a stored original is deleted only once a store that no longer references
+   * it has been saved, here, right after that save. Until then the last saved store (what a restart reads) may still
+   * offer Undo from it. While a store is unsaved nothing is collected, so every blob that either the saved store or
+   * the unsaved one references stays. `fn` never collects, except to drop a blob that only its own failed write added.
    */
   async function mutateFiles<T>(
     chatId: Id,
@@ -692,15 +696,18 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
       const value = await fn(store, () => {
         changed = true;
       });
+      let saved = true;
       try {
         await save(chatId, file, store);
-        return { value, saved: true };
       } catch (err) {
         if (!changed) throw err;
+        saved = false;
         unsaved.set(chatId, store);
         storeLogger.warn(`changes: a project file changed but the change history could not be saved: ${String(err)}`);
-        return { value, saved: false };
       }
+      // Never throws (`collectBlobs` catches): the operation's result stands.
+      if (saved) await collectBlobs(chatId, store);
+      return { value, saved };
     });
   }
 
@@ -740,7 +747,10 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
     clearPending(store);
   }
 
-  /** Deletes the blobs no batch references any more. Under the store lock only. */
+  /**
+   * Deletes the blobs no batch of `store` references any more. Under the store lock only, and only with a store that
+   * is saved (see BLOBS OUTLIVE THE SAVED STORE in `mutateFiles`).
+   */
   const collectBlobs = (chatId: Id, store: Store): Promise<void> =>
     blobsFor(chatId)
       .collect(referencedBlobs(store))
@@ -986,7 +996,8 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
           // The project file has changed: from here on nothing may throw (WRITES ARE NEVER HIDDEN).
           diskChanged();
         } catch (err) {
-          // The store is unchanged; drop a blob that only this failed write referenced.
+          // Drop a blob that only this failed write referenced. `store` is still exactly the saved store (an unsaved
+          // one was flushed first and nothing has been recorded yet), so no blob it references can go.
           await collectBlobs(chatId, store);
           if (err instanceof CoreError) throw err;
           deps.logger?.warn(`auto write: could not write ${rel}: ${String(err)}`);
@@ -994,7 +1005,8 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
         }
 
         // Record: the file's diff from before the turn to now, and what Undo will compare against. None of this throws:
-        // `blobs.get` returns null on failure, `diffFile` is pure and `collectBlobs` catches.
+        // `blobs.get` returns null on failure and `diffFile` is pure. The originals retention dropped are collected by
+        // `mutateFiles`, once this store is saved.
         const afterHash = nextBytes === null ? null : sha256(nextBytes);
         entry.afterHash = afterHash;
         // A binary original diffs as empty, as in a review proposal.
@@ -1026,7 +1038,6 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
         store.diskSeq = (store.diskSeq ?? 0) + 1;
         if (afterHash === null) forget(chatId, projectId, rel);
         else remember(chatId, projectId, rel, afterHash);
-        await collectBlobs(chatId, store);
 
         const base = current ? (current.text ?? '') : null;
         return { file: diffFile(rel, base, next), batchId: batch.id };
@@ -1124,7 +1135,7 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
     for (const p of restored) forget(chatId, batch.projectId ?? '', p);
     // A user's undo goes into the next note; a retry's doesn't (the retried message's note says it instead).
     if (by === 'user') store.undone = [...(store.undone ?? []), { restored, skipped }];
-    await collectBlobs(chatId, store);
+    // The batch's originals are collected by `mutateFiles`, once this store is saved.
     return undo;
   }
 
@@ -1216,8 +1227,14 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
           continue;
         }
 
-        const target = await resolveTarget(input.projectRoot, rec.path, deps.sandbox);
-        if (!target.ok || target.rel !== rec.path || target.root !== realRoot) {
+        // NOTHING THROWS PAST A WRITE (see `mutateFiles`): an earlier file may already be on disk, so every failure from
+        // here to the end of this file (resolving, the conflict check, building the text, the write) refuses this file
+        // as `blocked`, and the apply goes on and is recorded.
+        const target = await resolveTarget(input.projectRoot, rec.path, deps.sandbox).catch((err) => {
+          deps.logger?.warn(`apply: could not resolve ${rec.path}: ${String(err)}`);
+          return null;
+        });
+        if (!target?.ok || target.rel !== rec.path || target.root !== realRoot) {
           conflicts.push({ path: rec.path, reason: 'blocked' });
           continue;
         }
@@ -1225,11 +1242,11 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
         // LOCK ORDER: the chat's store lock (held by `mutateFiles`), then this one file's write lock, released before the
         // next file. The hash check and the write happen under it, so an auto write in another chat can't slip in.
         const outcome = await withWriteLock(target.abs, async (): Promise<ApplyConflictReason | null> => {
-          const check = await checkConflict(input.projectRoot, rec, change.kind, pin);
-          if ('reason' in check) return check.reason;
-          rejectedHunks += rejected;
-          skippedHunks += undecided;
           try {
+            const check = await checkConflict(input.projectRoot, rec, change.kind, pin);
+            if ('reason' in check) return check.reason;
+            rejectedHunks += rejected;
+            skippedHunks += undecided;
             const text = change.kind === 'delete' ? null : applyHunks(rec.baseContent, rec.content, accepted);
             if (text !== null) await fs.mkdir(path.dirname(check.abs), { recursive: true });
             await deps.beforeWrite?.({ op: 'apply', chatId: input.chatId, path: rec.path });
@@ -1248,6 +1265,9 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
             deps.logger?.warn(`apply: could not write ${rec.path}: ${String(err)}`);
             return 'blocked';
           }
+        }).catch((err): ApplyConflictReason => {
+          deps.logger?.warn(`apply: could not lock ${rec.path}: ${String(err)}`);
+          return 'blocked';
         });
         if (outcome !== null) {
           conflicts.push({ path: rec.path, reason: outcome });
@@ -1277,9 +1297,8 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
         ...(tooLarge.length > 0 ? { tooLarge } : {}),
       });
       if (written.length > 0 || conflicts.length > 0) {
+        // Auto batches may drop off the list; `mutateFiles` collects their originals once this store is saved.
         store.applied = [...store.applied, batch].slice(-MAX_APPLIED);
-        // Auto batches may have dropped off the list: their originals are no longer needed.
-        await collectBlobs(input.chatId, store);
       }
       if (written.length > 0) store.diskSeq = (store.diskSeq ?? 0) + 1;
       clearPending(store);
@@ -1469,27 +1488,36 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
         store.lastMode = mode;
         // Batches past retention or written into another project can't be undone; they are left as they are. A batch
         // closed by a move is undone like any other of the turn in this project.
-        const batches = store.applied.filter(
-          (b) =>
-            b.source === 'auto' &&
-            b.turnId === turnId &&
-            !b.undo &&
-            b.undoData !== undefined &&
-            b.projectId === projectId,
-        );
-        let result: { batchId: Id; undo: BatchUndo } | null = null;
+        // NEWEST FIRST (invariant): a move splits a turn's writes into several batches, and two of them can hold the
+        // same file (the pinned turn wrote it again after the move). Each batch's entry expects the bytes its own write
+        // left, which only holds once every later write of that file has been undone, so the batches are undone in the
+        // reverse of the order they were opened in (`applied` is in that order). Oldest first would skip the first
+        // write as `changed_since` and then restore its bytes from the second one's original.
+        const batches = store.applied
+          .filter(
+            (b) =>
+              b.source === 'auto' &&
+              b.turnId === turnId &&
+              !b.undo &&
+              b.undoData !== undefined &&
+              b.projectId === projectId,
+          )
+          .reverse();
         const project = { root: projectRoot, real: batches.length > 0 ? await pinRoot(projectRoot) : null };
-        for (const batch of batches) {
-          const undo = await undoInStore(chatId, project, store, batch, 'retry', diskChanged);
+        const undos: BatchUndo[] = [];
+        for (const batch of batches) undos.push(await undoInStore(chatId, project, store, batch, 'retry', diskChanged));
+        const last = undos.at(-1);
+        const oldest = batches.at(-1);
+        let result: { batchId: Id; undo: BatchUndo } | null = null;
+        if (last && oldest) {
+          // One report per path: a file any batch had to skip is reported as skipped (the reason of the newest batch
+          // that skipped it), so the model reads it again; the others are restored.
+          const skipped = new Map<string, BatchUndo['skipped'][number]>();
+          for (const u of undos) for (const s of u.skipped) if (!skipped.has(s.path)) skipped.set(s.path, s);
+          const restored = new Set(undos.flatMap((u) => u.restored).filter((p) => !skipped.has(p)));
           result = {
-            batchId: batch.id,
-            undo: result
-              ? {
-                  ...undo,
-                  restored: [...result.undo.restored, ...undo.restored].sort(),
-                  skipped: [...result.undo.skipped, ...undo.skipped].sort(byPath),
-                }
-              : undo,
+            batchId: oldest.id,
+            undo: { ...last, restored: [...restored].sort(), skipped: [...skipped.values()].sort(byPath) },
           };
         }
         // The retry starts over: the model must read again before overwriting anything, in every project.

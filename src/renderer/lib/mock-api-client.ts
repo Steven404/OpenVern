@@ -460,7 +460,8 @@ export class MockApiClient implements ApiClient {
         chat.messages.splice(lastUser + 1);
       }
 
-      const useTools = chat.projectId !== null && (info?.supportsTools ?? true);
+      // The turn's pinned project, not the chat's live one: a move during the run must not take the tools away.
+      const useTools = turnProjectId !== null && (info?.supportsTools ?? true);
       const edit = useTools && input?.text.includes('[mock:edit]') === true;
       const auto = mode === 'auto';
       const steps: { text: string; toolCalls: ToolCall[]; stages?: boolean; writes?: boolean }[] = edit
@@ -875,17 +876,20 @@ export class MockApiClient implements ApiClient {
     );
   }
 
-  /** Before a retry: undo every auto batch of the turn written into the turn's project that isn't undone yet. */
+  /**
+   * Before a retry: undo every auto batch of the turn written into the turn's project that isn't undone yet, newest
+   * first like the server (a move can split a turn into batches that hold the same file). Each path is reported once.
+   */
   private undoTurn(chatId: Id, turnId: Id, projectId: Id | null): { batchId: Id; undo: BatchUndo } | null {
-    const batches = (this.applied.get(chatId) ?? []).filter(
-      (b) => b.source === 'auto' && b.turnId === turnId && !b.undo && b.projectId === (projectId ?? undefined),
-    );
+    const batches = (this.applied.get(chatId) ?? [])
+      .filter((b) => b.source === 'auto' && b.turnId === turnId && !b.undo && b.projectId === (projectId ?? undefined))
+      .reverse();
     let result: { batchId: Id; undo: BatchUndo } | null = null;
     for (const batch of batches) {
       const undo = this.restore(chatId, batch, 'retry');
       result = {
         batchId: batch.id,
-        undo: result ? { ...undo, restored: [...result.undo.restored, ...undo.restored].sort() } : undo,
+        undo: result ? { ...undo, restored: [...new Set([...result.undo.restored, ...undo.restored])].sort() } : undo,
       };
     }
     return result;

@@ -232,3 +232,73 @@ describe('Undo rechecks the chat’s project under the store lock', () => {
     expect((await getChanges(chatId)).applied[0]).not.toHaveProperty('undo');
   });
 });
+
+describe('a retry of a turn split by a move', () => {
+  it('undoes the turn’s batches newest first, so a file the pinned turn wrote twice in A goes back to missing', async () => {
+    const R1 = 'first attempt\n';
+    const R2 = 'second write, after the move\n';
+    const created = await call('/api/chats', {
+      method: 'POST',
+      json: { projectId: projectA, model: MODEL, editMode: 'auto', expectedInGitRepo: false },
+    });
+    const chatId = ((await created.json()) as { id: string }).id;
+    const hold = gate();
+    let calls = 0;
+    vi.spyOn(provider, 'stream').mockImplementation(async function* () {
+      calls += 1;
+      const tool = (id: string, name: string, args: unknown) => ({
+        type: 'tool_call' as const,
+        call: { id, name, argsJson: JSON.stringify(args) },
+      });
+      if (calls === 1) {
+        // The turn creates overlap.txt in A.
+        yield tool('c1', 'write_file', { path: 'overlap.txt', content: R1 });
+      } else if (calls === 2) {
+        // Still running and pinned to A after the move: it reads the file again and overwrites it.
+        await hold.hold();
+        yield tool('c2', 'read_file', { path: 'overlap.txt' });
+      } else if (calls === 3) {
+        yield tool('c3', 'write_file', { path: 'overlap.txt', content: R2 });
+      } else {
+        yield { type: 'text_delta', delta: 'Done.' };
+        yield { type: 'finish', reason: 'stop' };
+        return;
+      }
+      yield { type: 'finish', reason: 'tool_calls' };
+    });
+    const sent = Promise.resolve(
+      call(`/api/chats/${chatId}/messages`, {
+        method: 'POST',
+        json: { text: 'go', model: MODEL, attachmentIds: [], expectedEditMode: 'auto', expectedProjectId: projectA },
+      }),
+    ).then(collectEvents);
+    await hold.entered;
+    try {
+      expect((await move(chatId, projectA, projectB)).status).toBe(200);
+    } finally {
+      hold.open();
+    }
+    expect(types(await sent)).not.toContain('error');
+    const file = path.join(dirA, 'overlap.txt');
+    expect(await readFile(file, 'utf8')).toBe(R2);
+    expect(await exists(path.join(dirB, 'overlap.txt'))).toBe(false);
+    // The move split the turn: two batches in A, both holding overlap.txt.
+    expect((await getChanges(chatId)).applied.map((b) => b.written.map((f) => f.path))).toEqual([
+      ['overlap.txt'],
+      ['overlap.txt'],
+    ]);
+
+    expect((await move(chatId, projectB, projectA)).status).toBe(200);
+    const events = await collectEvents(await retry(chatId, projectA));
+    expect(types(events)).not.toContain('error');
+    // Undone in full: the file the turn created is gone, not left with the first write's bytes.
+    expect(await exists(file)).toBe(false);
+    const applied = (await getChanges(chatId)).applied;
+    expect(applied.map((b) => b.undo)).toEqual([
+      expect.objectContaining({ by: 'retry', restored: ['overlap.txt'], skipped: [] }),
+      expect.objectContaining({ by: 'retry', restored: ['overlap.txt'], skipped: [] }),
+    ]);
+    const notice = events.find((e) => e.type === 'assistant_end');
+    expect(notice).toMatchObject({ message: { notice: "Undid the previous attempt's edits (1 file)." } });
+  });
+});

@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { LIMITS } from '@shared/constants';
 import type { DiffHunk, FileChange, HunkDecision } from '@shared/types';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { sampleProposal } from '../../renderer/lib/mock-changes';
 import { modeChangedNote, tooLargeToReviewText } from '../agent/edit-mode';
 import type { StorageLogger } from '../storage/json-file';
@@ -663,6 +663,45 @@ describe('diskSeq', () => {
     await s.tools().stage('b.txt', 'y\n');
     await expect(s.apply(p?.revision ?? 0, await s.allOf('accepted'))).rejects.toMatchObject({ code: 'changes_stale' });
     expect((await s.svc.get(CHAT)).diskSeq).toBe(0);
+  });
+});
+
+describe('apply: a failure after a file was written', () => {
+  it('a later file whose check throws is blocked, and the earlier write is recorded', async () => {
+    const s = await setup();
+    await s.write('z.txt', 'z\n');
+    await s.tools().stage('a.txt', 'new\n');
+    await s.tools().stage('z.txt', 'Z\n');
+    const p = await s.pending();
+    const decisions = await s.allOf('accepted');
+    // z.txt can't be read any more: its conflict check (sorted after a.txt, so after a.txt was written) throws EACCES.
+    // Root ignores permission bits, so there the read is made to fail the same way.
+    const z = path.join(s.root, 'z.txt');
+    await fs.chmod(z, 0o000);
+    const asRoot = process.getuid?.() === 0;
+    const realReadFile = fs.readFile.bind(fs);
+    const spy = asRoot
+      ? vi.spyOn(fs, 'readFile').mockImplementation(((file: Parameters<typeof fs.readFile>[0], ...rest: unknown[]) => {
+          if (file === z) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+          return (realReadFile as (...a: unknown[]) => Promise<Buffer>)(file, ...rest);
+        }) as typeof fs.readFile)
+      : undefined;
+    try {
+      const res = await s.apply(p?.revision ?? -1, decisions);
+      expect(res.batch.written.map((f) => f.path)).toEqual(['a.txt']);
+      expect(res.batch.conflicts).toEqual([{ path: 'z.txt', reason: 'blocked' }]);
+    } finally {
+      spy?.mockRestore();
+      await fs.chmod(z, 0o644);
+    }
+    expect(await s.read('a.txt')).toBe('new\n');
+    expect(await s.read('z.txt')).toBe('z\n');
+    // Recorded and saved: a fresh service reading the store file sees the apply.
+    const fresh = createChangesService({ dataDir: s.dataDir });
+    const saved = await fresh.get(CHAT);
+    expect(saved.diskSeq).toBe(1);
+    expect(saved.pending).toBeNull();
+    expect(saved.applied.map((b) => b.written.map((f) => f.path))).toEqual([['a.txt']]);
   });
 });
 
