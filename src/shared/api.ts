@@ -92,6 +92,14 @@ export const APPLY_PROJECT_CHANGED = 'This chat moved to another project. Check 
 /** The 409 `conflict` message of a request that would run Auto in a folder its client showed as inside Git. */
 export const PROJECT_NOT_IN_GIT =
   "This project's folder is no longer a Git repository. Check the warning and try again.";
+/**
+ * The `conflict` of a retry whose turn wrote files, still undoable, into another project that still exists: a retry
+ * undoes the turn's writes first, which it can only do in the project they were written to. Nothing is stored.
+ */
+export const RETRY_OTHER_PROJECT =
+  "This turn's edits were written in another project, so retrying it here can't undo them. Move the chat back to that project to retry it, or send a new message.";
+/** The 409 `conflict` message of a request that needs the chat's project when the chat has none (or it was removed). */
+export const CHAT_HAS_NO_PROJECT = 'This chat has no project to write to.';
 
 /** `PUT /settings/openrouter-key` */
 export const setOpenRouterKeyBody = z.object({ apiKey: z.string().trim().min(1) });

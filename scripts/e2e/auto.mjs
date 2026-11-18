@@ -13,6 +13,10 @@
 //   7  Reload: the chat is still Review; a send or retry expecting Auto is refused (409) and stores nothing; a send or a
 //      move naming no mode in an Auto chat, and turning Auto on for a project the chat isn't in, are refused (409);
 //      a new chat in the project shows Review; the History lists the auto batches with their undo results.
+//   8  Move across projects: an Auto turn in A is stopped after its write; the chat moves to a second fixture B (no
+//      Git, "Keep Auto"): its card stops offering Undo without a reload; Retry is refused (the turn's writes are in A)
+//      and stores nothing; back in A the card offers Undo again, Undo removes the file, and Retry then writes a new
+//      batch.
 // Same env as smoke.mjs: E2E_MODE, E2E_BASE, E2E_OUT, CDP_PORT. Run through the runners (after edits.mjs).
 
 import { spawnSync } from 'node:child_process';
@@ -31,6 +35,11 @@ const electron = MODE === 'electron';
 const PROJECT = join(OUT, 'fixtures', 'auto-proj');
 const PROJECT_NAME = 'auto-proj';
 mkdirSync(PROJECT, { recursive: true });
+// A second project outside Git, for moving a chat across projects (step 8).
+const PROJECT_B = join(OUT, 'fixtures', 'auto-proj-b');
+const PROJECT_B_NAME = 'auto-proj-b';
+mkdirSync(PROJECT_B, { recursive: true });
+const fileB = (name) => join(PROJECT_B, name);
 const file = (name) => join(PROJECT, name);
 const original = {
   'a.txt': 'alpha line\nsecond a\n',
@@ -44,6 +53,8 @@ const MARKER = ' // edited by the fake provider';
 const EDIT_MODE_CHANGED = "This chat's edit mode changed. Check Review / Auto and send again.";
 const CHAT_PROJECT_CHANGED = 'This chat moved to another project. Check Review / Auto and try again.';
 const PROJECT_NOT_IN_GIT = "This project's folder is no longer a Git repository. Check the warning and try again.";
+const RETRY_OTHER_PROJECT =
+  "This turn's edits were written in another project, so retrying it here can't undo them. Move the chat back to that project to retry it, or send a new message.";
 const countOf = (text, part) => text.split(part).length - 1;
 const originalBytes = Object.fromEntries(Object.keys(original).map((n) => [n, bytes(n)]));
 const sameBytes = (name) => existsSync(file(name)) && bytes(name).equals(originalBytes[name]);
@@ -171,6 +182,46 @@ async function openDiff() {
   }
   await waitFor(`!!document.querySelector('section[aria-label="Review changes"]') && ${still}`, 'diff surface');
 }
+const chatOptions = `document.querySelector('button[aria-label="Chat options"]')`;
+/** Opens a Radix submenu: a click usually does it; ArrowRight is the keyboard fallback. */
+async function openSubmenu(label, itemText) {
+  await click(byText('[role=menuitem]', label), label);
+  const open = `!!${byText('[role=menuitemradio]', itemText, true)}`;
+  try {
+    await waitFor(open, 'submenu', 1200);
+  } catch {
+    await key('ArrowRight');
+    await waitFor(open, 'submenu (keyboard)');
+  }
+}
+/** The submenu item is in the DOM with a box that did not move since the previous poll. */
+const itemSettled = (text) => `(() => {
+  const e = ${byText('[role=menuitemradio]', text, true)};
+  if (!e) return false;
+  const r = e.getBoundingClientRect();
+  const box = [r.x, r.y, r.width, r.height].join(',');
+  const settled = r.width > 0 && r.height > 0 && window.__e2eSettleBox === box;
+  window.__e2eSettleBox = box;
+  return settled;
+})()`;
+/** Moves the open chat from the header's "Move to project" submenu (Radix may close it before the click: 3 tries). */
+async function moveChatTo(projectName) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await waitFor(`${noMenu} && ${still}`, 'page still');
+      await click(chatOptions, 'Chat options');
+      await waitFor(`!!${byText('[role=menuitem]', 'Move to project')}`, 'chat options menu');
+      await openSubmenu('Move to project', projectName);
+      await ev('delete window.__e2eSettleBox');
+      await waitFor(itemSettled(projectName), `${projectName} settled in submenu`, 1500);
+      await click(byText('[role=menuitemradio]', projectName, true), projectName);
+      return;
+    } catch (err) {
+      if (attempt === 3) throw err;
+      await key('Escape').catch(() => {});
+    }
+  }
+}
 const history = `document.querySelector('section[aria-label="History"]')`;
 const historyEntries = `[...(${history}?.querySelectorAll('[data-testid=applied-batch]') ?? [])]`;
 
@@ -197,8 +248,10 @@ if (!(await api('/settings')).body.openRouter.configured) {
   const r = await api('/settings/openrouter-key', 'PUT', { apiKey: 'sk-or-v1-0123456789abcdefa1b2' });
   if (r.status !== 200) throw new Error(`could not set the fake key: ${r.status}`);
 }
-let project = (await api('/projects')).body.find((p) => p.rootPath.endsWith(PROJECT_NAME));
+let project = (await api('/projects')).body.find((p) => p.rootPath.endsWith(`/${PROJECT_NAME}`));
 if (!project) project = (await api('/projects', 'POST', { rootPath: PROJECT })).body;
+let projectB = (await api('/projects')).body.find((p) => p.rootPath.endsWith(`/${PROJECT_B_NAME}`));
+if (!projectB) projectB = (await api('/projects', 'POST', { rootPath: PROJECT_B })).body;
 await reload();
 await waitFor(`document.querySelector('button[aria-label^="Model:"]')`, 'model picker');
 
@@ -571,6 +624,92 @@ try {
   await waitFor(`document.body.innerText.includes('What are we building')`, 'new chat');
   await newChatIn(PROJECT_NAME);
   check('7 opening New chat again starts at Review', (await chipMode()) === 'review');
+
+  // ------------------------------------------------------------------------- 8 move across projects
+  {
+    check(
+      '8 setup: the second fixture is outside Git',
+      (await api('/projects')).body.find((p) => p.id === projectB.id)?.inGitRepo === false,
+    );
+    // An Auto turn in A writes m8.txt and is stopped during its closing text, so Retry is offered.
+    await pickMode('auto');
+    check('8 the warning for A is not asked again', await ev(`!${dialog}`));
+    await send('Move me [fake:write=m8.txt] [fake:slow]');
+    await waitFor(`location.hash.startsWith('#/chat/')`, 'step 8 chat');
+    await waitFor(`${CARDS}.length === 1`, 'step 8 Auto card', 30000);
+    await waitFor(
+      `[...document.querySelectorAll('article')].at(-1)?.innerText.includes('The README')`,
+      'step 8 closing text streaming',
+      30000,
+    );
+    await click(`document.querySelector('button[aria-label="Stop"]')`, 'Stop');
+    await waitFor(`!!${byText('article button', 'Retry', true)} && ${settled}`, 'Retry after stopping', 20000);
+    const chat8 = await chatId();
+    const [b8] = await autoBatches();
+    check('8 the turn wrote m8.txt in A', existsSync(file('m8.txt')) && b8?.undoable === true);
+
+    // Move to B from the header menu: B is outside Git and not acknowledged, so the no-Git dialog asks.
+    await moveChatTo(PROJECT_B_NAME);
+    await waitFor(`!!${dialog}`, 'no-Git dialog for B');
+    await click(`document.querySelector('[data-testid=no-git-turn-on-auto]')`, 'Keep Auto');
+    await waitFor(`!${dialog}`, 'dialog closed');
+    await waitUntil(async () => (await chatNow()).projectId === projectB.id, 'chat moved to B');
+    await waitFor(`${lastCard}?.getAttribute('data-undo') === 'unavailable'`, 'card without Undo', 15000);
+    check(
+      '8 after the move the card reads "Undo no longer available" without a reload',
+      (await lastCardText()).includes('Undo no longer available'),
+      (await lastCardText()).replace(/\n/g, ' | '),
+    );
+    await shot('moved-to-b');
+
+    // Retry in B is refused: the turn's writes are still undoable in A. Nothing is stored, undone or written.
+    const before8 = await chatNow();
+    await waitFor(`!!${byText('article button', 'Retry', true)} && ${settled} && ${chipReady}`, 'Retry offered in B');
+    await click(byText('article button', 'Retry', true), 'Retry (refused)');
+    await waitFor(`document.body.innerText.includes(${JSON.stringify(RETRY_OTHER_PROJECT)})`, 'retry refused', 15000);
+    await waitFor(settled, 'refused retry settled', 15000);
+    check('8 the refused retry shows why', true);
+    check('8 nothing was written in B', !existsSync(fileB('m8.txt')));
+    check('8 m8.txt is still in A', existsSync(file('m8.txt')));
+    const after8 = await chatNow();
+    check('8 the refusal stored nothing', after8.messages.length === before8.messages.length && after8.id === chat8);
+    const [b8After] = await autoBatches();
+    check('8 the batch was not undone', b8After?.id === b8?.id && b8After.undo === undefined);
+    await waitFor(
+      `${CARDS}.length === 1 && ${lastCard}.getAttribute('data-batch-id') === ${JSON.stringify(b8?.id)} && !!${byText('article button', 'Retry', true)}`,
+      'stopped attempt and its card back',
+      15000,
+    );
+    check('8 after settling, the stopped attempt and its card are back', true);
+    await shot('retry-refused');
+
+    // Back in A (acknowledged, so no dialog): the card offers Undo again without a reload.
+    await moveChatTo(PROJECT_NAME);
+    await waitUntil(async () => (await chatNow()).projectId === project.id, 'chat moved back to A');
+    await waitFor(`${lastCard}?.getAttribute('data-undo') === 'undoable'`, 'Undo offered again', 15000);
+    check('8 back in A the card offers Undo again without a reload', true);
+    await undoLastCard();
+    check('8 Undo in A removes m8.txt', !existsSync(file('m8.txt')));
+
+    // Retry is allowed now and writes into a new batch.
+    const batchesBefore8 = (await autoBatches()).length;
+    await waitFor(`!!${byText('article button', 'Retry', true)} && ${settled} && ${chipReady}`, 'Retry offered in A');
+    await click(byText('article button', 'Retry', true), 'Retry');
+    const retried8 = await waitUntil(
+      async () => {
+        const all = await autoBatches();
+        return all.length > batchesBefore8 ? all.at(-1) : null;
+      },
+      'the retry wrote a new batch',
+      30000,
+    );
+    await waitFor(`${settled} && ${isIdle}`, 'step 8 retry settled', 30000);
+    check(
+      '8 the allowed retry writes m8.txt again, into a new batch',
+      existsSync(file('m8.txt')) && retried8.id !== b8?.id && retried8.written.map((f) => f.path).join() === 'm8.txt',
+    );
+    check('8 still nothing in B', !existsSync(fileB('m8.txt')));
+  }
 } catch (err) {
   console.log(`ERROR ${err.stack}`);
   results.push(false);

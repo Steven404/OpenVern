@@ -2,7 +2,8 @@
 
 Desktop app to chat with LLMs about your projects. The model can read a project and change it through tool calls.
 In Review mode you review every change as a diff before anything is written to disk; in Auto mode the edits are
-written as the model works, and you can undo each turn.
+written as the model works, and you can undo recent turns (the last 20 in each chat; a file you changed since is left
+as it is).
 
 OpenVern talks to [OpenRouter](https://openrouter.ai), so you need an
 [OpenRouter API key](https://openrouter.ai/keys). Chats, projects and settings are stored in local files, and there is
@@ -25,11 +26,12 @@ no telemetry.
   disk until you apply. Review each file as a unified or split diff, accept or reject each hunk, then apply the
   accepted ones.
 - **Auto mode with Undo.** Switch a project chat from Review to Auto with the chip next to the model picker. In Auto
-  the model's edits, new files and deletes are written as it works, inside the same sandbox, and each turn shows an
-  "Edits applied · Auto" card with an Undo button. Undo puts back the files that are still as the turn left them and
-  names the ones you changed since. New chats start in Review, a mode change applies from your next message, and
-  turning Auto on for a folder that isn't a Git repository asks first. The Diff panel lists every turn's edits in its
-  History.
+  the model's edits, new files and deletes are written as it works, inside the same sandbox, and a turn that wrote
+  files shows an "Edits applied · Auto" card. Undo is offered for the last 20 Auto turns in the chat while it is in the
+  project they were written to: it puts back the files that are still as the turn left them and names the ones you
+  changed since. New chats start in Review, a mode change applies from your next message, and turning Auto on for a
+  folder that isn't a Git repository asks first. The Diff panel's History lists the most recent edits; a diff too large
+  to show is listed without it.
 - **Sandboxed file access.** Tools are limited to the project folder and skip `.env` files, keys and `.git`. A file
   you changed on disk after a proposal is skipped, never merged.
 - **Files panel.** A read-only tree of the project with a filter, a file viewer and an Attach button.

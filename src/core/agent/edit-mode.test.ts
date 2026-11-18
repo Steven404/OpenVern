@@ -96,3 +96,60 @@ describe('edit wording contracts', () => {
     ]).toMatchSnapshot();
   });
 });
+
+describe('a retried turn’s mode line', () => {
+  const auto = w.modeChangedNote('auto');
+  const review = w.modeChangedNote('review');
+  const rest = '[OpenVern] Since your last reply the user undid your edits from an earlier turn:';
+  it.each([
+    ['no note, mode changed since', undefined, { mode: 'auto', lastMode: 'review' }, auto],
+    ['no note, same mode', undefined, { mode: 'review', lastMode: 'review' }, undefined],
+    ['line only, retried in the mode before the turn', auto, { mode: 'review', lastMode: 'auto' }, undefined],
+    ['line only, retried in the announced mode', auto, { mode: 'auto', lastMode: 'auto' }, auto],
+    [
+      'line + rest, retried in the mode before the turn',
+      `${review}\n\n${rest}`,
+      { mode: 'auto', lastMode: 'review' },
+      rest,
+    ],
+    [
+      'line + rest, retried in the announced mode',
+      `${auto}\n\n${rest}`,
+      { mode: 'auto', lastMode: 'auto' },
+      `${auto}\n\n${rest}`,
+    ],
+    ['rest only, mode changed since', rest, { mode: 'auto', lastMode: 'review' }, `${auto}\n\n${rest}`],
+    ['rest only, same mode', rest, { mode: 'review', lastMode: 'review' }, rest],
+  ] as const)('%s', (_, note, o, expected) => {
+    expect(w.withModeLine(note, { ...o, firstTurn: false })).toBe(expected);
+  });
+  it('the first turn never gets a line, and loses a stale one', () => {
+    expect(w.withModeLine(undefined, { mode: 'auto', lastMode: 'review', firstTurn: true })).toBeUndefined();
+    expect(w.withModeLine(`${auto}\n\n${rest}`, { mode: 'review', lastMode: 'review', firstTurn: true })).toBe(rest);
+  });
+});
+
+describe('diagnostics shared by the change service and the edit tools', () => {
+  it('keep their wording', () => {
+    expect(w.newContentTooLargeText('a.ts')).toBe('The new content of a.ts is over 256 KB.');
+    expect(w.notUtf8Text('a.ts')).toBe('a.ts: only UTF-8 text can be written.');
+    expect(w.placeholderContentText('a.ts')).toBe(
+      'The content for a.ts contains a «redacted:…» placeholder. Writing it back would destroy the real secret; use edit_file around it instead.',
+    );
+    expect(w.binaryTargetText('a.ts')).toBe("a.ts is a binary file; it can't be edited or overwritten.");
+    expect(w.binaryFileText('a.ts')).toBe(
+      'a.ts is a binary file (or not valid UTF-8) and cannot be edited or overwritten.',
+    );
+  });
+  it('pin the final-bytes limit and the unsaved-history line', () => {
+    expect(w.writtenTooLargeText('auto', 'a.ts', 266600)).toBe(
+      'a.ts would be 260 KB on disk (its CRLF line endings are kept), over the 256 KB limit for a write.',
+    );
+    expect(w.writtenTooLargeText('review', 'a.ts', 266600)).toBe(
+      'a.ts would be 260 KB on disk (its CRLF line endings are kept), over the 256 KB limit for a proposal.',
+    );
+    expect(w.autoUnsavedText()).toBe(
+      "OpenVern couldn't save this edit to the chat's change history yet. It is on disk, and Undo covers it only while the app stays open.",
+    );
+  });
+});

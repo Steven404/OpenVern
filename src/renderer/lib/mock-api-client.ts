@@ -9,6 +9,7 @@ import {
   EDIT_MODE_CHANGED,
   PROJECT_NOT_IN_GIT,
   PROPOSALS_OTHER_PROJECT,
+  RETRY_OTHER_PROJECT,
   type UndoBatchResponse,
 } from '@shared/api';
 import { sniffAttachmentBytes } from '@shared/attachment-sniff';
@@ -134,7 +135,8 @@ const SAMPLE_CODE = [
 ].join('\n');
 
 /** A stored batch. `projectId`: the project an auto turn wrote into; never sent (as on the server). */
-type MockBatch = AppliedBatch & { projectId?: Id };
+/** `closed`: the chat's project changed after the batch's last write, so no later write joins it (like the server). */
+type MockBatch = AppliedBatch & { projectId?: Id; closed?: boolean };
 
 /** The server's messages for an undo it refuses (`POST …/batches/:batchId/undo`). */
 const UNDO_RUNNING = 'Wait for the response to finish before undoing edits.';
@@ -249,7 +251,14 @@ export class MockApiClient implements ApiClient {
   }
   async deleteProject(id: Id) {
     this.projects = this.projects.filter((p) => p.id !== id);
-    for (const c of this.chats) if (c.projectId === id) c.projectId = null;
+    // Like the server: each chat of the project loses its pending proposals, its Auto state is reset, and it is
+    // detached.
+    for (const c of this.chats) {
+      if (c.projectId !== id) continue;
+      this.changes.set(c.id, null);
+      this.closeBatches(c.id);
+      c.projectId = null;
+    }
   }
 
   // ── chats ─────────────────────────────────────────────────────────────────
@@ -331,6 +340,8 @@ export class MockApiClient implements ApiClient {
     if (carriesAuto && nextMode === 'auto' && nextProject) this.checkAutoGit(nextProject, patch.expectedInGitRepo);
 
     if (patch.title !== undefined) c.title = patch.title.trim();
+    // Like the server: a move resets the chat's Auto state (its open batches are closed).
+    if (patch.projectId !== undefined && patch.projectId !== c.projectId) this.closeBatches(id);
     if (patch.projectId !== undefined) c.projectId = patch.projectId;
     // Any chat can be archived; a move keeps the flag.
     if (patch.archived !== undefined) c.archived = patch.archived;
@@ -432,8 +443,15 @@ export class MockApiClient implements ApiClient {
       } else {
         const lastUser = chat.messages.findLastIndex((m) => m.role === 'user');
         turnId = chat.messages[lastUser]?.id ?? '';
+        // Like the server: a retry whose turn's writes are still undoable in another project that still exists is
+        // refused before anything is undone or truncated.
+        if (this.writtenElsewhere(chatId, turnId, turnProjectId)) {
+          yield { type: 'error', error: errorInfo('conflict', RETRY_OTHER_PROJECT) };
+          yield { type: 'done' };
+          return;
+        }
         // Like the server: a retry first undoes what the previous attempt wrote, whatever mode the retry runs in.
-        const undone = this.undoTurn(chatId, turnId);
+        const undone = this.undoTurn(chatId, turnId, turnProjectId);
         if (undone) {
           yield { type: 'auto_batch_updated', batchId: undone.batchId };
           const n = undone.undo.restored.length;
@@ -553,7 +571,7 @@ export class MockApiClient implements ApiClient {
           if (step.writes) {
             const file = sampleProposal()[i];
             if (!file) continue;
-            const result = this.autoWrite(chatId, chat.projectId, turnId, msg.id, file);
+            const result = this.autoWrite(chatId, turnProjectId, turnId, msg.id, file);
             const tool: ToolMessage = {
               id: crypto.randomUUID(),
               role: 'tool',
@@ -788,18 +806,26 @@ export class MockApiClient implements ApiClient {
   }
 
   private batchOut(chatId: Id, batch: MockBatch): AppliedBatch {
-    const { projectId: _projectId, ...out } = batch;
+    const { projectId: _projectId, closed: _closed, ...out } = batch;
     return clone({ ...out, undoable: this.isUndoable(chatId, batch) });
   }
 
+  /** A move or a project removal: the chat's open auto batches are closed, so no later write joins them. */
+  private closeBatches(chatId: Id): void {
+    for (const b of this.applied.get(chatId) ?? []) if (b.source === 'auto' && !b.undo) b.closed = true;
+  }
+
   /**
-   * One write of an Auto turn: lands in the turn's open auto batch (created on its first write). `null` when the path
-   * has a pending Review proposal, which an Auto edit must not build on.
+   * One write of an Auto turn: lands in the turn's open auto batch in the turn's pinned project (created on its first
+   * write). `null` when the path has a pending Review proposal, which an Auto edit must not build on.
    */
   private autoWrite(chatId: Id, projectId: Id | null, turnId: Id, messageId: Id, file: FileChange): Id | null {
     if (this.changes.get(chatId)?.files.some((f) => f.path === file.path)) return null;
     const batches = this.applied.get(chatId) ?? [];
-    let batch = batches.find((b) => b.source === 'auto' && b.turnId === turnId && !b.undo);
+    let batch = batches.find(
+      (b) =>
+        b.source === 'auto' && b.turnId === turnId && b.projectId === (projectId ?? undefined) && !b.closed && !b.undo,
+    );
     if (!batch) {
       batch = {
         id: crypto.randomUUID(),
@@ -832,11 +858,37 @@ export class MockApiClient implements ApiClient {
     return undo;
   }
 
-  /** Before a retry: undo the turn's auto batch that isn't undone yet. */
-  private undoTurn(chatId: Id, turnId: Id): { batchId: Id; undo: BatchUndo } | null {
-    const batch = this.applied.get(chatId)?.find((b) => b.source === 'auto' && b.turnId === turnId && !b.undo);
-    if (!batch) return null;
-    return { batchId: batch.id, undo: this.restore(chatId, batch, 'retry') };
+  /**
+   * Whether the turn's auto writes are still undoable (not undone, within retention) in another project than
+   * `projectId` that still exists: a retry can't undo them there.
+   */
+  private writtenElsewhere(chatId: Id, turnId: Id, projectId: Id | null): boolean {
+    const autos = (this.applied.get(chatId) ?? []).filter((b) => b.source === 'auto');
+    return autos.some(
+      (b, i) =>
+        b.turnId === turnId &&
+        !b.undo &&
+        i >= autos.length - LIMITS.autoUndoTurns &&
+        b.projectId !== undefined &&
+        b.projectId !== projectId &&
+        this.projects.some((p) => p.id === b.projectId),
+    );
+  }
+
+  /** Before a retry: undo every auto batch of the turn written into the turn's project that isn't undone yet. */
+  private undoTurn(chatId: Id, turnId: Id, projectId: Id | null): { batchId: Id; undo: BatchUndo } | null {
+    const batches = (this.applied.get(chatId) ?? []).filter(
+      (b) => b.source === 'auto' && b.turnId === turnId && !b.undo && b.projectId === (projectId ?? undefined),
+    );
+    let result: { batchId: Id; undo: BatchUndo } | null = null;
+    for (const batch of batches) {
+      const undo = this.restore(chatId, batch, 'retry');
+      result = {
+        batchId: batch.id,
+        undo: result ? { ...undo, restored: [...result.undo.restored, ...undo.restored].sort() } : undo,
+      };
+    }
+    return result;
   }
 
   private chatChanges(chatId: Id): ChatChanges {

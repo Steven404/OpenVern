@@ -162,7 +162,6 @@ export function groupBlocks(blocks: Block[], { live }: { live: boolean }): TurnI
     else if (isVisibleText(b)) {
       flush();
       items.push(b);
-    } else {
     }
   }
   flush();

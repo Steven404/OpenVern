@@ -4,6 +4,7 @@ import {
   EDIT_MODE_CHANGED,
   PROJECT_NOT_IN_GIT,
   PROPOSALS_OTHER_PROJECT,
+  RETRY_OTHER_PROJECT,
 } from '@shared/api';
 import { LIMITS, NEW_CHAT_TITLE } from '@shared/constants';
 import type { AgentEvent } from '@shared/events';
@@ -1025,5 +1026,98 @@ describe('MockApiClient Auto mode', () => {
     const { api, autoChat } = await seeded();
     await api.deleteChat(autoChat.id);
     await expect(api.getChatChanges(autoChat.id)).rejects.toMatchObject({ status: 404 });
+  });
+});
+
+describe('MockApiClient: a project change resets Auto state, like the server', () => {
+  const MODEL = 'anthropic/claude-sonnet-5.5';
+  const sig = () => new AbortController().signal;
+
+  async function twoGitProjects() {
+    const api = new MockApiClient({ delayMs: 0 });
+    const [a, b] = (await api.listProjects()).filter((p) => p.inGitRepo);
+    if (!a || !b) throw new Error('seed needs two Git projects');
+    const chat = await api.createChat({ projectId: a.id, model: MODEL, editMode: 'auto' });
+    const move = (from: string, to: string) =>
+      api.updateChat(chat.id, {
+        projectId: to,
+        expectedEditMode: 'auto',
+        expectedProjectId: from,
+        expectedInGitRepo: true,
+      });
+    const send = (text = 'do it [mock:edit]') =>
+      api.sendMessage(chat.id, { text, attachmentIds: [], model: MODEL, expectedEditMode: 'auto' }, sig());
+    const retry = (projectId: string) =>
+      collect(api.retry(chat.id, { model: MODEL, expectedEditMode: 'auto', expectedProjectId: projectId }, sig()));
+    return { api, a, b, chat, move, send, retry };
+  }
+
+  it('a move closes the open batch; the in-flight turn keeps writing into its pinned project, in a new batch', async () => {
+    const { api, a, b, chat, move, send } = await twoGitProjects();
+    let moved = false;
+    for await (const e of send()) {
+      if (e.type === 'auto_batch_updated' && !moved) {
+        moved = true;
+        await move(a.id, b.id);
+      }
+    }
+    const inB = await api.getChatChanges(chat.id);
+    expect(inB.applied.map((x) => x.written.length)).toEqual([1, 2]);
+    expect(inB.applied.every((x) => !x.undoable)).toBe(true);
+    await move(b.id, a.id);
+    expect((await api.getChatChanges(chat.id)).applied.every((x) => x.undoable)).toBe(true);
+  });
+
+  it('a retry in another project is refused while the turn’s writes are undoable where they were written', async () => {
+    const { api, a, b, chat, move, send, retry } = await twoGitProjects();
+    await collect(send());
+    await move(a.id, b.id);
+    const before = (await api.getChat(chat.id)).messages;
+    const events = await retry(b.id);
+    expect(events).toEqual([
+      { type: 'error', error: expect.objectContaining({ code: 'conflict', message: RETRY_OTHER_PROJECT }) },
+      { type: 'done' },
+    ]);
+    expect((await api.getChat(chat.id)).messages).toEqual(before);
+    expect((await api.getChatChanges(chat.id)).applied[0]).not.toHaveProperty('undo');
+  });
+
+  it('a retry undoes every batch of the turn in its own project, and none in a removed one (which never blocks it)', async () => {
+    const { api, a, b, chat, move, send, retry } = await twoGitProjects();
+    let moved = false;
+    for await (const e of send()) {
+      if (e.type === 'auto_batch_updated' && !moved) {
+        moved = true;
+        await move(a.id, b.id);
+      }
+    }
+    await move(b.id, a.id);
+    // Both batches of the turn are in A (one closed by the move): a retry in A undoes them all.
+    const events = await retry(a.id);
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+    const applied = (await api.getChatChanges(chat.id)).applied;
+    expect(applied).toHaveLength(2);
+    expect(applied.every((x) => x.undo?.by === 'retry')).toBe(true);
+
+    // A later turn writes in A; the chat moves to B and A is removed: a retry in B undoes nothing of A.
+    await collect(send('again [mock:edit]'));
+    const latest = (await api.getChatChanges(chat.id)).applied.at(-1);
+    await move(a.id, b.id);
+    await api.deleteProject(a.id);
+    const again = await retry(b.id);
+    expect(again.some((e) => e.type === 'error' || e.type === 'auto_batch_updated')).toBe(false);
+    expect((await api.getChatChanges(chat.id)).applied.find((x) => x.id === latest?.id)).not.toHaveProperty('undo');
+  });
+
+  it('removing a project discards its chats’ pending proposals', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const [a] = (await api.listProjects()).filter((p) => p.inGitRepo);
+    if (!a) throw new Error('seed needs a Git project');
+    const chat = await api.createChat({ projectId: a.id, model: MODEL });
+    await collect(api.sendMessage(chat.id, { text: 'x [mock:edit]', attachmentIds: [], model: MODEL }, sig()));
+    expect((await api.getChatChanges(chat.id)).pending?.files).toHaveLength(3);
+    await api.deleteProject(a.id);
+    expect((await api.getChatChanges(chat.id)).pending).toBeNull();
+    expect((await api.getChat(chat.id)).projectId).toBeNull();
   });
 });

@@ -13,6 +13,7 @@
 //   `history.ts` still synthesises "Interrupted" results for legacy/dangling calls. A tool call that wrote to disk
 //   (Auto) keeps its real result even when Stop arrived meanwhile.
 
+import { CHAT_PROJECT_CHANGED, RETRY_OTHER_PROJECT } from '@shared/api';
 import {
   LIMITS,
   MAX_AGENT_STEPS,
@@ -59,7 +60,7 @@ import type {
   RunTurnInput,
   TerminalReadBroker,
 } from '../types';
-import { EDIT_TOOL_NAMES, retryUndoNote, retryUndoNotice } from './edit-mode';
+import { EDIT_TOOL_NAMES, retryUndoNote, retryUndoNotice, withModeLine } from './edit-mode';
 import { buildHistory, flattenToolCall, INTERRUPTED_OUTPUT } from './history';
 import { buildIdentity } from './identity';
 import { buildSystemPrompt } from './system-prompt';
@@ -165,6 +166,8 @@ function trackChanges(inner: ToolChanges): TrackedChanges {
       return result;
     },
     async write(p, content, opts) {
+      // WRITES ARE NEVER HIDDEN (see the change service): `write` throws only before the project file changed, so a
+      // write that reached the disk always gets here, also when its change history couldn't be saved yet.
       const result = await inner.write(p, content, opts);
       // `batchId` is null only when nothing changed on disk.
       if (result.batchId !== null) written = { batchId: result.batchId };
@@ -282,6 +285,13 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
     }
   }
 
+  /** Whether a project still exists; a failure other than `not_found` is a real one. */
+  const projectExists = (id: Id): Promise<boolean> =>
+    projects.get(id).then(
+      () => true,
+      (err) => (err instanceof CoreError && err.code === 'not_found' ? false : Promise.reject(err)),
+    );
+
   async function execute(input: RunTurnInput, signal: AbortSignal, emit: Emit, state: RunState): Promise<void> {
     const { chatId, model } = input;
     let chat = await chats.get(chatId);
@@ -299,12 +309,13 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
 
     let project: Project | undefined;
     if (projectId) {
-      try {
-        project = await projects.get(projectId);
-      } catch (err) {
-        // A vanished project makes this a loose chat; anything else is a real failure.
-        if (!(err instanceof CoreError && err.code === 'not_found')) throw err;
-      }
+      // PINNED PROJECT EXISTS (invariant): the turn's project was read under the start claim. If it is gone by now (a
+      // removal committed in between), the turn fails here, before any attachment is bound, note taken, message
+      // appended, snapshot taken, undo run or history truncated. It never runs as a loose turn the user didn't send.
+      project = await projects.get(projectId).catch((err) => {
+        if (err instanceof CoreError && err.code === 'not_found') throw new CoreError('conflict', CHAT_PROJECT_CHANGED);
+        throw err;
+      });
     }
 
     /** What a retry undid before starting over, for the notice on its first assistant message. */
@@ -332,16 +343,30 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
     } else {
       const lastUser = chat.messages.findLast((m): m is UserMessage => m.role === 'user');
       if (!lastUser) throw new CoreError('invalid_request', 'There is no message to retry in this chat.');
-      // RETRY ORDER (invariant): undo → note → truncate → restore.
+      const firstTurn = chat.messages.find((m) => m.role === 'user') === lastUser;
+      // RETRY ORDER (invariant): check → undo → note → truncate → restore.
+      // 0. Check (RETRY STAYS IN ITS PROJECT, invariant): a retry undoes the attempt's writes first, which it can only
+      //    do in the project they were written to. While they are still undoable in another project that still
+      //    exists, the retry is refused before anything is stored, undone, noted or truncated. The run claim keeps
+      //    this answer valid until step 1: no other run, Undo, Apply or retention can change the turn's batches
+      //    meanwhile, and a move only closes batches, which leaves them as undoable as before. A removed project's
+      //    writes can't be undone from the app any more, so they never block.
       // 1. Undo: the files the previous attempt wrote (Auto) go back to how the turn found them, whatever mode this
       //    retry runs in. Nothing else has changed yet, so if the undo throws, the history still holds the previous
       //    attempt's tool results, which say what is on disk, and the retry ends with the error.
-      // 2. Note: the files the undo had to skip still hold the previous attempt's edits. That is stored on the user
-      //    message (so a replay of the history says it too) before any later step can fail and lose it.
+      // 2. Note: the mode line is made true for the mode this retry runs in, then the files the undo had to skip
+      //    (they still hold the previous attempt's edits) are added. That is stored on the user message (so a replay
+      //    of the history says it too) before any later step can fail and lose it.
       // 3. Truncate: only once the disk is back to the turn's start (as far as it could be) does the history drop the
       //    attempt.
       // 4. Restore: last, the pending set goes back to its state at the turn's start, so proposals never sit on top
       //    of files the attempt left behind.
+      const info = deps.changes
+        ? await deps.changes.retryInfo({ chatId, turnId: lastUser.id, projectId: project?.id ?? null })
+        : null;
+      for (const other of info?.writtenElsewhere ?? []) {
+        if (await projectExists(other)) throw new CoreError('conflict', RETRY_OTHER_PROJECT);
+      }
       const undone =
         project && deps.changes
           ? await deps.changes.prepareRetry({
@@ -355,10 +380,14 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
       if (undone) {
         await emit({ type: 'auto_batch_updated', batchId: undone.batchId });
         retryUndo = undone.undo;
-        if (undone.undo.skipped.length > 0) {
-          await chats.setChangesNote(chatId, lastUser.id, appendNote(lastUser.changesNote, retryUndoNote(undone.undo)));
-          state.modified = true;
-        }
+      }
+      // A loose retry has no edit tools and no mode in effect: its note stays as it is.
+      let note = lastUser.changesNote;
+      if (project && info) note = withModeLine(note, { mode: editMode, lastMode: info.lastMode, firstTurn });
+      if (undone && undone.undo.skipped.length > 0) note = appendNote(note, retryUndoNote(undone.undo));
+      if (note !== lastUser.changesNote) {
+        await chats.setChangesNote(chatId, lastUser.id, note);
+        state.modified = true;
       }
       chat = await chats.truncateAfterLastUser(chatId);
       state.modified = true;

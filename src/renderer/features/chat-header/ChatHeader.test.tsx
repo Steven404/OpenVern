@@ -84,7 +84,13 @@ describe('Chat options (D9)', () => {
     expect(screen.getAllByRole('menuitemradio')).toHaveLength(projects.length + 1);
 
     fireEvent.click(screen.getByRole('menuitemradio', { name: 'No project' }));
-    await waitFor(() => expect(update).toHaveBeenCalledWith(chat.id, { projectId: null, expectedEditMode: 'review' }));
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith(chat.id, {
+        projectId: null,
+        expectedEditMode: 'review',
+        expectedProjectId: project.id,
+      }),
+    );
     expect(await within(header).findByText('Chats /')).toBeTruthy();
     // The sidebar re-groups: the chat now sits under CHATS.
     const heading = await screen.findByRole('heading', { name: 'Chats' });
@@ -102,7 +108,11 @@ describe('Chat options (D9)', () => {
     fireEvent.keyDown(sub, { key: 'ArrowRight' });
     fireEvent.click(await screen.findByRole('menuitemradio', { name: target.name }));
     await waitFor(() =>
-      expect(update).toHaveBeenCalledWith(chat.id, { projectId: target.id, expectedEditMode: 'review' }),
+      expect(update).toHaveBeenCalledWith(chat.id, {
+        projectId: target.id,
+        expectedEditMode: 'review',
+        expectedProjectId: project.id,
+      }),
     );
     expect(await findCrumb(header, `${target.name} /`)).toBeTruthy();
   });

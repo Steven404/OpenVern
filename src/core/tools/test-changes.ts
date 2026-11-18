@@ -152,6 +152,9 @@ export function createFakeChangesService(): FakeChangesService {
     async undoBatch(): Promise<UndoBatchResponse> {
       throw new Error('not implemented in the fake');
     },
+    async retryInfo() {
+      return { writtenElsewhere: [], lastMode: 'review' };
+    },
     async prepareRetry() {
       return null;
     },

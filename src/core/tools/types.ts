@@ -37,16 +37,17 @@ export interface ToolChanges {
    * Auto only (throws in Review). Writes now, after the sandbox, race and stale-read checks; throws `CoreError` with a
    * model-facing message when refused. `baseHash`: sha256 of the bytes the tool based the change on ('' = the file
    * did not exist). `file`: this write's own diff (null = no change). `batchId`: the turn's auto batch (null when
-   * nothing changed).
+   * nothing changed). Throws only before the project file changed; once it has, it resolves, and `unsaved: true` says
+   * the change history couldn't be saved yet (the write is kept in memory, undoable while the app stays open).
    */
   write(
     relPath: string,
     content: string | null,
     opts: { tool: EditToolName; baseHash: string },
-  ): Promise<{ file: FileChange | null; batchId: Id | null }>;
+  ): Promise<{ file: FileChange | null; batchId: Id | null; unsaved?: true }>;
   /**
-   * `read_file` returned this file from disk: remember these bytes as what the chat last saw of it. `relPath` is the
-   * path as the sandbox resolved it (its on-disk spelling).
+   * `read_file` returned this file from disk: remember these bytes as what the chat last saw of it, recorded under the
+   * turn's pinned project. `relPath` is the path as the sandbox resolved it (its on-disk spelling).
    */
   noteRead(relPath: string, bytes: Uint8Array): void;
 }

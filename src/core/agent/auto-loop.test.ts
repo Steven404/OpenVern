@@ -1,13 +1,22 @@
 import { readFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import path from 'node:path';
+import { CHAT_PROJECT_CHANGED, RETRY_OTHER_PROJECT } from '@shared/api';
 import type { AgentEvent } from '@shared/events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { type AutoSetup, setupAuto } from '../changes/auto-test-helpers';
 import type { FakeScript, FakeStep } from '../providers/fake';
 import { getProjectTools } from '../tools';
 import type { ToolChanges } from '../tools/types';
-import { autoUnreadText, editPromptLines, editToolDescriptions, retryUndoNote, retryUndoNotice } from './edit-mode';
+import {
+  autoUnreadText,
+  autoUnsavedText,
+  editPromptLines,
+  editToolDescriptions,
+  modeChangedNote,
+  retryUndoNote,
+  retryUndoNotice,
+} from './edit-mode';
 import { createHarness, type Harness, PROJECT } from './test-helpers';
 
 const reply: FakeStep[] = [
@@ -26,7 +35,7 @@ const calls = (...items: [string, object][]): FakeStep[] => [
 let s: AutoSetup;
 let h: Harness;
 beforeEach(async () => {
-  s = await setupAuto();
+  s = await setupAuto({ secondProject: true });
   await s.seed('a.txt', 'original\n');
 });
 afterEach(async () => {
@@ -430,15 +439,12 @@ describe('Retry failures and chats without a project', () => {
     expect(h.provider.calls.at(-1)?.tools).toBeUndefined();
   });
 
-  it.each([
-    ['detached from the chat', true],
-    ['still named by the chat', false],
-  ])('retry after the project was deleted (%s) undoes nothing and answers without tools', async (_, detach) => {
+  it('retry after the project was deleted (detached from the chat) undoes nothing and answers without tools', async () => {
     await setup(editA);
     await h.run();
     expect(await s.read('a.txt')).toBe('changed\n');
     await h.projects.remove(PROJECT.id);
-    if (detach) await h.chats.detachProject(PROJECT.id);
+    await h.chats.detachProject(PROJECT.id);
     const prepare = vi.spyOn(s.svc, 'prepareRetry');
     const events = await h.run({ newUserMessage: undefined });
     expect(events.some((e) => e.type === 'error')).toBe(false);
@@ -448,5 +454,143 @@ describe('Retry failures and chats without a project', () => {
     expect((await s.svc.get(h.chatId)).applied[0]?.undo).toBeUndefined();
     expect(h.messages().map((m) => m.role)).toEqual(['user', 'assistant']);
     expect(h.provider.calls.at(-1)?.tools).toBeUndefined();
+  });
+});
+
+describe('the turn’s project, and a retry after a move', () => {
+  const editA = (_: unknown, i: number) =>
+    i === 0 ? calls(['edit_file', { path: 'a.txt', old_string: 'original', new_string: 'changed' }]) : reply;
+
+  it('a retry in B of a turn whose writes are still undoable in A is refused before anything is stored', async () => {
+    await setup(editA);
+    await h.run();
+    expect(await s.read('a.txt')).toBe('changed\n');
+    const projectB = await h.projects.create({ rootPath: s.rootB ?? '' });
+    await s.svc.changeProject(h.chatId, async () => {
+      await h.chats.update(h.chatId, { projectId: projectB.id });
+    });
+    const before = h.messages();
+    const prepare = vi.spyOn(s.svc, 'prepareRetry');
+    const note = vi.spyOn(h.chats, 'setChangesNote');
+    const truncate = vi.spyOn(h.chats, 'truncateAfterLastUser');
+    const modelCalls = h.provider.calls.length;
+    const events = await h.run({ newUserMessage: undefined, projectId: projectB.id });
+    expect(events).toContainEqual({
+      type: 'error',
+      error: expect.objectContaining({ code: 'conflict', message: RETRY_OTHER_PROJECT }),
+    });
+    expect(events.at(-1)).toEqual({ type: 'done' });
+    expect(prepare).not.toHaveBeenCalled();
+    expect(note).not.toHaveBeenCalled();
+    expect(truncate).not.toHaveBeenCalled();
+    expect(h.messages()).toEqual(before);
+    expect(h.provider.calls).toHaveLength(modelCalls);
+    expect(await s.read('a.txt')).toBe('changed\n');
+    expect((await s.svc.get(h.chatId)).applied[0]).not.toHaveProperty('undo');
+  });
+
+  it('retry after the project was deleted (still named by the chat) fails before anything is undone or truncated', async () => {
+    await setup(editA);
+    await h.run();
+    await h.projects.remove(PROJECT.id);
+    const before = h.messages();
+    const prepare = vi.spyOn(s.svc, 'prepareRetry');
+    const truncate = vi.spyOn(h.chats, 'truncateAfterLastUser');
+    const events = await h.run({ newUserMessage: undefined });
+    expect(events).toContainEqual({
+      type: 'error',
+      error: expect.objectContaining({ code: 'conflict', message: CHAT_PROJECT_CHANGED }),
+    });
+    expect(prepare).not.toHaveBeenCalled();
+    expect(truncate).not.toHaveBeenCalled();
+    expect(h.messages()).toEqual(before);
+    expect(await s.read('a.txt')).toBe('changed\n');
+    expect((await s.svc.get(h.chatId)).applied[0]).not.toHaveProperty('undo');
+  });
+
+  it('a send pinned to a project removed since the route read it fails before anything is stored', async () => {
+    const takeNote = vi.spyOn(s.svc, 'takeNote');
+    const snapshot = vi.spyOn(s.svc, 'snapshot');
+    await setup(() => reply);
+    const att = h.attachments.add({ name: 'notes.txt', content: 'notes' });
+    await h.projects.remove(PROJECT.id);
+    const events = await h.run({
+      projectId: PROJECT.id,
+      newUserMessage: { text: 'hello', attachmentIds: [att.id] },
+    });
+    expect(events).toContainEqual({
+      type: 'error',
+      error: expect.objectContaining({ code: 'conflict', message: CHAT_PROJECT_CHANGED }),
+    });
+    expect(h.messages()).toEqual([]);
+    expect(h.attachments.bound.has(att.id)).toBe(false);
+    expect(takeNote).not.toHaveBeenCalled();
+    expect(snapshot).not.toHaveBeenCalled();
+    expect(h.provider.calls).toHaveLength(0);
+  });
+
+  it('Stop during a write whose change history couldn’t be saved keeps the real result and announces the batch', async () => {
+    const controller = new AbortController();
+    let failSave = false;
+    s.hooks.beforeWrite = () => {
+      failSave = true;
+      controller.abort();
+    };
+    s.hooks.beforeStoreWrite = () => {
+      if (!failSave) return;
+      failSave = false;
+      throw new Error('disk full');
+    };
+    await setup((_, i) => (i === 0 ? calls(['write_file', { path: 'new.txt', content: 'real write' }]) : reply));
+    const events = await h.run({ signal: controller.signal });
+    expect(controller.signal.aborted).toBe(true);
+    expect(await s.read('new.txt')).toBe('real write');
+    const result = { ok: true, output: `Created new.txt (1 line). Written to disk.\n${autoUnsavedText()}` };
+    expect(results(events)).toMatchObject([result]);
+    expect(h.messages().find((m) => m.role === 'tool')).toMatchObject(result);
+    expect(events.filter((e) => e.type === 'auto_batch_updated')).toHaveLength(1);
+  });
+});
+
+describe('a retry’s mode line is made true for the mode it runs in', () => {
+  const lastUserNote = () => h.messages().findLast((m) => m.role === 'user')?.changesNote;
+
+  it('an Auto turn retried in Review loses its Auto line and keeps its undo block', async () => {
+    await setup((_, i) =>
+      i === 0 ? calls(['edit_file', { path: 'a.txt', old_string: 'original', new_string: 'changed' }]) : reply,
+    );
+    await h.run(); // Auto, writes a.txt
+    await h.chats.update(h.chatId, { editMode: 'review' });
+    await h.run({ newUserMessage: { text: 'two', attachmentIds: [] } });
+    const batchId = (await s.svc.get(h.chatId)).applied[0]?.id ?? '';
+    await s.svc.undoBatch({ chatId: h.chatId, projectId: PROJECT.id, projectRoot: s.root, batchId });
+    await h.chats.update(h.chatId, { editMode: 'auto' });
+    await h.run({ newUserMessage: { text: 'three', attachmentIds: [] } });
+    const autoLine = modeChangedNote('auto');
+    const sent = lastUserNote() ?? '';
+    expect(sent.startsWith(`${autoLine}\n\n`)).toBe(true);
+    const undoBlock = sent.slice(autoLine.length + 2);
+    expect(undoBlock).toContain('undid your edits');
+
+    await h.chats.update(h.chatId, { editMode: 'review' });
+    await h.run({ newUserMessage: undefined });
+    expect(lastUserNote()).toBe(undoBlock);
+    const lastRequest = h.provider.calls.at(-1)?.messages ?? [];
+    const lastUser = lastRequest.findLast((m) => m.role === 'user');
+    expect(JSON.stringify(lastUser)).not.toContain('Edit mode changed since your last reply: Auto');
+    expect(JSON.stringify(lastUser)).toContain(JSON.stringify(undoBlock).slice(1, 40));
+  });
+
+  it('a Review turn retried in Auto gains the Auto line', async () => {
+    await setup(() => reply, false);
+    await h.run();
+    await h.run({ newUserMessage: { text: 'two', attachmentIds: [] } });
+    expect(lastUserNote()).toBeUndefined();
+    await h.chats.update(h.chatId, { editMode: 'auto' });
+    await h.run({ newUserMessage: undefined });
+    expect(lastUserNote()).toBe(modeChangedNote('auto'));
+    expect(JSON.stringify(h.provider.calls.at(-1)?.messages)).toContain(
+      'Edit mode changed since your last reply: Auto',
+    );
   });
 });

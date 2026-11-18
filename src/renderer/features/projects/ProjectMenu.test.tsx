@@ -3,6 +3,7 @@
 
 import { openMenu, renderApp, resetUi, seededClient } from '@renderer/app/test-utils';
 import { ApiError } from '@renderer/lib/api-client';
+import { queryKeys } from '@renderer/lib/query-keys';
 import { errorInfo } from '@shared/errors';
 import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -68,5 +69,18 @@ describe('Remove project dialog errors (F2.7)', () => {
     const reopened = await openRemoveDialog(project.name);
     expect(within(reopened).queryByRole('alert')).toBeNull();
     expect(within(reopened).queryByText(REMOVE_FAILED)).toBeNull();
+  });
+});
+
+describe('removing a project', () => {
+  it('refetches every chat’s changes: its chats lost their proposals and their Undo', async () => {
+    const { client, project } = await seededClient();
+    const view = renderApp({ client });
+    const invalidate = vi.spyOn(view.queryClient, 'invalidateQueries');
+    const dialog = await openRemoveDialog(project.name);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.allChatChanges }));
+    expect(queryKeys.allChatChanges).toEqual(['chatChanges']);
   });
 });

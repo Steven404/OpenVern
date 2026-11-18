@@ -47,6 +47,8 @@ interface MoveRequest {
   projectId: Id | null;
   editMode?: EditMode;
   expectedEditMode: EditMode;
+  /** The project the menu showed the chat in when the user picked: a chat moved elsewhere meanwhile is refused. */
+  expectedProjectId: Id | null;
   /** For a move that keeps Auto in a project: whether that project's folder was shown as inside Git. */
   expectedInGitRepo?: boolean;
 }
@@ -60,11 +62,14 @@ function ChatOptionsMenuInner({ chat }: { chat: ChatSummary }) {
   const [renameOpen, setRenameOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
 
+  // The chat's changes too: a move decides which Auto batches can still be undone here, and resets the chat's Auto
+  // state, so the cards and the Diff panel must not keep offering what the server now refuses.
   const refresh = () =>
     Promise.all([
       queryClient.invalidateQueries({ queryKey: queryKeys.chats }),
       queryClient.invalidateQueries({ queryKey: queryKeys.chat(chat.id) }),
       queryClient.invalidateQueries({ queryKey: queryKeys.projects }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.chatChanges(chat.id) }),
     ]);
 
   const [moveError, setMoveError] = useState<string | null>(null);
@@ -104,6 +109,8 @@ function ChatOptionsMenuInner({ chat }: { chat: ChatSummary }) {
   const acknowledge = useUiStore((s) => s.acknowledgeAutoNoGit);
   const [moveAsk, setMoveAsk] = useState<{
     chatId: Id;
+    /** The project the chat was shown in when the user picked; the move carries it once the dialog is answered. */
+    fromProjectId: Id | null;
     project: ProjectListItem;
     reason: 'move' | 'move-hidden';
   } | null>(null);
@@ -113,7 +120,12 @@ function ChatOptionsMenuInner({ chat }: { chat: ChatSummary }) {
     if (shown.mode === 'auto' && target) {
       const unwarnedNoGit = !target.inGitRepo && acknowledged[target.id] !== true;
       if (unwarnedNoGit || !chip.showChip) {
-        setMoveAsk({ chatId: chat.id, project: target, reason: unwarnedNoGit ? 'move' : 'move-hidden' });
+        setMoveAsk({
+          chatId: chat.id,
+          fromProjectId: chat.projectId,
+          project: target,
+          reason: unwarnedNoGit ? 'move' : 'move-hidden',
+        });
         return;
       }
     }
@@ -121,6 +133,7 @@ function ChatOptionsMenuInner({ chat }: { chat: ChatSummary }) {
       chatId: chat.id,
       projectId,
       expectedEditMode: shown.mode,
+      expectedProjectId: chat.projectId,
       ...(shown.mode === 'auto' && target ? { expectedInGitRepo: target.inGitRepo } : {}),
     });
   };
@@ -227,20 +240,27 @@ function ChatOptionsMenuInner({ chat }: { chat: ChatSummary }) {
         // The dialog only opens for a chat shown in Auto, so both choices expect Auto.
         onReview={() => {
           if (moveAsk) {
-            const { chatId, project } = moveAsk;
-            move.mutate({ chatId, projectId: project.id, editMode: 'review', expectedEditMode: 'auto' });
+            const { chatId, fromProjectId, project } = moveAsk;
+            move.mutate({
+              chatId,
+              projectId: project.id,
+              editMode: 'review',
+              expectedEditMode: 'auto',
+              expectedProjectId: fromProjectId,
+            });
           }
           setMoveAsk(null);
         }}
         onAuto={() => {
           if (moveAsk) {
-            const { chatId, project, reason } = moveAsk;
+            const { chatId, fromProjectId, project, reason } = moveAsk;
             // Only the no-Git question is remembered per project; the hidden-Auto one asks on every such move.
             if (reason === 'move') acknowledge(project.id);
             move.mutate({
               chatId,
               projectId: project.id,
               expectedEditMode: 'auto',
+              expectedProjectId: fromProjectId,
               expectedInGitRepo: project.inGitRepo,
             });
           }
