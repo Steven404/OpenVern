@@ -23,7 +23,7 @@ import { paths } from '@renderer/lib/routes';
 import { forgetEditMode, useEditModeEntry, writeChat } from '@renderer/stores/edit-modes';
 import { patchChatSummary, useRunsStore } from '@renderer/stores/runs';
 import { useUiStore } from '@renderer/stores/ui';
-import type { ChatSummary, EditMode, ProjectListItem } from '@shared/types';
+import type { ChatSummary, EditMode, Id, ProjectListItem } from '@shared/types';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Archive, ArchiveRestore, Folder, FolderInput, Pencil, Trash2 } from 'lucide-react';
 import { useRef, useState } from 'react';
@@ -35,6 +35,22 @@ const NO_PROJECT = '__none__';
 
 /** D9: the "…" button in the chat header — Rename · Move to project ▸ · Archive / Unarchive · Delete. */
 export function ChatOptionsMenu({ chat }: { chat: ChatSummary }) {
+  // Re-keyed per chat, so a dialog opened for one chat (the no-Git move warning above all) closes when the header
+  // shows another one, instead of being confirmed for it.
+  return <ChatOptionsMenuInner key={chat.id} chat={chat} />;
+}
+
+/** One move: the chat it was decided for, travelling with the request rather than read when it fires. */
+interface MoveRequest {
+  chatId: Id;
+  projectId: Id | null;
+  editMode?: EditMode;
+  expectedEditMode: EditMode;
+  /** For a move that keeps Auto in a project: whether that project's folder was shown as inside Git. */
+  expectedInGitRepo?: boolean;
+}
+
+function ChatOptionsMenuInner({ chat }: { chat: ChatSummary }) {
   const api = useApiClient();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -54,8 +70,8 @@ export function ChatOptionsMenu({ chat }: { chat: ChatSummary }) {
   const move = useMutation({
     // A move carries the mode, so it goes through the shown-mode store: one mode-carrying PATCH at a time, its answer
     // is the shown mode, and a failure checks the server's mode again before Move or the chip are enabled.
-    mutationFn: async (patch: { projectId: string | null; editMode?: EditMode; expectedEditMode: EditMode }) => {
-      const summary = await writeChat({ api, queryClient }, chat.id, 'move', () => api.updateChat(chat.id, patch));
+    mutationFn: async ({ chatId, ...patch }: MoveRequest) => {
+      const summary = await writeChat({ api, queryClient }, chatId, 'move', () => api.updateChat(chatId, patch));
       if (summary) patchChatSummary(queryClient, summary);
       return summary;
     },
@@ -71,19 +87,26 @@ export function ChatOptionsMenu({ chat }: { chat: ChatSummary }) {
   // The question is decided from the mode the chip shows (the shown-mode store, rendered here), Move is disabled
   // until that mode is known (not while a mode change or its check is in flight), and the move carries that same
   // value as `expectedEditMode`: if the server's mode differs when it commits, it refuses the move, so a skipped
-  // warning never rests on a mode the user wasn't shown.
+  // warning never rests on a mode the user wasn't shown. A move that keeps Auto in a project also carries the Git
+  // status the decision rested on, so a folder that has left Git since is refused (and the list read again, so the
+  // next try asks). The dialog keeps the chat it opened for, so a choice always moves that chat.
   const shown = useEditModeEntry(chat.id);
   const acknowledged = useUiStore((s) => s.autoNoGitAcknowledged);
   const acknowledge = useUiStore((s) => s.acknowledgeAutoNoGit);
-  const [noGitTarget, setNoGitTarget] = useState<ProjectListItem | null>(null);
+  const [noGitTarget, setNoGitTarget] = useState<{ chatId: Id; project: ProjectListItem } | null>(null);
   const moveTo = (projectId: string | null) => {
     if (projectId === chat.projectId || shown.status !== 'known' || shown.mode === null) return;
     const target = projectId === null ? undefined : projects.data?.find((p) => p.id === projectId);
     if (shown.mode === 'auto' && target && !target.inGitRepo && acknowledged[target.id] !== true) {
-      setNoGitTarget(target);
+      setNoGitTarget({ chatId: chat.id, project: target });
       return;
     }
-    move.mutate({ projectId, expectedEditMode: shown.mode });
+    move.mutate({
+      chatId: chat.id,
+      projectId,
+      expectedEditMode: shown.mode,
+      ...(shown.mode === 'auto' && target ? { expectedInGitRepo: target.inGitRepo } : {}),
+    });
   };
 
   // The server rejects archive changes while a reply is in progress, so the item waits for the run to finish.
@@ -182,18 +205,27 @@ export function ChatOptionsMenu({ chat }: { chat: ChatSummary }) {
         onOpenChange={(open) => {
           if (!open) setNoGitTarget(null);
         }}
-        projectName={noGitTarget?.name ?? ''}
+        projectName={noGitTarget?.project.name ?? ''}
         reason="move"
         returnFocusRef={triggerRef}
         // The dialog only opens for a chat shown in Auto, so both choices expect Auto.
         onReview={() => {
-          if (noGitTarget) move.mutate({ projectId: noGitTarget.id, editMode: 'review', expectedEditMode: 'auto' });
+          if (noGitTarget) {
+            const { chatId, project } = noGitTarget;
+            move.mutate({ chatId, projectId: project.id, editMode: 'review', expectedEditMode: 'auto' });
+          }
           setNoGitTarget(null);
         }}
         onAuto={() => {
           if (noGitTarget) {
-            acknowledge(noGitTarget.id);
-            move.mutate({ projectId: noGitTarget.id, expectedEditMode: 'auto' });
+            const { chatId, project } = noGitTarget;
+            acknowledge(project.id);
+            move.mutate({
+              chatId,
+              projectId: project.id,
+              expectedEditMode: 'auto',
+              expectedInGitRepo: project.inGitRepo,
+            });
           }
           setNoGitTarget(null);
         }}

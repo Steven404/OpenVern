@@ -1,9 +1,10 @@
 import { DRAFT_CHAT_ID } from '@shared/constants';
-import type { ChatSummary, EditMode, ReasoningEffort } from '@shared/types';
+import type { ChatSummary, EditMode, Id, ReasoningEffort } from '@shared/types';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router';
 import { resolveNewChatProject } from '../../app/queries';
+import { isProjectNotInGit } from '../../lib/api-client';
 import { useApiClient } from '../../lib/api-context';
 import { queryKeys } from '../../lib/query-keys';
 import { NEW_CHAT_PROJECT_PARAM, paths } from '../../lib/routes';
@@ -16,6 +17,16 @@ import { RightPanelToggle } from '../right-panel';
 import { DRAFT_PANEL_CHAT_ID, usePanelStore } from '../right-panel/panel-store';
 import { adoptDraftTerminal } from '../terminal/adopt-draft';
 import { ProjectChip } from './ProjectChip';
+
+/** Why a send was stopped: the Auto on screen no longer belongs to this project and opening. */
+export const AUTO_CHOICE_STALE = 'Auto was chosen for another project. Check Review / Auto and send again.';
+
+/** An Auto pick on the New chat chip: the project and opening it was decided for, and the Git status shown then. */
+interface AutoChoice {
+  projectId: Id;
+  openKey: string;
+  inGitRepo: boolean;
+}
 
 /** `#/new`: hero, new composer and the project chip. Preselects the project in `?project=<id>`. */
 export function NewChatScreen() {
@@ -54,10 +65,28 @@ export function NewChatScreen() {
   // chat here", a project change, Back and Forward) gets a new or different location key, and any change of key drops
   // the pick, so an Auto picked (and maybe warned about) for one project or one open never carries over, not even
   // when history brings back the entry it was picked in. A layout effect, so a dropped pick is never painted or sent.
+  //
+  // INVARIANT: Auto shows, and is sent, only for the project and opening it was picked in, and only while that
+  // project's Git status is the one the pick was decided with. Anything else shows (and sends) Review, the mode every
+  // opening starts in, so a warning decided for project A can never make a chat in project B Auto. The chip itself is
+  // remounted per opening (`editModeScope`), so a warning still open when history moves on closes instead of being
+  // confirmed for another project.
   const { key: openKey } = useLocation();
-  const [editMode, setEditMode] = useState<EditMode>('review');
+  const [autoFor, setAutoFor] = useState<AutoChoice | null>(null);
   // biome-ignore lint/correctness/useExhaustiveDependencies: `openKey` is the trigger
-  useLayoutEffect(() => setEditMode('review'), [openKey]);
+  useLayoutEffect(() => setAutoFor(null), [openKey]);
+  const shownProject = projectsQuery.data?.find((p) => p.id === projectId);
+  const heldAuto =
+    autoFor !== null &&
+    autoFor.projectId === projectId &&
+    autoFor.openKey === openKey &&
+    shownProject !== undefined &&
+    autoFor.inGitRepo === shownProject.inGitRepo
+      ? autoFor
+      : null;
+  const editMode: EditMode = heldAuto ? 'auto' : 'review';
+  const onEditModeChange = (mode: EditMode, forProject: Id, inGitRepo: boolean) =>
+    setAutoFor(mode === 'auto' ? { projectId: forProject, openKey, inGitRepo } : null);
 
   const onProjectChange = useCallback(
     (id: string | null) => {
@@ -67,10 +96,25 @@ export function NewChatScreen() {
   );
 
   const onSend = useCallback(
-    async ({ text, attachments, editMode: shown }: ComposerSendInput) => {
+    async ({ text, attachments, editMode: shown, projectId: shownProjectId }: ComposerSendInput) => {
       // `shown` is the mode the chip rendered (Review when it was hidden): the chat is created in it, and the first
-      // turn expects it, so the server refuses the turn rather than run it in a mode the user wasn't shown.
-      const chat = await api.createChat({ projectId, model, editMode: shown });
+      // turn expects it, so the server refuses the turn rather than run it in a mode the user wasn't shown. Auto must
+      // still belong to this project and opening; if not, nothing is sent (the chip shows Review again).
+      if (shown === 'auto' && heldAuto === null) throw new Error(AUTO_CHOICE_STALE);
+      const chat = await api
+        .createChat({
+          projectId,
+          model,
+          editMode: shown,
+          // The Git status the Auto pick was decided with: a folder that has left Git since is refused.
+          ...(shown === 'auto' && heldAuto ? { expectedInGitRepo: heldAuto.inGitRepo } : {}),
+        })
+        .catch((err: unknown) => {
+          // The projects list is out of date: reading it again drops the pick to Review, and picking Auto again
+          // shows the warning.
+          if (isProjectNotInGit(err)) void queryClient.invalidateQueries({ queryKey: queryKeys.projects });
+          throw err;
+        });
       const { messages: _messages, ...summary } = chat;
       noteAnswer(chat.id, chat.editMode);
       queryClient.setQueryData(queryKeys.chat(chat.id), chat);
@@ -86,9 +130,16 @@ export function NewChatScreen() {
       usePanelStore.getState().moveChat(DRAFT_PANEL_CHAT_ID, chat.id);
       // The run lives in the store, so it keeps going after this screen unmounts.
       navigate(paths.chat(chat.id));
-      void send(deps, chat.id, { text, attachments, model, effort, expectedEditMode: shown });
+      void send(deps, chat.id, {
+        text,
+        attachments,
+        model,
+        effort,
+        expectedEditMode: shown,
+        expectedProjectId: shownProjectId,
+      });
     },
-    [api, projectId, model, effort, queryClient, navigate, send, deps],
+    [api, projectId, model, effort, queryClient, navigate, send, deps, heldAuto],
   );
 
   return (
@@ -112,7 +163,8 @@ export function NewChatScreen() {
             autoFocus
             sinkKey={DRAFT_CHAT_ID}
             editMode={editMode}
-            onEditModeChange={setEditMode}
+            onEditModeChange={onEditModeChange}
+            editModeScope={openKey}
             projectSlot={<ProjectChip projects={projects} value={projectId} onChange={onProjectChange} />}
           />
         </div>

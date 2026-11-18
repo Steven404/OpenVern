@@ -58,7 +58,7 @@ async function resolveProjectRoot(
  * True when a `.git` directory or file (worktrees and submodules use a file) exists in `root` or one of its ancestors.
  * Any error on the way counts as "not found" for that folder, so an unreadable ancestor never throws.
  */
-async function inGitRepo(root: string): Promise<boolean> {
+export async function inGitRepo(root: string): Promise<boolean> {
   let dir = root;
   for (;;) {
     const found = await fs.lstat(path.join(dir, '.git')).then(

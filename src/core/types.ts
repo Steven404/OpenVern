@@ -72,6 +72,13 @@ export interface ProjectsService {
   remove(id: Id): Promise<void>;
 }
 
+/** What `ChatsService.update` checks under the lock that commits (see there). */
+export interface ChatUpdateExpect {
+  editMode?: EditMode;
+  projectId?: Id | null;
+  checkAutoProject?: (projectId: Id) => Promise<void>;
+}
+
 export interface ChatsService {
   /** Sorted by `updatedAt` desc. */
   list(): Promise<ChatSummary[]>;
@@ -86,7 +93,9 @@ export interface ChatsService {
    *
    * `expect`: what the client showed when the user acted. Each field that is set is compared with the stored chat
    * under the lock that commits the write; a mismatch throws `conflict` (`EDIT_MODE_CHANGED` /
-   * `CHAT_PROJECT_CHANGED`) and writes nothing.
+   * `CHAT_PROJECT_CHANGED`) and writes nothing. `checkAutoProject` runs under the same lock, after those checks and
+   * before the write, when the update turns Auto on in a project or moves an Auto chat into another project, with the
+   * project the chat will run in; throwing refuses the update and writes nothing.
    */
   update(
     id: Id,
@@ -98,7 +107,7 @@ export interface ChatsService {
       effort?: ReasoningEffort | null;
       editMode?: EditMode;
     },
-    expect?: { editMode?: EditMode; projectId?: Id | null },
+    expect?: ChatUpdateExpect,
   ): Promise<ChatSummary>;
   /**
    * Replaces one user message's `changesNote` (`undefined` removes it); a retry adds what it couldn't undo. Doesn't

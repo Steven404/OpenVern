@@ -231,6 +231,12 @@ export function createChatsService(opts: ChatsServiceOptions): ChatsService {
         // Like archiving, a mode change doesn't reorder the sidebar. The agent reads the mode at turn start, so a
         // change made during a run applies from the next turn.
         if (patch.editMode !== undefined) next.editMode = patch.editMode;
+        // Turning Auto on in a project, or carrying Auto into another one, is checked against the project the chat
+        // will be in after this write, under the same lock, so a move can't slip in between the check and the write.
+        const carriesAuto =
+          patch.editMode === 'auto' || (patch.projectId !== undefined && patch.projectId !== chat.projectId);
+        if (expect.checkAutoProject && carriesAuto && next.editMode === 'auto' && next.projectId !== null)
+          await expect.checkAutoProject(next.projectId);
         await writeChat(next);
         const summary = summarize(next);
         await upsertIndex(summary);

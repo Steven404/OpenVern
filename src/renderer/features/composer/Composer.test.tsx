@@ -91,6 +91,7 @@ describe('send keys', () => {
       model: chat.model,
       effort: chat.effort,
       expectedEditMode: chat.editMode,
+      expectedProjectId: chat.projectId,
     });
     expect(textarea().value).toBe('');
     await waitForIdle(chat.id);

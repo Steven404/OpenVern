@@ -143,8 +143,9 @@ describe('NewChatScreen', () => {
       attachmentIds: [],
       model: DEFAULT_MODEL,
       effort: null,
-      // The mode the chat was just created with, which the New chat chip showed.
+      // The mode the chat was just created with, which the New chat chip showed, in the project it showed.
       expectedEditMode: 'review',
+      expectedProjectId: project?.id,
     });
 
     // the run was started in the store, so the conversation shows the user bubble and then the reply

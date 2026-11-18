@@ -6,6 +6,7 @@ import {
   type ApplyChangesResponse,
   CHAT_PROJECT_CHANGED,
   EDIT_MODE_CHANGED,
+  PROJECT_NOT_IN_GIT,
   type UndoBatchResponse,
 } from '@shared/api';
 import { sniffAttachmentBytes } from '@shared/attachment-sniff';
@@ -212,6 +213,15 @@ export class MockApiClient implements ApiClient {
       }))
       .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
   }
+  /** Test hook: the folder of `projectId` gains or loses its repository (the server checks it on every list). */
+  setProjectInGitRepo(projectId: Id, inGitRepo: boolean) {
+    if (inGitRepo) this.noGit.delete(projectId);
+    else this.noGit.add(projectId);
+  }
+  /** Like the server's Git check: Auto in a folder outside Git needs the UI to have shown it outside Git. */
+  private checkAutoGit(projectId: Id, shown: boolean | undefined) {
+    if (shown !== false && this.noGit.has(projectId)) fail('conflict', 409, PROJECT_NOT_IN_GIT);
+  }
   async createProject(input: { rootPath: string; name?: string }) {
     const raw = input.rootPath.trim();
     if (!raw.startsWith('/') && !raw.startsWith('~')) fail('path_invalid', 400, 'Enter an absolute path to a folder.');
@@ -259,8 +269,9 @@ export class MockApiClient implements ApiClient {
   async listChats() {
     return this.chats.map((c) => this.summary(c)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
-  async createChat(input: { projectId: Id | null; model: string; editMode?: EditMode }) {
+  async createChat(input: { projectId: Id | null; model: string; editMode?: EditMode; expectedInGitRepo?: boolean }) {
     if (input.projectId && !this.projects.some((p) => p.id === input.projectId)) fail('not_found', 404);
+    if (input.editMode === 'auto' && input.projectId) this.checkAutoGit(input.projectId, input.expectedInGitRepo);
     const t = now();
     const chat: Chat = {
       id: crypto.randomUUID(),
@@ -291,6 +302,7 @@ export class MockApiClient implements ApiClient {
       editMode?: EditMode;
       expectedEditMode?: EditMode;
       expectedProjectId?: Id | null;
+      expectedInGitRepo?: boolean;
     },
   ) {
     // Same rules as `PATCH /chats/:id`. Everything is validated before anything is mutated.
@@ -306,6 +318,11 @@ export class MockApiClient implements ApiClient {
     if (patch.projectId !== undefined && patch.projectId !== c.projectId && this.changes.get(id))
       fail('conflict', 409, 'Apply or discard the proposed edits first.');
     if (patch.projectId && !this.projects.some((p) => p.id === patch.projectId)) fail('not_found', 404);
+    // Turning Auto on in a project, or carrying Auto into another one, checks that folder's Git status.
+    const nextProject = patch.projectId !== undefined ? patch.projectId : c.projectId;
+    const nextMode = patch.editMode ?? c.editMode;
+    const carriesAuto = patch.editMode === 'auto' || (patch.projectId !== undefined && patch.projectId !== c.projectId);
+    if (carriesAuto && nextMode === 'auto' && nextProject) this.checkAutoGit(nextProject, patch.expectedInGitRepo);
 
     if (patch.title !== undefined) c.title = patch.title.trim();
     if (patch.projectId !== undefined) c.projectId = patch.projectId;
@@ -337,24 +354,31 @@ export class MockApiClient implements ApiClient {
       /** Ignored here: the mock never asks for terminal reads (see `answerTerminalRead`). */
       terminal?: boolean;
       expectedEditMode?: EditMode;
+      expectedProjectId?: Id | null;
     },
     signal: AbortSignal,
   ) {
-    return this.run(chatId, input.model, input.effort, input.expectedEditMode, signal, input);
+    return this.run(chatId, input.model, input.effort, input, signal, input);
   }
   retry(
     chatId: Id,
-    input: { model: string; effort?: ReasoningEffort | null; terminal?: boolean; expectedEditMode?: EditMode },
+    input: {
+      model: string;
+      effort?: ReasoningEffort | null;
+      terminal?: boolean;
+      expectedEditMode?: EditMode;
+      expectedProjectId?: Id | null;
+    },
     signal: AbortSignal,
   ) {
-    return this.run(chatId, input.model, input.effort, input.expectedEditMode, signal);
+    return this.run(chatId, input.model, input.effort, input, signal);
   }
 
   private async *run(
     chatId: Id,
     model: string,
     effortInput: ReasoningEffort | null | undefined,
-    expectedEditMode: EditMode | undefined,
+    expected: { expectedEditMode?: EditMode; expectedProjectId?: Id | null },
     signal: AbortSignal,
     input?: { text: string; attachmentIds: Id[] },
   ): AsyncIterable<AgentEvent> {
@@ -362,10 +386,12 @@ export class MockApiClient implements ApiClient {
     // Backfill the totals before a retry truncates the messages, so the discarded turn keeps counting.
     this.usageOf(chatId, chat.messages);
     if (this.running.has(chatId)) fail('conflict', 409, 'A reply is already in progress.');
-    // Like the server: the turn runs in the mode the UI showed (omitted means Review), or not at all (nothing stored,
-    // truncated or undone).
+    // Like the server: the turn runs in the mode the UI showed (omitted means Review) and in the project it showed
+    // (omitted means unchecked), or not at all (nothing stored, truncated or undone).
     const mode: EditMode = chat.editMode;
-    if ((expectedEditMode ?? 'review') !== mode) fail('conflict', 409, EDIT_MODE_CHANGED);
+    if ((expected.expectedEditMode ?? 'review') !== mode) fail('conflict', 409, EDIT_MODE_CHANGED);
+    if (expected.expectedProjectId !== undefined && expected.expectedProjectId !== chat.projectId)
+      fail('conflict', 409, CHAT_PROJECT_CHANGED);
     if (!this.apiKey) fail('no_api_key', 400);
     const info = SAMPLE_MODELS.find((m) => m.id === model);
     // F3: the body's effort wins; omitted = the chat's stored effort.

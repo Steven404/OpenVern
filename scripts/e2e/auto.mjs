@@ -43,6 +43,7 @@ const bytes = (name) => readFileSync(file(name));
 const MARKER = ' // edited by the fake provider';
 const EDIT_MODE_CHANGED = "This chat's edit mode changed. Check Review / Auto and send again.";
 const CHAT_PROJECT_CHANGED = 'This chat moved to another project. Check Review / Auto and try again.';
+const PROJECT_NOT_IN_GIT = "This project's folder is no longer a Git repository. Check the warning and try again.";
 const countOf = (text, part) => text.split(part).length - 1;
 const originalBytes = Object.fromEntries(Object.keys(original).map((n) => [n, bytes(n)]));
 const sameBytes = (name) => existsSync(file(name)) && bytes(name).equals(originalBytes[name]);
@@ -465,9 +466,23 @@ try {
   check('7 a send expecting Auto in a Review chat is refused (409)', refused(staleSend), `${staleSend.status}`);
   check('7 a retry expecting Auto in a Review chat is refused (409)', refused(staleRetry), `${staleRetry.status}`);
   check('7 the refusals stored nothing', (await chatNow()).messages.length === before7.messages.length);
+  // Auto in this folder (not a Git repository) needs the client to have shown it outside Git: a request that shows
+  // nothing about Git is refused.
+  const unshown = await api('/chats', 'POST', { projectId: project.id, model: before7.model, editMode: 'auto' });
+  check(
+    '7 an Auto chat that showed no Git status for a folder outside Git is refused (409)',
+    unshown.status === 409 && unshown.body?.error?.message === PROJECT_NOT_IN_GIT,
+    `${unshown.status}`,
+  );
   // A request that names no mode expects Review, so it can't run or move an Auto chat.
-  const autoChat = (await api('/chats', 'POST', { projectId: project.id, model: before7.model, editMode: 'auto' }))
-    .body;
+  const autoChat = (
+    await api('/chats', 'POST', {
+      projectId: project.id,
+      model: before7.model,
+      editMode: 'auto',
+      expectedInGitRepo: false,
+    })
+  ).body;
   const noModeSend = await api(`/chats/${autoChat.id}/messages`, 'POST', {
     text: 'no mode [fake:write=nomode.txt]',
     attachmentIds: [],
@@ -477,6 +492,23 @@ try {
   check(
     '7 it stored and wrote nothing',
     (await api(`/chats/${autoChat.id}`)).body.messages.length === 0 && !existsSync(file('nomode.txt')),
+  );
+  // A send naming the project the sender saw is refused when the chat is not there (moved from another window).
+  const staleProject = await api(`/chats/${autoChat.id}/messages`, 'POST', {
+    text: 'stale project [fake:write=staleproject.txt]',
+    attachmentIds: [],
+    model: before7.model,
+    expectedEditMode: 'auto',
+    expectedProjectId: null,
+  });
+  check(
+    '7 a send naming a project the chat is not in is refused (409)',
+    staleProject.status === 409 && staleProject.body?.error?.message === CHAT_PROJECT_CHANGED,
+    `${staleProject.status}`,
+  );
+  check(
+    '7 it stored and wrote nothing',
+    (await api(`/chats/${autoChat.id}`)).body.messages.length === 0 && !existsSync(file('staleproject.txt')),
   );
   const noModeMove = await api(`/chats/${autoChat.id}`, 'PATCH', { projectId: null });
   check('7 a move naming no mode of an Auto chat is refused (409)', refused(noModeMove), `${noModeMove.status}`);

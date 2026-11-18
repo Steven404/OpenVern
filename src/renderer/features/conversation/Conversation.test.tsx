@@ -9,6 +9,7 @@ import { MockApiClient } from '../../lib/mock-api-client';
 import { useEditModes } from '../../stores/edit-modes';
 import { createRun, PENDING_PREFIX, useRunsStore } from '../../stores/runs';
 import { useUiStore } from '../../stores/ui';
+import { AUTO_HIDDEN_NOTICE } from '../composer/Composer';
 import { formatDuration } from '../composer/format';
 import { ReplyComposer } from '../composer/ReplyComposer';
 import { installDomStubs, renderWithProviders, resetStores } from '../composer/test-utils';
@@ -325,6 +326,7 @@ describe('Conversation run overlay', () => {
       model: chat.model,
       effort: chat.effort,
       expectedEditMode: chat.editMode,
+      expectedProjectId: chat.projectId,
     });
     await waitFor(() => expect(screen.queryByTestId('error-card')).toBeNull());
   });
@@ -344,7 +346,12 @@ describe('Conversation run overlay', () => {
     await act(async () => {
       fireEvent.click(button);
     });
-    expect(retry.mock.calls[0]?.[1]).toEqual({ model: chat.model, effort: 'high', expectedEditMode: chat.editMode });
+    expect(retry.mock.calls[0]?.[1]).toEqual({
+      model: chat.model,
+      effort: 'high',
+      expectedEditMode: chat.editMode,
+      expectedProjectId: chat.projectId,
+    });
     await waitFor(() => expect(screen.queryByTestId('error-card')).toBeNull());
   });
 
@@ -361,7 +368,12 @@ describe('Conversation run overlay', () => {
     await act(async () => {
       fireEvent.click(button);
     });
-    expect(retry.mock.calls[0]?.[1]).toEqual({ model: chat.model, effort: 'low', expectedEditMode: chat.editMode });
+    expect(retry.mock.calls[0]?.[1]).toEqual({
+      model: chat.model,
+      effort: 'low',
+      expectedEditMode: chat.editMode,
+      expectedProjectId: chat.projectId,
+    });
     await waitFor(() => expect(screen.queryByTestId('error-card')).toBeNull());
   });
 
@@ -383,7 +395,12 @@ describe('Conversation run overlay', () => {
     await act(async () => {
       fireEvent.click(button);
     });
-    expect(retry.mock.calls[0]?.[1]).toEqual({ model: chat.model, effort: 'high', expectedEditMode: chat.editMode });
+    expect(retry.mock.calls[0]?.[1]).toEqual({
+      model: chat.model,
+      effort: 'high',
+      expectedEditMode: chat.editMode,
+      expectedProjectId: chat.projectId,
+    });
     await waitFor(() => expect(screen.queryByTestId('error-card')).toBeNull());
   });
 
@@ -498,4 +515,116 @@ describe('Retry and the edit mode the chip shows', () => {
     expect(screen.getByTestId('stopped-label')).toBeTruthy();
     expect((await api.getChatChanges(created.id)).applied[0]).toMatchObject({ source: 'auto', undoable: true });
   });
+});
+
+describe('a retry that failed before it truncated keeps the earlier write visible', () => {
+  it('error then done from the server, a failed read, then a successful one: the Auto card and its Undo show', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const project = (await api.listProjects()).find((p) => p.inGitRepo);
+    if (!project) throw new Error('seed needs a Git project');
+    const created = await api.createChat({
+      projectId: project.id,
+      model: 'anthropic/claude-sonnet-5.5',
+      editMode: 'auto',
+      expectedInGitRepo: true,
+    });
+    for await (const _ of api.sendMessage(
+      created.id,
+      { text: 'edit [mock:edit]', attachmentIds: [], model: created.model, expectedEditMode: 'auto' },
+      new AbortController().signal,
+    )) {
+      // play the whole Auto turn: its writes make an undoable auto batch
+    }
+    const full = await api.getChat(created.id);
+    useRunsStore.setState({ runs: { [created.id]: { ...createRun(1), status: 'idle', stopped: true } } });
+    const view = renderWithProviders(<Conversation chatId={created.id} />, { api, chats: [full] });
+    await screen.findByRole('button', { name: 'Undo the edits from this turn' });
+    // The retry fails while preparing, before anything was truncated or undone, and the read after it fails too.
+    vi.spyOn(api, 'retry').mockImplementation(async function* () {
+      yield { type: 'error', error: errorInfo('internal', 'Could not undo the previous attempt.') };
+      yield { type: 'done' };
+    });
+    const real = api.getChat.bind(api);
+    const getChat = vi.spyOn(api, 'getChat').mockRejectedValueOnce(new Error('offline'));
+    const label = (await screen.findByTestId('stopped-label')).parentElement as HTMLElement;
+    await act(async () => {
+      fireEvent.click(await within(label).findByRole('button', { name: 'Retry' }));
+    });
+    await waitFor(() => expect(useRunsStore.getState().runs[created.id]?.status).toBe('idle'));
+    expect(screen.getByRole('button', { name: 'Undo the edits from this turn' })).toBeTruthy();
+    // A later read succeeds: what it brings is shown whole.
+    getChat.mockImplementation(real);
+    await act(async () => {
+      await view.queryClient.refetchQueries({ queryKey: ['chat', created.id] });
+    });
+    expect(getChat.mock.calls.length).toBeGreaterThan(1);
+    expect(screen.getByRole('button', { name: 'Undo the edits from this turn' })).toBeTruthy();
+    expect(screen.getAllByText(/edit \[mock:edit\]/).length).toBeGreaterThan(0);
+  });
+});
+
+describe('Auto that is not on screen never goes out', () => {
+  /** A stopped turn in an Auto chat whose chip can't show: no project, or a model without tools. */
+  async function hiddenAuto(where: 'no project' | 'no tools') {
+    const api = new MockApiClient({ delayMs: 0 });
+    const project = (await api.listProjects()).find((p) => p.inGitRepo);
+    if (!project) throw new Error('seed needs a Git project');
+    const created = await api.createChat({
+      projectId: where === 'no project' ? null : project.id,
+      model: where === 'no project' ? 'anthropic/claude-sonnet-5.5' : 'google/gemma-3-4b-it',
+    });
+    for await (const _ of api.sendMessage(
+      created.id,
+      { text: 'hello', attachmentIds: [], model: created.model, expectedEditMode: 'review' },
+      new AbortController().signal,
+    )) {
+      // one finished turn, so there is something to retry
+    }
+    // Another window turned Auto on (and, for "no project", moved the chat out of its project afterwards).
+    if (where === 'no project') {
+      await api.updateChat(created.id, { projectId: project.id, expectedEditMode: 'review' });
+      await api.updateChat(created.id, { editMode: 'auto', expectedProjectId: project.id, expectedInGitRepo: true });
+      await api.updateChat(created.id, { projectId: null, expectedEditMode: 'auto' });
+    } else {
+      await api.updateChat(created.id, { editMode: 'auto', expectedProjectId: project.id, expectedInGitRepo: true });
+    }
+    const full = await api.getChat(created.id);
+    expect(full.editMode).toBe('auto');
+    useRunsStore.setState({ runs: { [created.id]: { ...createRun(1), status: 'idle', stopped: true } } });
+    const send = vi.spyOn(api, 'sendMessage');
+    const retry = vi.spyOn(api, 'retry');
+    renderWithProviders(
+      <>
+        <Conversation chatId={full.id} />
+        <ReplyComposer chat={full} />
+      </>,
+      { api, chats: [full] },
+    );
+    return { api, full, send, retry };
+  }
+
+  it.each(['no project', 'no tools'] as const)(
+    'with Auto shown but its chip hidden (%s), Send and Retry are blocked and say why',
+    async (where) => {
+      const { full, send, retry } = await hiddenAuto(where);
+      await screen.findByRole('button', { name: /^Model:/ });
+      await screen.findByTestId('stopped-label');
+      // The store holds Auto, known: only the chip being hidden stops the send.
+      expect(useEditModes.getState().entries[full.id]).toMatchObject({ mode: 'auto', status: 'known' });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(screen.queryByTestId('edit-mode-chip')).toBeNull();
+      expect(await screen.findByText(AUTO_HIDDEN_NOTICE)).toBeTruthy();
+
+      const textarea = screen.getByLabelText('Message') as HTMLTextAreaElement;
+      fireEvent.change(textarea, { target: { value: 'write it' } });
+      fireEvent.keyDown(textarea, { key: 'Enter' });
+      expect((screen.getByRole('button', { name: 'Send message' }) as HTMLButtonElement).disabled).toBe(true);
+      const label = (screen.getByTestId('stopped-label').parentElement ?? document.body) as HTMLElement;
+      expect(within(label).queryByRole('button', { name: 'Retry' })).toBeNull();
+      await new Promise((r) => setTimeout(r, 20));
+      expect(send).not.toHaveBeenCalled();
+      expect(retry).not.toHaveBeenCalled();
+      expect(textarea.value).toBe('write it');
+    },
+  );
 });

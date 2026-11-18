@@ -3,6 +3,7 @@ import {
   CHAT_PROJECT_CHANGED,
   createChatBody,
   EDIT_MODE_CHANGED,
+  PROJECT_NOT_IN_GIT,
   ROUTES,
   retryBody,
   sendMessageBody,
@@ -53,6 +54,38 @@ describe('api schemas', () => {
       expect(updateChatBody.safeParse({ editMode: 'auto', expectedProjectId }).success).toBe(false);
     }
     expect(CHAT_PROJECT_CHANGED).toBe('This chat moved to another project. Check Review / Auto and try again.');
+  });
+
+  it('takes an optional expectedProjectId on send and retry (a project id or null)', () => {
+    const send = { text: 'hi', attachmentIds: [], model: 'm' };
+    for (const expectedProjectId of ['p1', null]) {
+      expect(sendMessageBody.parse({ ...send, expectedProjectId }).expectedProjectId).toBe(expectedProjectId);
+      expect(retryBody.parse({ model: 'm', expectedProjectId }).expectedProjectId).toBe(expectedProjectId);
+    }
+    expect('expectedProjectId' in sendMessageBody.parse(send)).toBe(false);
+    expect('expectedProjectId' in retryBody.parse({ model: 'm' })).toBe(false);
+    for (const expectedProjectId of ['', 1, false]) {
+      expect(sendMessageBody.safeParse({ ...send, expectedProjectId }).success).toBe(false);
+      expect(retryBody.safeParse({ model: 'm', expectedProjectId }).success).toBe(false);
+    }
+  });
+
+  it('takes an optional expectedInGitRepo on createChat and update', () => {
+    for (const expectedInGitRepo of [true, false]) {
+      expect(updateChatBody.parse({ editMode: 'auto', expectedInGitRepo }).expectedInGitRepo).toBe(expectedInGitRepo);
+      expect(
+        createChatBody.parse({ projectId: 'p1', model: 'm', editMode: 'auto', expectedInGitRepo }).expectedInGitRepo,
+      ).toBe(expectedInGitRepo);
+    }
+    expect('expectedInGitRepo' in updateChatBody.parse({ editMode: 'auto' })).toBe(false);
+    expect('expectedInGitRepo' in createChatBody.parse({ projectId: null, model: 'm' })).toBe(false);
+    for (const expectedInGitRepo of ['true', 1, null]) {
+      expect(updateChatBody.safeParse({ editMode: 'auto', expectedInGitRepo }).success).toBe(false);
+      expect(createChatBody.safeParse({ projectId: null, model: 'm', expectedInGitRepo }).success).toBe(false);
+    }
+    expect(PROJECT_NOT_IN_GIT).toBe(
+      "This project's folder is no longer a Git repository. Check the warning and try again.",
+    );
   });
 
   it('exposes the undo route and accepts an empty body', () => {

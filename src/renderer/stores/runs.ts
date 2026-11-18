@@ -22,7 +22,7 @@ import type {
 } from '@shared/types';
 import type { QueryClient } from '@tanstack/react-query';
 import { create } from 'zustand';
-import { type ApiClient, ApiError, isEditModeChanged } from '../lib/api-client';
+import { type ApiClient, ApiError, isChatProjectChanged, isEditModeChanged } from '../lib/api-client';
 import { queryKeys } from '../lib/query-keys';
 import { confirmEditMode, fetchChat } from './edit-modes';
 
@@ -61,9 +61,10 @@ export interface RunState {
    */
   usageBefore: ChatUsage | null;
   /**
-   * A retry: the id of the user message it reruns. While set, the persisted messages after it are hidden (see
-   * `hideRetriedTail`), as the server drops them once it accepts the retry. Cleared when the server never said it
-   * started (nothing was truncated) and once the chat was read again after the run; a refused retry drops the run.
+   * A retry: the id of the user message it reruns. While set and the run is active, the persisted messages after it
+   * are hidden (see `hideRetriedTail`), as the server drops them once it accepts the retry. Cleared when the server
+   * never said it started (nothing was truncated) and whenever the run becomes idle, whatever the outcome; a refused
+   * retry drops the run.
    */
   retryOf: Id | null;
 }
@@ -96,10 +97,13 @@ export function createRun(
  * The persisted messages as a retry shows them: up to and including the user message it reruns. The cut is made when
  * rendering, never in the cache, so a retry the server refuses, or never starts, shows the earlier turn again, with
  * its Auto card and Undo, without waiting for a refetch. Showing too much is safe; hiding a write is not.
+ *
+ * INVARIANT: only an active run hides anything. A retry can fail before it truncates (the earlier turn and its writes
+ * are intact) and the read after it can fail too, so an idle run never cuts a later read of the chat.
  */
 export function hideRetriedTail(persisted: Message[], run?: RunState): Message[] {
   const retryOf = run?.retryOf;
-  if (!retryOf) return persisted;
+  if (!retryOf || run.status === 'idle') return persisted;
   const at = persisted.findIndex((m) => m.id === retryOf && m.role === 'user');
   return at < 0 ? persisted : persisted.slice(0, at + 1);
 }
@@ -248,17 +252,24 @@ export interface SendInput {
    * screen never showed.
    */
   expectedEditMode: EditMode;
+  /**
+   * The project the UI showed the chat in (`null` = no project). The server refuses the turn if the chat is in
+   * another one by then (moved from another window), so a turn never runs in a project the sender didn't see.
+   */
+  expectedProjectId: Id | null;
 }
 
-/** `retry` input: the model and effort to rerun with, and the edit mode the UI rendered (as in `SendInput`). */
+/** `retry` input: the model and effort to rerun with, and the mode and project the UI rendered (as in `SendInput`). */
 export interface RetryInput {
   model: string;
   effort?: ReasoningEffort | null;
   expectedEditMode: EditMode;
+  expectedProjectId: Id | null;
 }
 
 /**
- * A send or retry the server refused because the chat's edit mode was no longer the one the UI showed. Nothing was
+ * A send or retry the server refused because the chat's edit mode, or its project, was no longer the one the UI
+ * showed. Nothing was
  * stored or started. The reply composer shows `message` in its error line and puts `unsent` (what was typed, when the
  * message never reached the server) back in the draft. Nothing is resent: the user checks Review / Auto first.
  */
@@ -401,8 +412,10 @@ export const useRunsStore = create<RunsState>()((set, get) => {
             messages: keepMessages ? run.messages : [],
             streamingId: null,
             runningToolIds: [],
-            // The chat was read after the run, so the persisted list is the server's own: nothing left to hide.
-            retryOf: refreshed ? null : run.retryOf,
+            // An idle run hides nothing: either the chat was read after the run (the persisted list is the server's
+            // own), or the read failed and the retry may never have truncated (an error before it did, with the
+            // earlier turn's writes and Undo intact). Showing the old tail until a later read is safe; hiding it is not.
+            retryOf: null,
           },
         },
       };
@@ -410,7 +423,8 @@ export const useRunsStore = create<RunsState>()((set, get) => {
   };
 
   /**
-   * The server refused the turn because the chat's edit mode changed (a 409 before anything was stored). The run is
+   * The server refused the turn because the chat's edit mode or project changed (a 409 before anything was stored).
+   * The run is
    * dropped as if it never started (with it any tail a retry hid), the run it replaced comes back, what was typed goes
    * to the composer with the reason, and the chat's mode is checked again so Review / Auto shows the server's mode
    * (sending waits for that check). Nothing is resent.
@@ -457,7 +471,7 @@ export const useRunsStore = create<RunsState>()((set, get) => {
       }
     } catch (err) {
       if (controller.signal.aborted) apply(chatId, token, { type: 'aborted' });
-      else if (isEditModeChanged(err)) {
+      else if (isEditModeChanged(err) || isChatProjectChanged(err)) {
         if (controllers.get(chatId) === controller) controllers.delete(chatId);
         refuse(deps, chatId, token, previous, err.info.message);
         return;
@@ -511,8 +525,9 @@ export const useRunsStore = create<RunsState>()((set, get) => {
         attachments: input.attachments,
       };
       const usageBefore = cachedUsage(deps.queryClient, chatId);
-      const { expectedEditMode } = input;
-      // Kept for a resend; never the expected mode, which must come from the screen at the time of that resend.
+      const { expectedEditMode, expectedProjectId } = input;
+      // Kept for a resend; never the expected mode or project, which must come from the screen at the time of that
+      // resend.
       const unsent: UnsentMessage = {
         text: input.text,
         attachments: input.attachments,
@@ -538,6 +553,7 @@ export const useRunsStore = create<RunsState>()((set, get) => {
               ...(input.effort !== undefined ? { effort: input.effort } : {}),
               ...(deps.terminal ? { terminal: true } : {}),
               expectedEditMode,
+              expectedProjectId,
             },
             controller.signal,
           ),
@@ -546,7 +562,7 @@ export const useRunsStore = create<RunsState>()((set, get) => {
     },
 
     async retry(deps, chatId, input) {
-      const { model, effort, expectedEditMode } = input;
+      const { model, effort, expectedEditMode, expectedProjectId } = input;
       if (isActive(chatId)) return;
       const unsent = get().runs[chatId]?.unsent;
       if (unsent) {
@@ -560,6 +576,7 @@ export const useRunsStore = create<RunsState>()((set, get) => {
           model,
           ...(effort !== undefined ? { effort } : {}),
           expectedEditMode,
+          expectedProjectId,
         });
       }
       const usageBefore = cachedUsage(deps.queryClient, chatId);
@@ -585,6 +602,7 @@ export const useRunsStore = create<RunsState>()((set, get) => {
               ...(effort !== undefined ? { effort } : {}),
               ...(deps.terminal ? { terminal: true } : {}),
               expectedEditMode,
+              expectedProjectId,
             },
             controller.signal,
           ),

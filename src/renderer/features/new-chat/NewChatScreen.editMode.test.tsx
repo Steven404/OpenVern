@@ -1,4 +1,4 @@
-import { EDIT_MODE_CHANGED } from '@shared/api';
+import { EDIT_MODE_CHANGED, PROJECT_NOT_IN_GIT } from '@shared/api';
 import { DEFAULT_MODEL } from '@shared/constants';
 import type { Chat } from '@shared/types';
 import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
@@ -120,7 +120,12 @@ describe('New chat: the edit mode chip', () => {
     expect(modeChip().getAttribute('data-mode')).toBe('auto');
     sendText('make the edits');
     await waitFor(() => expect(screen.getByTestId('location').textContent).toMatch(/^\/chat\/.+/));
-    expect(create).toHaveBeenCalledWith({ projectId: gitA.id, model: DEFAULT_MODEL, editMode: 'auto' });
+    expect(create).toHaveBeenCalledWith({
+      projectId: gitA.id,
+      model: DEFAULT_MODEL,
+      editMode: 'auto',
+      expectedInGitRepo: true,
+    });
     const created = (await create.mock.results[0]?.value) as Chat;
     expect(created.editMode).toBe('auto');
     expect((await api.getChat(created.id)).editMode).toBe('auto');
@@ -319,7 +324,12 @@ describe('New chat: the no-Git warning', () => {
 
     sendText('go');
     await waitFor(() => expect(create).toHaveBeenCalled());
-    expect(create).toHaveBeenCalledWith({ projectId: noGit.id, model: DEFAULT_MODEL, editMode: 'auto' });
+    expect(create).toHaveBeenCalledWith({
+      projectId: noGit.id,
+      model: DEFAULT_MODEL,
+      editMode: 'auto',
+      expectedInGitRepo: false,
+    });
   });
 
   it('"Keep Review" creates the chat in Review', async () => {
@@ -336,5 +346,115 @@ describe('New chat: the no-Git warning', () => {
     sendText('go');
     await waitFor(() => expect(create).toHaveBeenCalled());
     expect(create).toHaveBeenCalledWith({ projectId: noGit.id, model: DEFAULT_MODEL, editMode: 'review' });
+  });
+});
+
+describe('New chat: a warning belongs to the project and opening it was shown for', () => {
+  /** Two projects outside Git, neither acknowledged. */
+  async function twoNoGit(api: MockApiClient) {
+    const { noGit: a } = await projectsOf(api);
+    const created = await api.createProject({ rootPath: '/home/you/no-git-b', name: 'Second folder' });
+    api.setProjectInGitRepo(created.id, false);
+    const b = (await api.listProjects()).find((p) => p.id === created.id);
+    if (!b) throw new Error('missing project');
+    return { a, b };
+  }
+
+  it("Back to an earlier New chat for project B while A's warning is open: the warning closes, B stays in Review and asks for itself", async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const { a, b } = await twoNoGit(api);
+    const create = vi.spyOn(api, 'createChat');
+    renderWithProviders(
+      <App
+        extra={
+          <>
+            <Goto to={paths.newChat(a.id)} label="open A" />
+            <GoBack />
+          </>
+        }
+      />,
+      { api, route: paths.newChat(b.id) },
+    );
+    await ready(b.name);
+    fireEvent.click(screen.getByRole('button', { name: 'open A' }));
+    await ready(a.name);
+    await pick('auto');
+    const dialog = await screen.findByTestId('no-git-dialog');
+    expect(dialog.textContent).toContain(`${a.name} isn't a Git repository`);
+
+    // History goes back to the New chat for B while A's warning is open (the browser's Back, outside the modal).
+    fireEvent.click(screen.getByRole('button', { name: 'go back', hidden: true }));
+    await waitFor(() => expect(projectChip().textContent).toBe(b.name));
+    await waitFor(() => expect(screen.queryByTestId('no-git-dialog')).toBeNull());
+    expect(modeChip().getAttribute('data-mode')).toBe('review');
+    expect(useUiStore.getState().autoNoGitAcknowledged).toEqual({});
+
+    // Turning Auto on for B shows B's own warning.
+    await pick('auto');
+    const own = await screen.findByTestId('no-git-dialog');
+    expect(own.textContent).toContain(`${b.name} isn't a Git repository`);
+    fireEvent.click(screen.getByTestId('no-git-keep-review'));
+    await waitFor(() => expect(screen.queryByTestId('no-git-dialog')).toBeNull());
+
+    sendText('hello');
+    await waitFor(() => expect(create).toHaveBeenCalled());
+    expect(create).toHaveBeenCalledWith({ projectId: b.id, model: DEFAULT_MODEL, editMode: 'review' });
+    expect(create.mock.calls.some(([input]) => input.editMode === 'auto')).toBe(false);
+  });
+
+  it('a pick decided for one project never shows or sends Auto for another', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const { a, b } = await twoNoGit(api);
+    const create = vi.spyOn(api, 'createChat');
+    renderWithProviders(<App />, { api, route: paths.newChat(a.id) });
+    await ready(a.name);
+    await pick('auto');
+    fireEvent.click(await screen.findByTestId('no-git-turn-on-auto'));
+    await waitFor(() => expect(modeChip().getAttribute('data-mode')).toBe('auto'));
+    // A change of project from the chip, then Auto for B: B's warning, not A's acknowledgment.
+    fireEvent.keyDown(projectChip(), { key: 'Enter' });
+    const items = await screen.findAllByRole('menuitemradio');
+    fireEvent.click(items.find((i) => i.textContent === b.name) as HTMLElement);
+    await waitFor(() => expect(projectChip().textContent).toBe(b.name));
+    expect(modeChip().getAttribute('data-mode')).toBe('review');
+    await pick('auto');
+    expect((await screen.findByTestId('no-git-dialog')).textContent).toContain(`${b.name} isn't a Git repository`);
+    fireEvent.keyDown(screen.getByTestId('no-git-dialog'), { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByTestId('no-git-dialog')).toBeNull());
+    sendText('hello');
+    await waitFor(() => expect(create).toHaveBeenCalled());
+    expect(create).toHaveBeenCalledWith({ projectId: b.id, model: DEFAULT_MODEL, editMode: 'review' });
+  });
+});
+
+describe('New chat: a folder that left Git since the list was read', () => {
+  it('createChat in Auto is refused, the chip drops to Review, and Auto again shows the warning', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const { gitA } = await projectsOf(api);
+    const create = vi.spyOn(api, 'createChat');
+    renderWithProviders(<App />, { api, route: paths.newChat(gitA.id) });
+    await ready(gitA.name);
+    await pick('auto');
+    expect(screen.queryByTestId('no-git-dialog')).toBeNull();
+    expect(modeChip().getAttribute('data-mode')).toBe('auto');
+    // The folder loses its repository; the screen still has the old list.
+    api.setProjectInGitRepo(gitA.id, false);
+    sendText('make the edits');
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    expect(create.mock.calls[0]?.[0]).toMatchObject({ editMode: 'auto', expectedInGitRepo: true });
+    expect(await screen.findByText(PROJECT_NOT_IN_GIT)).toBeTruthy();
+    expect(screen.getByTestId('location').textContent).toBe(paths.newChat(gitA.id));
+    expect((await api.listChats()).some((c) => c.editMode === 'auto' && c.projectId === gitA.id)).toBe(false);
+    expect(textarea().value).toBe('make the edits');
+    // The list is read again: the pick no longer holds, and Auto asks first.
+    await waitFor(() => expect(modeChip().getAttribute('data-mode')).toBe('review'));
+    await pick('auto');
+    expect((await screen.findByTestId('no-git-dialog')).textContent).toContain(`${gitA.name} isn't a Git repository`);
+    fireEvent.click(screen.getByTestId('no-git-turn-on-auto'));
+    await waitFor(() => expect(modeChip().getAttribute('data-mode')).toBe('auto'));
+    fireEvent.keyDown(textarea(), { key: 'Enter' });
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+    expect(create.mock.calls[1]?.[0]).toMatchObject({ editMode: 'auto', expectedInGitRepo: false });
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toMatch(/^\/chat\/.+/));
   });
 });

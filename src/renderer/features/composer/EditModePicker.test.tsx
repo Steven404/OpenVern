@@ -1,4 +1,4 @@
-import { EDIT_MODE_CHANGED } from '@shared/api';
+import { EDIT_MODE_CHANGED, PROJECT_NOT_IN_GIT } from '@shared/api';
 import { DEFAULT_MODEL } from '@shared/constants';
 import { errorInfo } from '@shared/errors';
 import type { Chat, ChatSummary, Id } from '@shared/types';
@@ -145,7 +145,11 @@ describe('choosing a mode in a chat', () => {
     await waitFor(() => expect(chip().getAttribute('data-mode')).toBe('auto'));
     expect(update).toHaveBeenCalledTimes(1);
     // Turning Auto on names the project it was decided for.
-    expect(update).toHaveBeenCalledWith(chat.id, { editMode: 'auto', expectedProjectId: git.id });
+    expect(update).toHaveBeenCalledWith(chat.id, {
+      editMode: 'auto',
+      expectedProjectId: git.id,
+      expectedInGitRepo: true,
+    });
     expect(queryClient.getQueryData<Chat>(queryKeys.chat(chat.id))?.editMode).toBe('auto');
     expect(queryClient.getQueryData<ChatSummary[]>(queryKeys.chats)?.find((c) => c.id === chat.id)?.editMode).toBe(
       'auto',
@@ -262,7 +266,11 @@ describe('the no-Git dialog', () => {
     await choose('auto');
     fireEvent.click(await screen.findByTestId('no-git-turn-on-auto'));
     await waitFor(() => expect(chip().getAttribute('data-mode')).toBe('auto'));
-    expect(update).toHaveBeenCalledWith(chat.id, { editMode: 'auto', expectedProjectId: noGit.id });
+    expect(update).toHaveBeenCalledWith(chat.id, {
+      editMode: 'auto',
+      expectedProjectId: noGit.id,
+      expectedInGitRepo: false,
+    });
     expect(useUiStore.getState().autoNoGitAcknowledged).toEqual({ [noGit.id]: true });
     expect(JSON.parse(window.localStorage.getItem(STORAGE_KEYS.autoNoGitAcknowledged) ?? 'null')).toEqual([noGit.id]);
     expect(screen.queryByTestId('no-git-dialog')).toBeNull();
@@ -312,7 +320,7 @@ describe('the no-Git dialog', () => {
     const api = new MockApiClient({ delayMs: 0 });
     const { noGit } = await projects(api);
     const chat = await chatIn(api, noGit.id);
-    await api.updateChat(chat.id, { editMode: 'auto' });
+    await api.updateChat(chat.id, { editMode: 'auto', expectedInGitRepo: false });
     renderWithProviders(<ReplyComposer chat={{ ...chat, editMode: 'auto' }} />, { api });
     await waitFor(() => expect(chipEl()?.getAttribute('data-mode')).toBe('auto'));
     await choose('review');
@@ -756,7 +764,7 @@ describe('the warning and Auto name the same project', () => {
     expect(screen.getByTestId('no-git-dialog').textContent).toContain(`${first.name} isn't a Git repository`);
     fireEvent.click(screen.getByTestId('no-git-turn-on-auto'));
     expect(onChange).toHaveBeenCalledTimes(1);
-    expect(onChange).toHaveBeenCalledWith('auto', first.id);
+    expect(onChange).toHaveBeenCalledWith('auto', first.id, false);
     expect(useUiStore.getState().autoNoGitAcknowledged).toEqual({ [first.id]: true });
   });
 
@@ -766,6 +774,44 @@ describe('the warning and Auto name the same project', () => {
     render(<EditModePicker value="review" onChange={onChange} project={git} />);
     openMenu();
     fireEvent.click(screen.getByTestId('edit-mode-auto'));
-    expect(onChange).toHaveBeenCalledWith('auto', git.id);
+    expect(onChange).toHaveBeenCalledWith('auto', git.id, true);
+  });
+});
+
+describe('a folder that left Git since the projects list was read', () => {
+  it('turning Auto on is refused, and the next pick shows the warning', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const { git } = await projects(api);
+    const chat = await chatIn(api, git.id);
+    const update = vi.spyOn(api, 'updateChat');
+    renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    await waitFor(() => expect(chipEl()?.getAttribute('data-mode')).toBe('review'));
+    // The folder loses its repository; the composer still has the list that said it was in Git.
+    api.setProjectInGitRepo(git.id, false);
+    await choose('auto');
+    expect(screen.queryByTestId('no-git-dialog')).toBeNull();
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+    expect(update).toHaveBeenCalledWith(chat.id, {
+      editMode: 'auto',
+      expectedProjectId: git.id,
+      expectedInGitRepo: true,
+    });
+    expect(await screen.findByText(PROJECT_NOT_IN_GIT)).toBeTruthy();
+    await waitFor(() => expect(chip().getAttribute('data-mode')).toBe('review'));
+    await waitFor(() => expect(chip().getAttribute('aria-busy')).toBeNull());
+    expect((await api.getChat(chat.id)).editMode).toBe('review');
+
+    // The list was read again: Auto now asks first, for this project.
+    await choose('auto');
+    const dialog = await screen.findByTestId('no-git-dialog');
+    expect(dialog.textContent).toContain(`${git.name} isn't a Git repository`);
+    expect(update).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByTestId('no-git-turn-on-auto'));
+    await waitFor(() => expect(chip().getAttribute('data-mode')).toBe('auto'));
+    expect(update).toHaveBeenLastCalledWith(chat.id, {
+      editMode: 'auto',
+      expectedProjectId: git.id,
+      expectedInGitRepo: false,
+    });
   });
 });

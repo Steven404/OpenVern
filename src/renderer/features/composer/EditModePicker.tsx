@@ -19,9 +19,11 @@ export interface EditModePickerProps {
   value: EditMode;
   /**
    * `projectId`: the project this pick was decided for (for Auto, the one whose no-Git warning was shown or not
-   * needed). Turning Auto on sends it, so the server refuses if the chat is no longer in that project.
+   * needed). `inGitRepo`: whether that project's folder was shown as inside Git, so whether the warning was skipped
+   * for that reason. Turning Auto on sends both, so the server refuses if the chat is no longer in that project, or
+   * if a folder shown as inside Git has left it.
    */
-  onChange: (mode: EditMode, projectId: Id) => void;
+  onChange: (mode: EditMode, projectId: Id, inGitRepo: boolean) => void;
   /** The project the edits go to: its name for the warning, and whether its folder is in a Git work tree. */
   project: { id: Id; name: string; inGitRepo: boolean };
   /** A run is active: a change applies from the next message. */
@@ -52,7 +54,7 @@ const ICONS: Record<EditMode, typeof Eye> = { review: Eye, auto: Zap };
 export function EditModePicker({ value, onChange, project, running = false, pending = false }: EditModePickerProps) {
   const acknowledged = useUiStore((s) => s.autoNoGitAcknowledged[project.id] === true);
   const acknowledge = useUiStore((s) => s.acknowledgeAutoNoGit);
-  const [warnFor, setWarnFor] = useState<{ id: Id; name: string } | null>(null);
+  const [warnFor, setWarnFor] = useState<{ id: Id; name: string; inGitRepo: boolean } | null>(null);
   // The dialog opens from a menu item, which unmounts with its menu: focus goes back to the chip instead.
   const triggerRef = useRef<HTMLButtonElement>(null);
   const hintId = useId();
@@ -63,10 +65,10 @@ export function EditModePicker({ value, onChange, project, running = false, pend
   const pick = (next: EditMode) => {
     if (next === value || pending) return;
     if (next === 'auto' && !project.inGitRepo && !acknowledged) {
-      setWarnFor({ id: project.id, name: project.name });
+      setWarnFor({ id: project.id, name: project.name, inGitRepo: project.inGitRepo });
       return;
     }
-    onChange(next, project.id);
+    onChange(next, project.id, project.inGitRepo);
   };
 
   return (
@@ -134,7 +136,7 @@ export function EditModePicker({ value, onChange, project, running = false, pend
         onAuto={() => {
           if (warnFor) {
             acknowledge(warnFor.id);
-            onChange('auto', warnFor.id);
+            onChange('auto', warnFor.id, warnFor.inGitRepo);
           }
           setWarnFor(null);
         }}

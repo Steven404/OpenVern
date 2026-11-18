@@ -1,13 +1,16 @@
+import { AppProviders, AppRoutes } from '@renderer/app/App';
 import { openMenu, renderApp, resetUi, seededClient } from '@renderer/app/test-utils';
 import { ApiError } from '@renderer/lib/api-client';
 import { MockApiClient } from '@renderer/lib/mock-api-client';
 import { queryKeys } from '@renderer/lib/query-keys';
 import { useEditModes } from '@renderer/stores/edit-modes';
 import { useUiStore } from '@renderer/stores/ui';
-import { EDIT_MODE_CHANGED } from '@shared/api';
+import { EDIT_MODE_CHANGED, PROJECT_NOT_IN_GIT } from '@shared/api';
 import { errorInfo } from '@shared/errors';
 import type { Chat, EditMode, ProjectListItem } from '@shared/types';
-import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { QueryClient } from '@tanstack/react-query';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { MemoryRouter, useNavigate } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 beforeEach(() => {
@@ -77,7 +80,11 @@ describe('moving an Auto chat to a project without Git', () => {
     await moveTo(header, noGit);
     fireEvent.click(await screen.findByTestId('no-git-turn-on-auto'));
     await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
-    expect(update).toHaveBeenCalledWith(chat.id, { projectId: noGit.id, expectedEditMode: 'auto' });
+    expect(update).toHaveBeenCalledWith(chat.id, {
+      projectId: noGit.id,
+      expectedEditMode: 'auto',
+      expectedInGitRepo: false,
+    });
     await waitFor(() => expect(screen.queryByTestId('no-git-dialog')).toBeNull());
     const stored = await client.getChat(chat.id);
     expect([stored.projectId, stored.editMode]).toEqual([noGit.id, 'auto']);
@@ -101,7 +108,11 @@ describe('moving an Auto chat to a project without Git', () => {
     useUiStore.setState({ autoNoGitAcknowledged: { [noGit.id]: true } });
     await moveTo(header, noGit);
     await waitFor(() =>
-      expect(update).toHaveBeenCalledWith(chat.id, { projectId: noGit.id, expectedEditMode: 'auto' }),
+      expect(update).toHaveBeenCalledWith(chat.id, {
+        projectId: noGit.id,
+        expectedEditMode: 'auto',
+        expectedInGitRepo: false,
+      }),
     );
     expect(screen.queryByTestId('no-git-dialog')).toBeNull();
   });
@@ -120,7 +131,13 @@ describe('moves that never ask', () => {
   it('an Auto chat to a project inside Git', async () => {
     const { header, git, update, chat } = await renderChat('auto');
     await moveTo(header, git);
-    await waitFor(() => expect(update).toHaveBeenCalledWith(chat.id, { projectId: git.id, expectedEditMode: 'auto' }));
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith(chat.id, {
+        projectId: git.id,
+        expectedEditMode: 'auto',
+        expectedInGitRepo: true,
+      }),
+    );
     expect(screen.queryByTestId('no-git-dialog')).toBeNull();
   });
 });
@@ -145,7 +162,11 @@ describe('a move never relies on a mode the server no longer has', () => {
     fireEvent.keyDown(chip, { key: 'Enter' });
     fireEvent.click(await screen.findByTestId('edit-mode-auto'));
     await waitFor(() =>
-      expect(update).toHaveBeenCalledWith(chat.id, { editMode: 'auto', expectedProjectId: project.id }),
+      expect(update).toHaveBeenCalledWith(chat.id, {
+        editMode: 'auto',
+        expectedProjectId: project.id,
+        expectedInGitRepo: project.inGitRepo,
+      }),
     );
     expect((await client.getChat(chat.id)).editMode).toBe('auto');
 
@@ -204,5 +225,84 @@ describe('a move never relies on a mode the server no longer has', () => {
     await moveTo(header, git);
     const dialog = await screen.findByTestId('move-error-dialog');
     expect(dialog.textContent).toContain('Apply or discard the proposed edits first.');
+  });
+});
+
+describe('a folder that left Git since the projects list was read', () => {
+  it('moving an Auto chat there ("in Git" on screen) is refused, and the next try asks first', async () => {
+    const { header, git, update, client, chat, project } = await renderChat('auto');
+    await screen.findByTestId('edit-mode-chip');
+    client.setProjectInGitRepo(git.id, false);
+    await moveTo(header, git);
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith(chat.id, {
+        projectId: git.id,
+        expectedEditMode: 'auto',
+        expectedInGitRepo: true,
+      }),
+    );
+    const dialog = await screen.findByTestId('move-error-dialog');
+    expect(dialog.textContent).toContain(PROJECT_NOT_IN_GIT);
+    expect(await client.getChat(chat.id)).toMatchObject({ projectId: project.id, editMode: 'auto' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'OK' }));
+    await waitFor(() => expect(screen.queryByTestId('move-error-dialog')).toBeNull());
+    await waitFor(() => expect(screen.getByTestId('edit-mode-chip').getAttribute('aria-busy')).toBeNull());
+    // The list was read again: the folder is outside Git now, so the move asks first.
+    await moveTo(header, git);
+    const warning = await screen.findByTestId('no-git-dialog');
+    expect(warning.textContent).toContain(`${git.name} isn't a Git repository`);
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+});
+
+function GoBack() {
+  const navigate = useNavigate();
+  return (
+    <button type="button" onClick={() => navigate(-1)}>
+      go back
+    </button>
+  );
+}
+
+describe('the move warning belongs to the chat it opened for', () => {
+  it('Back to another Auto chat while the warning is open closes it, and never moves the other chat', async () => {
+    const seed = await seededClient();
+    const { client } = seed;
+    const noGit = seed.projects.find((p) => !p.inGitRepo);
+    const git = seed.projects.find((p) => p.inGitRepo);
+    if (!noGit || !git) throw new Error('seed needs a Git and a no-Git project');
+    const a = await client.createChat({ projectId: git.id, model: seed.chat.model, editMode: 'auto' });
+    const b = await client.createChat({ projectId: git.id, model: seed.chat.model, editMode: 'auto' });
+    await client.updateChat(a.id, { title: 'Chat A' });
+    await client.updateChat(b.id, { title: 'Chat B' });
+    const update = vi.spyOn(client, 'updateChat');
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <AppProviders client={client} queryClient={queryClient}>
+        <MemoryRouter initialEntries={[`/chat/${b.id}`, `/chat/${a.id}`]} initialIndex={1}>
+          <AppRoutes />
+          <GoBack />
+        </MemoryRouter>
+      </AppProviders>,
+    );
+    const headerOf = async (title: string) => {
+      const header = (await screen.findByRole('heading', { level: 1, name: title, hidden: true })).closest('header');
+      if (!header) throw new Error('missing header');
+      return header;
+    };
+    const headerA = await headerOf('Chat A');
+    await waitFor(() => expect(screen.getByTestId('edit-mode-chip').getAttribute('data-mode')).toBe('auto'));
+    await moveTo(headerA, noGit);
+    expect((await screen.findByTestId('no-git-dialog')).textContent).toContain(`${noGit.name} isn't a Git repository`);
+
+    // History goes back to chat B (also Auto, also loaded) while A's warning is open.
+    fireEvent.click(screen.getByRole('button', { name: 'go back', hidden: true }));
+    await headerOf('Chat B');
+    await waitFor(() => expect(screen.queryByTestId('no-git-dialog')).toBeNull());
+    await tick();
+    expect(update).not.toHaveBeenCalled();
+    expect(await client.getChat(b.id)).toMatchObject({ projectId: git.id, editMode: 'auto' });
+    expect(await client.getChat(a.id)).toMatchObject({ projectId: git.id, editMode: 'auto' });
+    expect(useUiStore.getState().autoNoGitAcknowledged).toEqual({});
   });
 });

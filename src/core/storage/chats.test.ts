@@ -4,6 +4,7 @@ import { CHAT_PROJECT_CHANGED, EDIT_MODE_CHANGED } from '@shared/api';
 import { NEW_CHAT_TITLE, REASONING_EFFORTS } from '@shared/constants';
 import type { AssistantMessage, Message, Usage, UserMessage } from '@shared/types';
 import { describe, expect, it, vi } from 'vitest';
+import { CoreError } from '../errors';
 import { createStorage } from './index';
 import { dataPaths } from './paths';
 import { cleanupTempDirs, MemorySecretStore, makeStorage, makeTempDir, recordingLogger } from './test-helpers';
@@ -1383,6 +1384,37 @@ describe('ChatsService update: the expected mode and project are checked under t
       projectId: b,
       editMode: 'auto',
     });
+  });
+
+  it('checkAutoProject runs under the lock with the project Auto lands in; throwing writes nothing', async () => {
+    const { storage, dataDir, a, b, chat } = await setup();
+    const seen: string[] = [];
+    const refuse = async (projectId: string) => {
+      seen.push(projectId);
+      throw new CoreError('conflict', 'no');
+    };
+    const before = await files(dataDir, chat.id);
+    await expect(storage.chats.update(chat.id, { editMode: 'auto' }, { checkAutoProject: refuse })).rejects.toThrow(
+      'no',
+    );
+    expect(await files(dataDir, chat.id)).toEqual(before);
+    await storage.chats.update(chat.id, { editMode: 'auto' });
+    const auto = await files(dataDir, chat.id);
+    await expect(storage.chats.update(chat.id, { projectId: b }, { checkAutoProject: refuse })).rejects.toThrow('no');
+    expect(await files(dataDir, chat.id)).toEqual(auto);
+    expect(seen).toEqual([a, b]);
+    // Nothing that leaves Auto off, stays in place or leaves the project asks.
+    const allow = async (projectId: string) => {
+      seen.push(`allow ${projectId}`);
+    };
+    await storage.chats.update(chat.id, { title: 'Renamed' }, { checkAutoProject: refuse });
+    await storage.chats.update(chat.id, { projectId: a }, { checkAutoProject: refuse });
+    await storage.chats.update(chat.id, { projectId: b, editMode: 'review' }, { checkAutoProject: refuse });
+    await storage.chats.update(chat.id, { projectId: null }, { checkAutoProject: refuse });
+    await storage.chats.update(chat.id, { editMode: 'auto' }, { checkAutoProject: refuse });
+    await storage.chats.update(chat.id, { projectId: a }, { checkAutoProject: allow });
+    expect(seen).toEqual([a, b, `allow ${a}`]);
+    expect(await storage.chats.get(chat.id)).toMatchObject({ projectId: a, editMode: 'auto' });
   });
 
   it.each(['auto first', 'move first'])(

@@ -50,16 +50,22 @@ export function Conversation({ chatId }: ConversationProps) {
   const runError = run?.error && !lastAssistantErrored ? run.error : null;
 
   // Retry runs in the mode the composer's chip shows, through the same gate as a send: it is offered only while that
-  // mode is on screen and confirmed, and it sends the value of this render.
+  // mode is on screen and confirmed, and it sends the value of this render, with the project this render shows.
   const retryModel = selectedModel ?? chat?.model ?? '';
-  const shownMode = useReplyEditMode(chatId, chat?.projectId ?? null, retryModel);
+  const shownProject = chat?.projectId ?? null;
+  const shownMode = useReplyEditMode(chatId, shownProject, retryModel);
   const expectedEditMode = shownMode.ready ? shownMode.entry.mode : null;
   const retry = useCallback(() => {
     if (!chat || expectedEditMode === null) return;
     // F3: a retry uses the effort chosen in this chat; otherwise the chat keeps the effort it already stored.
     const picked = selectedEffort === undefined ? chat.effort : selectedEffort;
-    void retryRun(deps, chatId, { model: retryModel, effort: picked, expectedEditMode });
-  }, [retryRun, deps, chatId, retryModel, selectedEffort, chat, expectedEditMode]);
+    void retryRun(deps, chatId, {
+      model: retryModel,
+      effort: picked,
+      expectedEditMode,
+      expectedProjectId: shownProject,
+    });
+  }, [retryRun, deps, chatId, retryModel, selectedEffort, chat, expectedEditMode, shownProject]);
 
   // ── stick to bottom ────────────────────────────────────────────────────────
   const scrollRef = useRef<HTMLElement>(null);

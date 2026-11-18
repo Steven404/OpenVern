@@ -688,6 +688,7 @@ describe('live updates', () => {
       attachments: [],
       model: chat.model,
       expectedEditMode: 'review',
+      expectedProjectId: chat.projectId,
     });
     expect(spy).toHaveBeenCalledWith({ queryKey: queryKeys.chatChanges(chat.id) });
     expect((await client.getChatChanges(chat.id)).pending?.files).toHaveLength(3);

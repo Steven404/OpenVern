@@ -14,7 +14,7 @@ import {
   useState,
 } from 'react';
 import { Button } from '../../components/ui';
-import { ApiError } from '../../lib/api-client';
+import { ApiError, isProjectNotInGit } from '../../lib/api-client';
 import { useApiClient } from '../../lib/api-context';
 import { queryKeys } from '../../lib/query-keys';
 import {
@@ -47,6 +47,8 @@ export interface ComposerSendInput {
    * turn is expected to run in, so it comes from this render, never from a cache read when the send fires.
    */
   editMode: EditMode;
+  /** The project the composer showed (`projectId`), which the turn is expected to run in; `null` = no project. */
+  projectId: Id | null;
 }
 
 export interface ComposerProps {
@@ -72,16 +74,25 @@ export interface ComposerProps {
   /** Lets other features add uploaded files here through `addAttachmentRef(sinkKey, ref)` (reply: the chat id). */
   sinkKey?: string;
   /**
-   * `new` variant: the edit mode the chat will be created with, and its setter. The reply variant reads and changes
-   * the chat's own mode instead.
+   * `new` variant: the edit mode the chat will be created with, and its setter, which gets the project the pick was
+   * decided for and whether that project's folder was shown as inside Git. The reply variant reads and changes the
+   * chat's own mode instead.
    */
   editMode?: EditMode;
-  onEditModeChange?: (mode: EditMode) => void;
+  onEditModeChange?: (mode: EditMode, projectId: Id, inGitRepo: boolean) => void;
+  /**
+   * `new` variant: the New chat opening the pick belongs to. A new value remounts the chip, so a no-Git warning opened
+   * for an earlier opening (and its project) closes instead of being confirmed for this one.
+   */
+  editModeScope?: string;
 }
 
 const HINT = 'Enter to send · Shift + Enter for a new line';
 const TOOLS_NOTICE = "This model can't use tools, so it won't read your project files.";
 const NO_KEY_NOTICE = 'Add your OpenRouter API key to start chatting.';
+/** A chat in Auto whose chip can't be shown (no project, or a model without tools): sending would run unseen Auto. */
+export const AUTO_HIDDEN_NOTICE =
+  "This chat is in Auto, which can't be shown here, so sending is paused. Move it into a project or pick a model that can use tools.";
 /** The draft keeps a usable height even when the window is short and the terminal dock takes most of it. */
 const COMPOSER_MIN_MAX_HEIGHT = 96;
 
@@ -97,7 +108,9 @@ export function composerMaxHeight(viewportHeight: number, dockHeight: number): n
  *
  * INVARIANT: in a chat that could edit (a project chat whose model isn't known to lack tools), a reply goes out only
  * with the chip on screen, and only while the chat's mode is `known`: never on a cold load before the chat was read,
- * and never while a mode change or its check is in flight.
+ * and never while a mode change or its check is in flight. Auto goes out only with the chip on screen, in any chat: a
+ * chat in Auto whose chip is hidden (no project, no key, a model without tools) can't send or retry (`autoHidden`),
+ * because a move from another window could put it in a project where that unseen Auto writes.
  */
 export function useReplyEditMode(chatId: Id | undefined, projectId: Id | null, model: string, draft?: EditMode) {
   const entry: ModeEntry = useEditModeEntry(chatId);
@@ -112,8 +125,11 @@ export function useReplyEditMode(chatId: Id | undefined, projectId: Id | null, m
   // Unknown capabilities (the model list not loaded yet) count as tools: the chip shows, so the mode is on screen.
   const editCapable = projectId !== null && info?.supportsTools !== false;
   const showChip = editCapable && !noKey && project !== undefined && mode !== null;
-  const ready = entry.status === 'known' && entry.mode !== null && (!editCapable || showChip);
-  return { entry, mode, project, showChip, ready, noKey };
+  const known = entry.status === 'known' && entry.mode !== null;
+  // Review may go out without the chip only where it couldn't show (the chat can't edit); Auto never does.
+  const ready = known && (showChip || (!editCapable && entry.mode === 'review'));
+  const autoHidden = chatId !== undefined && known && entry.mode === 'auto' && !editCapable;
+  return { entry, mode, project, showChip, ready, noKey, autoHidden };
 }
 
 /** Shared reply / new-chat composer (D15, D16, D18): textarea, attach, model picker, send / stop, notices and hint. */
@@ -133,6 +149,7 @@ export function Composer({
   sinkKey,
   editMode: draftEditMode,
   onEditModeChange,
+  editModeScope,
 }: ComposerProps) {
   const api = useApiClient();
   const queryClient = useQueryClient();
@@ -160,29 +177,38 @@ export function Composer({
   const accept = supportsImages ? `${TEXT_ACCEPT},${IMAGE_ACCEPT}` : TEXT_ACCEPT;
 
   const editMode = shown.mode;
-  const changeEditMode = (mode: EditMode, forProject: Id) => {
+  const changeEditMode = (mode: EditMode, forProject: Id, inGitRepo: boolean) => {
     if (chatId === undefined) {
-      onEditModeChange?.(mode);
+      onEditModeChange?.(mode, forProject, inGitRepo);
       return;
     }
-    // Turning Auto on names the project whose no-Git warning was decided: if the chat moved meanwhile, the server
-    // refuses instead of turning Auto on somewhere the user wasn't warned about.
+    // Turning Auto on names the project whose no-Git warning was decided, and the Git status that decision rested on:
+    // if the chat moved meanwhile, or its folder left Git, the server refuses instead of turning Auto on somewhere the
+    // user wasn't warned about.
     writeChat({ api, queryClient }, chatId, 'mode', () =>
       api.updateChat(
         chatId,
-        mode === 'auto' ? { editMode: 'auto', expectedProjectId: forProject } : { editMode: mode },
+        mode === 'auto'
+          ? { editMode: 'auto', expectedProjectId: forProject, expectedInGitRepo: inGitRepo }
+          : { editMode: mode },
       ),
     )
       .then((summary) => {
         if (summary) patchChatSummary(queryClient, summary);
       })
-      .catch(() => {
-        // The store keeps the error for the notice below and checks the server's mode again.
+      .catch((err: unknown) => {
+        // The store keeps the error for the notice below and checks the server's mode again. A folder that left Git
+        // means the projects list is old: reading it again makes the next pick show the warning.
+        if (isProjectNotInGit(err)) void queryClient.invalidateQueries({ queryKey: queryKeys.projects });
       });
   };
   const modePending = chatId !== undefined && (entry.status === 'saving' || entry.status === 'confirming');
   const modeUnknown = chatId !== undefined && entry.status === 'unknown';
-  const modeNotice = modeUnknown ? EDIT_MODE_UNKNOWN : chatId !== undefined ? entry.error : null;
+  const modeNotice = modeUnknown
+    ? EDIT_MODE_UNKNOWN
+    : chatId !== undefined
+      ? (entry.error ?? (shown.autoHidden && !noKey ? AUTO_HIDDEN_NOTICE : null))
+      : null;
   const showEditModePicker = shown.showChip;
 
   const [text, setText] = useState('');
@@ -270,7 +296,7 @@ export function Composer({
     setText('');
     setSending(true);
     try {
-      await onSend({ text: draft.trim(), attachments: refs, editMode: sendMode });
+      await onSend({ text: draft.trim(), attachments: refs, editMode: sendMode, projectId });
     } catch (err) {
       setText(draft);
       attachments.restore(taken);
@@ -278,7 +304,7 @@ export function Composer({
     } finally {
       setSending(false);
     }
-  }, [canSend, supportsImages, ready, attachments, text, onSend, sendMode]);
+  }, [canSend, supportsImages, ready, attachments, text, onSend, sendMode, projectId]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key !== 'Enter' || e.shiftKey) return;
@@ -374,6 +400,7 @@ export function Composer({
           <span className="flex-1" />
           {showEditModePicker && editMode !== null && project !== undefined && (
             <EditModePicker
+              key={editModeScope}
               value={editMode}
               onChange={changeEditMode}
               project={project}

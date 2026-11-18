@@ -1,8 +1,8 @@
-import { CHAT_PROJECT_CHANGED, EDIT_MODE_CHANGED } from '@shared/api';
+import { CHAT_PROJECT_CHANGED, EDIT_MODE_CHANGED, PROJECT_NOT_IN_GIT } from '@shared/api';
 import { LIMITS, NEW_CHAT_TITLE } from '@shared/constants';
 import type { AgentEvent } from '@shared/events';
 import { describe, expect, it } from 'vitest';
-import { ApiError, isEditModeChanged } from './api-client';
+import { ApiError, isChatProjectChanged, isEditModeChanged, isProjectNotInGit } from './api-client';
 import { MockApiClient } from './mock-api-client';
 
 async function collect(it: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
@@ -774,9 +774,9 @@ describe('MockApiClient Auto mode', () => {
     // A match goes through; a mode-only PATCH that names no mode is unchecked.
     const ran = await collect(api.retry(chat.id, { model: MODEL, expectedEditMode: 'auto' }, sig()));
     expect(ran.at(-1)).toEqual({ type: 'done' });
-    await expect(api.updateChat(chat.id, { projectId: noGit.id, expectedEditMode: 'auto' })).resolves.toMatchObject({
-      projectId: noGit.id,
-    });
+    await expect(
+      api.updateChat(chat.id, { projectId: noGit.id, expectedEditMode: 'auto', expectedInGitRepo: false }),
+    ).resolves.toMatchObject({ projectId: noGit.id });
     await expect(api.updateChat(chat.id, { editMode: 'review' })).resolves.toMatchObject({ editMode: 'review' });
   });
 
@@ -809,9 +809,78 @@ describe('MockApiClient Auto mode', () => {
     const err = await api.updateChat(chat.id, { editMode: 'auto', expectedProjectId: git.id }).catch((e: unknown) => e);
     expect(err).toMatchObject({ status: 409, info: { code: 'conflict', message: CHAT_PROJECT_CHANGED } });
     expect(await api.getChat(chat.id)).toMatchObject({ projectId: noGit.id, editMode: 'review' });
-    await expect(api.updateChat(chat.id, { editMode: 'auto', expectedProjectId: noGit.id })).resolves.toMatchObject({
-      editMode: 'auto',
-    });
+    await expect(
+      api.updateChat(chat.id, { editMode: 'auto', expectedProjectId: noGit.id, expectedInGitRepo: false }),
+    ).resolves.toMatchObject({ editMode: 'auto' });
+  });
+
+  it('a send or retry naming a project the chat has left is refused, like the server, and changes nothing', async () => {
+    const { api, git, noGit } = await seeded();
+    const chat = await autoChatIn(api, git.id);
+    await editTurn(api, chat.id);
+    // Another window: to "No project", then into a project this sender never saw.
+    await api.updateChat(chat.id, { projectId: null, expectedEditMode: 'auto' });
+    await api.updateChat(chat.id, { projectId: noGit.id, expectedEditMode: 'auto', expectedInGitRepo: false });
+    const before = await api.getChat(chat.id);
+    const changes = await api.getChatChanges(chat.id);
+    for (const shown of [null, git.id]) {
+      for (const p of [
+        collect(
+          api.sendMessage(
+            chat.id,
+            {
+              text: 'x [mock:edit]',
+              attachmentIds: [],
+              model: MODEL,
+              expectedEditMode: 'auto',
+              expectedProjectId: shown,
+            },
+            sig(),
+          ),
+        ),
+        collect(api.retry(chat.id, { model: MODEL, expectedEditMode: 'auto', expectedProjectId: shown }, sig())),
+      ]) {
+        const err = await p.catch((e: unknown) => e);
+        expect(isChatProjectChanged(err)).toBe(true);
+        expect(err).toMatchObject({ status: 409, info: { code: 'conflict', message: CHAT_PROJECT_CHANGED } });
+      }
+    }
+    expect(await api.getChat(chat.id)).toEqual(before);
+    expect(await api.getChatChanges(chat.id)).toEqual(changes);
+    const ran = await collect(
+      api.retry(chat.id, { model: MODEL, expectedEditMode: 'auto', expectedProjectId: noGit.id }, sig()),
+    );
+    expect(ran.at(-1)).toEqual({ type: 'done' });
+  });
+
+  it('Auto in a folder that left Git is refused unless the UI showed it outside Git, like the server', async () => {
+    const { api, git } = await seeded();
+    const review = await api.createChat({ projectId: git.id, model: MODEL });
+    const other = (await api.listProjects()).find((p) => p.inGitRepo && p.id !== git.id);
+    if (!other) throw new Error('seed needs two Git projects');
+    const moving = await autoChatIn(api, other.id);
+    api.setProjectInGitRepo(git.id, false);
+    const chats = await api.listChats();
+    for (const shown of [{ expectedInGitRepo: true }, {}]) {
+      for (const p of [
+        api.updateChat(review.id, { editMode: 'auto', expectedProjectId: git.id, ...shown }),
+        api.createChat({ projectId: git.id, model: MODEL, editMode: 'auto', ...shown }),
+        api.updateChat(moving.id, { projectId: git.id, expectedEditMode: 'auto', ...shown }),
+      ]) {
+        const err = await p.catch((e: unknown) => e);
+        expect(isProjectNotInGit(err)).toBe(true);
+        expect(err).toMatchObject({ status: 409, info: { code: 'conflict', message: PROJECT_NOT_IN_GIT } });
+      }
+    }
+    expect(await api.listChats()).toEqual(chats);
+    expect((await api.listProjects()).find((p) => p.id === git.id)?.inGitRepo).toBe(false);
+    // Shown outside Git (the warning was decided): goes through. Review never asks.
+    await expect(
+      api.updateChat(moving.id, { projectId: git.id, editMode: 'review', expectedEditMode: 'auto' }),
+    ).resolves.toMatchObject({ projectId: git.id, editMode: 'review' });
+    await expect(
+      api.updateChat(review.id, { editMode: 'auto', expectedProjectId: git.id, expectedInGitRepo: false }),
+    ).resolves.toMatchObject({ editMode: 'auto' });
   });
 
   it('the mode a turn starts with holds for the whole turn, a change applies from the next one', async () => {

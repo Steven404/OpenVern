@@ -115,7 +115,7 @@ export class HttpApiClient implements ApiClient {
   listChats() {
     return this.json<ChatSummary[]>('GET', '/chats');
   }
-  createChat(input: { projectId: Id | null; model: string; editMode?: EditMode }) {
+  createChat(input: { projectId: Id | null; model: string; editMode?: EditMode; expectedInGitRepo?: boolean }) {
     return this.json<Chat>('POST', '/chats', input);
   }
   getChat(id: Id) {
@@ -130,6 +130,7 @@ export class HttpApiClient implements ApiClient {
       editMode?: EditMode;
       expectedEditMode?: EditMode;
       expectedProjectId?: Id | null;
+      expectedInGitRepo?: boolean;
     },
   ) {
     return this.json<ChatSummary>('PATCH', `/chats/${enc(id)}`, patch);
@@ -147,6 +148,7 @@ export class HttpApiClient implements ApiClient {
       /** This client can answer terminal reads, so the server may offer `read_terminal` (terminal plan §4.2). */
       terminal?: boolean;
       expectedEditMode?: EditMode;
+      expectedProjectId?: Id | null;
     },
     signal: AbortSignal,
   ) {
@@ -154,7 +156,13 @@ export class HttpApiClient implements ApiClient {
   }
   retry(
     chatId: Id,
-    input: { model: string; effort?: ReasoningEffort | null; terminal?: boolean; expectedEditMode?: EditMode },
+    input: {
+      model: string;
+      effort?: ReasoningEffort | null;
+      terminal?: boolean;
+      expectedEditMode?: EditMode;
+      expectedProjectId?: Id | null;
+    },
     signal: AbortSignal,
   ) {
     return this.stream(`/chats/${enc(chatId)}/retry`, input, signal);

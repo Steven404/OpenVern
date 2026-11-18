@@ -28,9 +28,17 @@ function ReplyComposerInner({ chat }: ReplyComposerProps) {
   const effort = rememberedEffort === undefined ? chat.effort : rememberedEffort;
 
   const onSend = useCallback(
-    ({ text, attachments, editMode }: ComposerSendInput) => {
-      // The mode the chip rendered when the user sent: the turn runs in it, or the server refuses it.
-      void send(deps, chat.id, { text, attachments, model, effort, expectedEditMode: editMode });
+    ({ text, attachments, editMode, projectId }: ComposerSendInput) => {
+      // The mode the chip rendered and the project the composer showed when the user sent: the turn runs in them, or
+      // the server refuses it.
+      void send(deps, chat.id, {
+        text,
+        attachments,
+        model,
+        effort,
+        expectedEditMode: editMode,
+        expectedProjectId: projectId,
+      });
     },
     [send, deps, chat.id, model, effort],
   );

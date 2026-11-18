@@ -20,7 +20,7 @@ import { FakeTerminalBridge } from '../features/terminal/test-fakes';
 import { ApiError } from '../lib/api-client';
 import { MockApiClient } from '../lib/mock-api-client';
 import { queryKeys } from '../lib/query-keys';
-import { useEditModes } from './edit-modes';
+import { chatQueryOptions, useEditModes } from './edit-modes';
 import {
   createRun,
   hideRetriedTail,
@@ -188,9 +188,13 @@ describe('useRunsStore', () => {
         yield { type: 'done' };
       });
       queryClient.setQueryData(queryKeys.chatChanges(chat.id), { pending: null, applied: [], diskSeq: 0 });
-      await useRunsStore
-        .getState()
-        .send(deps, chat.id, { text: 'go', attachments: [], model: chat.model, expectedEditMode: chat.editMode });
+      await useRunsStore.getState().send(deps, chat.id, {
+        text: 'go',
+        attachments: [],
+        model: chat.model,
+        expectedEditMode: chat.editMode,
+        expectedProjectId: chat.projectId,
+      });
       expect(invalidatedDuringStream).toBe(true);
       expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.chatChanges(chat.id) });
       expect(
@@ -210,6 +214,7 @@ describe('useRunsStore', () => {
       attachments: [],
       model: chat.model,
       expectedEditMode: chat.editMode,
+      expectedProjectId: chat.projectId,
     });
 
     expect(useRunsStore.getState().runs[chat.id]).toBeUndefined();
@@ -230,6 +235,7 @@ describe('useRunsStore', () => {
       attachments: [],
       model: created.model,
       expectedEditMode: created.editMode,
+      expectedProjectId: created.projectId,
     });
     const list = queryClient.getQueryData<ChatSummary[]>(queryKeys.chats);
     expect(list?.find((c) => c.id === created.id)?.title).toBe('Name this chat');
@@ -242,9 +248,13 @@ describe('useRunsStore', () => {
     const chat = await api.createChat({ projectId: null, model: 'anthropic/claude-sonnet-5.5' });
     queryClient.setQueryData(queryKeys.chat(chat.id), chat);
     const deps = { api, queryClient };
-    await useRunsStore
-      .getState()
-      .send(deps, chat.id, { text: 'hello', attachments: [], model: chat.model, expectedEditMode: chat.editMode });
+    await useRunsStore.getState().send(deps, chat.id, {
+      text: 'hello',
+      attachments: [],
+      model: chat.model,
+      expectedEditMode: chat.editMode,
+      expectedProjectId: chat.projectId,
+    });
 
     const state = useRunsStore.getState().runs[chat.id];
     expect(state?.status).toBe('idle');
@@ -254,7 +264,9 @@ describe('useRunsStore', () => {
 
     // Retry resends the typed text instead of calling /retry
     await api.setOpenRouterKey('sk-or-v1-abcdefghijklmnop');
-    await useRunsStore.getState().retry(deps, chat.id, { model: chat.model, expectedEditMode: chat.editMode });
+    await useRunsStore
+      .getState()
+      .retry(deps, chat.id, { model: chat.model, expectedEditMode: chat.editMode, expectedProjectId: chat.projectId });
     expect(useRunsStore.getState().runs[chat.id]).toBeUndefined();
     const saved = await api.getChat(chat.id);
     expect(saved.messages[0]).toMatchObject({ role: 'user', text: 'hello' });
@@ -266,9 +278,13 @@ describe('useRunsStore', () => {
     const chat = await api.createChat({ projectId: null, model: 'anthropic/claude-sonnet-5.5' });
     queryClient.setQueryData(queryKeys.chat(chat.id), chat);
     const deps = { api, queryClient };
-    const done = useRunsStore
-      .getState()
-      .send(deps, chat.id, { text: 'go', attachments: [], model: chat.model, expectedEditMode: chat.editMode });
+    const done = useRunsStore.getState().send(deps, chat.id, {
+      text: 'go',
+      attachments: [],
+      model: chat.model,
+      expectedEditMode: chat.editMode,
+      expectedProjectId: chat.projectId,
+    });
     await new Promise((r) => setTimeout(r, 40));
     expect(useRunsStore.getState().runs[chat.id]?.status).toBe('running');
     useRunsStore.getState().stop(chat.id);
@@ -293,9 +309,13 @@ describe('useRunsStore', () => {
     const unsubscribe = useRunsStore.subscribe((s) => {
       if (s.runs[chat.id]?.runningToolIds.length) s.stop(chat.id);
     });
-    await useRunsStore
-      .getState()
-      .send(deps, chat.id, { text: 'go', attachments: [], model: chat.model, expectedEditMode: chat.editMode });
+    await useRunsStore.getState().send(deps, chat.id, {
+      text: 'go',
+      attachments: [],
+      model: chat.model,
+      expectedEditMode: chat.editMode,
+      expectedProjectId: chat.projectId,
+    });
     unsubscribe();
     expect(useRunsStore.getState().runs[chat.id]).toMatchObject({
       status: 'idle',
@@ -309,7 +329,9 @@ describe('useRunsStore', () => {
 
   it('retry drops trailing messages from the cache and reruns', async () => {
     const { api, queryClient, chat, deps } = await setup();
-    await useRunsStore.getState().retry(deps, chat.id, { model: chat.model, expectedEditMode: chat.editMode });
+    await useRunsStore
+      .getState()
+      .retry(deps, chat.id, { model: chat.model, expectedEditMode: chat.editMode, expectedProjectId: chat.projectId });
     const saved = await api.getChat(chat.id);
     expect(saved.messages.filter((m) => m.role === 'user')).toHaveLength(1);
     expect(saved.messages.at(-1)?.role).toBe('assistant');
@@ -338,6 +360,7 @@ describe('useRunsStore', () => {
       attachments: [],
       model: chat.model,
       expectedEditMode: chat.editMode,
+      expectedProjectId: chat.projectId,
     });
     unsubscribe();
     expect(seen.value).toEqual(cached);
@@ -354,6 +377,7 @@ describe('useRunsStore', () => {
       attachments: [],
       model: chat.model,
       expectedEditMode: chat.editMode,
+      expectedProjectId: chat.projectId,
     });
     unsubscribe();
     expect(seen.value).toMatchObject({ requests: 0, contextTokens: 0 });
@@ -368,6 +392,7 @@ describe('useRunsStore', () => {
       attachments: [],
       model: chat.model,
       expectedEditMode: chat.editMode,
+      expectedProjectId: chat.projectId,
     });
     unsubscribe();
     expect(seen.value).toBeNull();
@@ -378,9 +403,13 @@ describe('useRunsStore', () => {
     const newer = { ...chat, updatedAt: '9999-01-01T00:00:00.000Z', usage: { ...chat.usage, requests: 99 } };
     queryClient.setQueryData(queryKeys.chat(chat.id), newer);
     const { seen, unsubscribe } = captureUsageBefore(chat.id);
-    await useRunsStore
-      .getState()
-      .send(deps, chat.id, { text: 'go', attachments: [], model: chat.model, expectedEditMode: chat.editMode });
+    await useRunsStore.getState().send(deps, chat.id, {
+      text: 'go',
+      attachments: [],
+      model: chat.model,
+      expectedEditMode: chat.editMode,
+      expectedProjectId: chat.projectId,
+    });
     unsubscribe();
     expect(seen.value?.requests).toBe(99);
   });
@@ -390,7 +419,9 @@ describe('useRunsStore', () => {
     const cached = queryClient.getQueryData<ChatSummary[]>(queryKeys.chats)?.find((c) => c.id === chat.id)?.usage;
     expect(cached?.requests).toBeGreaterThan(0);
     const { seen, unsubscribe } = captureUsageBefore(chat.id);
-    await useRunsStore.getState().retry(deps, chat.id, { model: chat.model, expectedEditMode: chat.editMode });
+    await useRunsStore
+      .getState()
+      .retry(deps, chat.id, { model: chat.model, expectedEditMode: chat.editMode, expectedProjectId: chat.projectId });
     unsubscribe();
     expect(seen.value).toEqual(cached);
   });
@@ -401,14 +432,20 @@ describe('useRunsStore', () => {
     const chat = await api.createChat({ projectId: null, model: 'anthropic/claude-sonnet-5.5' });
     queryClient.setQueryData(queryKeys.chat(chat.id), chat);
     const deps = { api, queryClient };
-    await useRunsStore
-      .getState()
-      .send(deps, chat.id, { text: 'hello', attachments: [], model: chat.model, expectedEditMode: chat.editMode });
+    await useRunsStore.getState().send(deps, chat.id, {
+      text: 'hello',
+      attachments: [],
+      model: chat.model,
+      expectedEditMode: chat.editMode,
+      expectedProjectId: chat.projectId,
+    });
     expect(useRunsStore.getState().runs[chat.id]?.unsent?.text).toBe('hello');
 
     await api.setOpenRouterKey('sk-or-v1-abcdefghijklmnop');
     const { seen, unsubscribe } = captureUsageBefore(chat.id);
-    await useRunsStore.getState().retry(deps, chat.id, { model: chat.model, expectedEditMode: chat.editMode });
+    await useRunsStore
+      .getState()
+      .retry(deps, chat.id, { model: chat.model, expectedEditMode: chat.editMode, expectedProjectId: chat.projectId });
     unsubscribe();
     expect(seen.value).toMatchObject({ requests: 0 });
   });
@@ -433,6 +470,7 @@ describe('useRunsStore', () => {
       model: chat.model,
       effort: 'high',
       expectedEditMode: chat.editMode,
+      expectedProjectId: chat.projectId,
     });
     expect(useRunsStore.getState().chatEfforts[chat.id]).toBe('high');
     expect(sendSpy.mock.calls[0]?.[1]).toMatchObject({ effort: 'high' });
@@ -442,9 +480,13 @@ describe('useRunsStore', () => {
     const { api, chat, deps } = await setup();
     const sendSpy = vi.spyOn(api, 'sendMessage');
     useRunsStore.getState().setChatEffort(chat.id, 'low');
-    await useRunsStore
-      .getState()
-      .send(deps, chat.id, { text: 'hi', attachments: [], model: chat.model, expectedEditMode: chat.editMode });
+    await useRunsStore.getState().send(deps, chat.id, {
+      text: 'hi',
+      attachments: [],
+      model: chat.model,
+      expectedEditMode: chat.editMode,
+      expectedProjectId: chat.projectId,
+    });
     expect(useRunsStore.getState().chatEfforts[chat.id]).toBe('low');
     expect(sendSpy.mock.calls[0]?.[1]).not.toHaveProperty('effort');
   });
@@ -452,15 +494,29 @@ describe('useRunsStore', () => {
   it('retry records its effort and passes it on; omitting it keeps the recorded one', async () => {
     const { api, chat, deps } = await setup();
     const retrySpy = vi.spyOn(api, 'retry');
+    await useRunsStore.getState().retry(deps, chat.id, {
+      model: chat.model,
+      effort: 'max',
+      expectedEditMode: chat.editMode,
+      expectedProjectId: chat.projectId,
+    });
+    expect(useRunsStore.getState().chatEfforts[chat.id]).toBe('max');
+    expect(retrySpy.mock.calls[0]?.[1]).toEqual({
+      model: chat.model,
+      effort: 'max',
+      expectedEditMode: 'review',
+      expectedProjectId: chat.projectId,
+    });
+
     await useRunsStore
       .getState()
-      .retry(deps, chat.id, { model: chat.model, effort: 'max', expectedEditMode: chat.editMode });
+      .retry(deps, chat.id, { model: chat.model, expectedEditMode: chat.editMode, expectedProjectId: chat.projectId });
     expect(useRunsStore.getState().chatEfforts[chat.id]).toBe('max');
-    expect(retrySpy.mock.calls[0]?.[1]).toEqual({ model: chat.model, effort: 'max', expectedEditMode: 'review' });
-
-    await useRunsStore.getState().retry(deps, chat.id, { model: chat.model, expectedEditMode: chat.editMode });
-    expect(useRunsStore.getState().chatEfforts[chat.id]).toBe('max');
-    expect(retrySpy.mock.calls[1]?.[1]).toEqual({ model: chat.model, expectedEditMode: 'review' });
+    expect(retrySpy.mock.calls[1]?.[1]).toEqual({
+      model: chat.model,
+      expectedEditMode: 'review',
+      expectedProjectId: chat.projectId,
+    });
   });
 
   it('retry of an unsent message carries the effort it is given', async () => {
@@ -475,14 +531,18 @@ describe('useRunsStore', () => {
       model: chat.model,
       effort: 'low',
       expectedEditMode: chat.editMode,
+      expectedProjectId: chat.projectId,
     });
     expect(useRunsStore.getState().runs[chat.id]?.unsent).toMatchObject({ text: 'hello', effort: 'low' });
 
     await api.setOpenRouterKey('sk-or-v1-abcdefghijklmnop');
     const sendSpy = vi.spyOn(api, 'sendMessage');
-    await useRunsStore
-      .getState()
-      .retry(deps, chat.id, { model: chat.model, effort: 'high', expectedEditMode: chat.editMode });
+    await useRunsStore.getState().retry(deps, chat.id, {
+      model: chat.model,
+      effort: 'high',
+      expectedEditMode: chat.editMode,
+      expectedProjectId: chat.projectId,
+    });
     expect(useRunsStore.getState().runs[chat.id]).toBeUndefined();
     expect(sendSpy.mock.calls[0]?.[1]).toMatchObject({ effort: 'high' });
   });
@@ -511,6 +571,7 @@ describe('useRunsStore', () => {
         model: chat.model,
         effort: 'max',
         expectedEditMode: chat.editMode,
+        expectedProjectId: chat.projectId,
       });
       expect(sendSpy.mock.calls[0]?.[1]).toHaveProperty('effort', 'max');
     });
@@ -525,6 +586,7 @@ describe('useRunsStore', () => {
         model: chat.model,
         effort: 'max',
         expectedEditMode: chat.editMode,
+        expectedProjectId: chat.projectId,
       });
       expect(useRunsStore.getState().chatEfforts[chat.id]).toBe('max');
     });
@@ -533,16 +595,32 @@ describe('useRunsStore', () => {
       const { api, chat, deps, queryClient } = await setup();
       queryClient.setQueryData(queryKeys.models, [withLevels(chat.model, ['low', 'high'])]);
       const retrySpy = vi.spyOn(api, 'retry');
-      await useRunsStore
-        .getState()
-        .retry(deps, chat.id, { model: chat.model, effort: 'max', expectedEditMode: chat.editMode });
-      expect(retrySpy.mock.calls[0]?.[1]).toEqual({ model: chat.model, effort: 'max', expectedEditMode: 'review' });
+      await useRunsStore.getState().retry(deps, chat.id, {
+        model: chat.model,
+        effort: 'max',
+        expectedEditMode: chat.editMode,
+        expectedProjectId: chat.projectId,
+      });
+      expect(retrySpy.mock.calls[0]?.[1]).toEqual({
+        model: chat.model,
+        effort: 'max',
+        expectedEditMode: 'review',
+        expectedProjectId: chat.projectId,
+      });
       expect(useRunsStore.getState().chatEfforts[chat.id]).toBe('max');
 
-      await useRunsStore
-        .getState()
-        .retry(deps, chat.id, { model: chat.model, effort: 'low', expectedEditMode: chat.editMode });
-      expect(retrySpy.mock.calls[1]?.[1]).toEqual({ model: chat.model, effort: 'low', expectedEditMode: 'review' });
+      await useRunsStore.getState().retry(deps, chat.id, {
+        model: chat.model,
+        effort: 'low',
+        expectedEditMode: chat.editMode,
+        expectedProjectId: chat.projectId,
+      });
+      expect(retrySpy.mock.calls[1]?.[1]).toEqual({
+        model: chat.model,
+        effort: 'low',
+        expectedEditMode: 'review',
+        expectedProjectId: chat.projectId,
+      });
       expect(useRunsStore.getState().chatEfforts[chat.id]).toBe('low');
     });
 
@@ -558,15 +636,19 @@ describe('useRunsStore', () => {
         model: chat.model,
         effort: 'low',
         expectedEditMode: chat.editMode,
+        expectedProjectId: chat.projectId,
       });
       expect(useRunsStore.getState().runs[chat.id]?.unsent).toMatchObject({ text: 'hello', effort: 'low' });
 
       await api.setOpenRouterKey('sk-or-v1-abcdefghijklmnop');
       queryClient.setQueryData(queryKeys.models, [withLevels(chat.model, ['low', 'max'])]);
       const sendSpy = vi.spyOn(api, 'sendMessage');
-      await useRunsStore
-        .getState()
-        .retry(deps, chat.id, { model: chat.model, effort: 'high', expectedEditMode: chat.editMode });
+      await useRunsStore.getState().retry(deps, chat.id, {
+        model: chat.model,
+        effort: 'high',
+        expectedEditMode: chat.editMode,
+        expectedProjectId: chat.projectId,
+      });
       expect(sendSpy.mock.calls[0]?.[1]).toHaveProperty('effort', 'high');
     });
   });
@@ -630,6 +712,7 @@ describe('terminal relay (T3.6)', () => {
       ...input,
       attachments: [],
       expectedEditMode: chat.editMode,
+      expectedProjectId: chat.projectId,
     });
 
     await vi.waitFor(() => expect(answerSpy).toHaveBeenCalledWith(chat.id, 'req-1', answer));
@@ -653,6 +736,7 @@ describe('terminal relay (T3.6)', () => {
       ...input,
       attachments: [],
       expectedEditMode: chat.editMode,
+      expectedProjectId: chat.projectId,
     });
     await vi.waitFor(() => expect(terminalRegistry.read).toHaveBeenCalled());
     expect(answerSpy).not.toHaveBeenCalled();
@@ -666,9 +750,12 @@ describe('terminal relay (T3.6)', () => {
     vi.spyOn(api, 'sendMessage').mockImplementation(() => streamOf([readRequest]));
     const answerSpy = vi.spyOn(api, 'answerTerminalRead').mockResolvedValue(undefined);
 
-    await useRunsStore
-      .getState()
-      .send({ api, queryClient }, chat.id, { ...input, attachments: [], expectedEditMode: chat.editMode });
+    await useRunsStore.getState().send({ api, queryClient }, chat.id, {
+      ...input,
+      attachments: [],
+      expectedEditMode: chat.editMode,
+      expectedProjectId: chat.projectId,
+    });
 
     await vi.waitFor(() =>
       expect(answerSpy).toHaveBeenCalledWith(chat.id, 'req-1', { ok: false, reason: 'unavailable' }),
@@ -686,6 +773,7 @@ describe('terminal relay (T3.6)', () => {
       ...input,
       attachments: [],
       expectedEditMode: chat.editMode,
+      expectedProjectId: chat.projectId,
     });
 
     await vi.waitFor(() =>
@@ -717,6 +805,7 @@ describe('terminal relay (T3.6)', () => {
       ...input,
       attachments: [],
       expectedEditMode: chat.editMode,
+      expectedProjectId: chat.projectId,
     });
     unsubscribe();
 
@@ -729,15 +818,19 @@ describe('terminal relay (T3.6)', () => {
     const { api, queryClient, chat } = await setupChat();
     const sendSpy = vi.spyOn(api, 'sendMessage').mockImplementation(() => streamOf([]));
 
-    await useRunsStore
-      .getState()
-      .send({ api, queryClient }, chat.id, { ...input, attachments: [], expectedEditMode: chat.editMode });
+    await useRunsStore.getState().send({ api, queryClient }, chat.id, {
+      ...input,
+      attachments: [],
+      expectedEditMode: chat.editMode,
+      expectedProjectId: chat.projectId,
+    });
     expect(sendSpy.mock.calls[0]?.[1]).not.toHaveProperty('terminal');
 
     await useRunsStore.getState().send({ api, queryClient, terminal: new FakeTerminalBridge() }, chat.id, {
       ...input,
       attachments: [],
       expectedEditMode: chat.editMode,
+      expectedProjectId: chat.projectId,
     });
     expect(sendSpy.mock.calls[1]?.[1]).toMatchObject({ terminal: true });
   });
@@ -746,14 +839,17 @@ describe('terminal relay (T3.6)', () => {
     const { api, queryClient, chat } = await setupChat();
     const retrySpy = vi.spyOn(api, 'retry').mockImplementation(() => streamOf([]));
 
-    await useRunsStore
-      .getState()
-      .retry({ api, queryClient }, chat.id, { model: chat.model, expectedEditMode: chat.editMode });
+    await useRunsStore.getState().retry({ api, queryClient }, chat.id, {
+      model: chat.model,
+      expectedEditMode: chat.editMode,
+      expectedProjectId: chat.projectId,
+    });
     expect(retrySpy.mock.calls[0]?.[1]).not.toHaveProperty('terminal');
 
     await useRunsStore.getState().retry({ api, queryClient, terminal: new FakeTerminalBridge() }, chat.id, {
       model: chat.model,
       expectedEditMode: chat.editMode,
+      expectedProjectId: chat.projectId,
     });
     expect(retrySpy.mock.calls[1]?.[1]).toMatchObject({ terminal: true });
   });
@@ -768,6 +864,7 @@ describe('terminal relay (T3.6)', () => {
       text: 'hello',
       attachments: [],
       expectedEditMode: chat.editMode,
+      expectedProjectId: chat.projectId,
     });
     expect(useRunsStore.getState().runs[chat.id]?.unsent?.text).toBe('hello');
 
@@ -776,6 +873,7 @@ describe('terminal relay (T3.6)', () => {
     await useRunsStore.getState().retry({ api, queryClient, terminal: new FakeTerminalBridge() }, chat.id, {
       model: chat.model,
       expectedEditMode: chat.editMode,
+      expectedProjectId: chat.projectId,
     });
     expect(sendSpy.mock.calls[0]?.[1]).toMatchObject({ text: 'hello', terminal: true });
   });
@@ -815,10 +913,18 @@ describe('edit mode: what the UI showed, and what a run may not change', () => {
       const { api, chat, deps } = await setup(mode);
       const send = vi.spyOn(api, 'sendMessage');
       const retry = vi.spyOn(api, 'retry');
-      await useRunsStore
-        .getState()
-        .send(deps, chat.id, { text: 'hi', attachments: [], model: chat.model, expectedEditMode: chat.editMode });
-      await useRunsStore.getState().retry(deps, chat.id, { model: chat.model, expectedEditMode: chat.editMode });
+      await useRunsStore.getState().send(deps, chat.id, {
+        text: 'hi',
+        attachments: [],
+        model: chat.model,
+        expectedEditMode: chat.editMode,
+        expectedProjectId: chat.projectId,
+      });
+      await useRunsStore.getState().retry(deps, chat.id, {
+        model: chat.model,
+        expectedEditMode: chat.editMode,
+        expectedProjectId: chat.projectId,
+      });
       expect(send.mock.calls[0]?.[1]).toMatchObject({ expectedEditMode: mode });
       expect(retry.mock.calls[0]?.[1]).toMatchObject({ expectedEditMode: mode });
     },
@@ -844,11 +950,17 @@ describe('edit mode: what the UI showed, and what a run may not change', () => {
     );
     const send = vi.spyOn(api, 'sendMessage');
     const retry = vi.spyOn(api, 'retry');
+    await useRunsStore.getState().send(deps, chat.id, {
+      text: 'hi',
+      attachments: [],
+      model: chat.model,
+      expectedEditMode: 'review',
+      expectedProjectId: chat.projectId,
+    });
+    queryClient.setQueryData<Chat>(queryKeys.chat(chat.id), (old) => (old ? { ...old, editMode: 'auto' } : old));
     await useRunsStore
       .getState()
-      .send(deps, chat.id, { text: 'hi', attachments: [], model: chat.model, expectedEditMode: 'review' });
-    queryClient.setQueryData<Chat>(queryKeys.chat(chat.id), (old) => (old ? { ...old, editMode: 'auto' } : old));
-    await useRunsStore.getState().retry(deps, chat.id, { model: chat.model, expectedEditMode: 'review' });
+      .retry(deps, chat.id, { model: chat.model, expectedEditMode: 'review', expectedProjectId: chat.projectId });
     expect(send.mock.calls[0]?.[1]).toMatchObject({ expectedEditMode: 'review' });
     expect(retry.mock.calls[0]?.[1]).toMatchObject({ expectedEditMode: 'review' });
   });
@@ -858,13 +970,19 @@ describe('edit mode: what the UI showed, and what a run may not change', () => {
     vi.spyOn(api, 'sendMessage').mockImplementationOnce(() => {
       throw new ApiError(errorInfo('network_error'), 0);
     });
-    await useRunsStore
-      .getState()
-      .send(deps, chat.id, { text: 'hi', attachments: [], model: chat.model, expectedEditMode: 'review' });
+    await useRunsStore.getState().send(deps, chat.id, {
+      text: 'hi',
+      attachments: [],
+      model: chat.model,
+      expectedEditMode: 'review',
+      expectedProjectId: chat.projectId,
+    });
     expect(useRunsStore.getState().runs[chat.id]?.unsent).toEqual({ text: 'hi', attachments: [], model: chat.model });
     await api.updateChat(chat.id, { editMode: 'auto' });
     const send = vi.spyOn(api, 'sendMessage');
-    await useRunsStore.getState().retry(deps, chat.id, { model: chat.model, expectedEditMode: 'auto' });
+    await useRunsStore
+      .getState()
+      .retry(deps, chat.id, { model: chat.model, expectedEditMode: 'auto', expectedProjectId: chat.projectId });
     expect(send.mock.calls.at(-1)?.[1]).toMatchObject({ text: 'hi', expectedEditMode: 'auto' });
   });
 
@@ -882,6 +1000,7 @@ describe('edit mode: what the UI showed, and what a run may not change', () => {
       model: chat.model,
       effort: 'low',
       expectedEditMode: chat.editMode,
+      expectedProjectId: chat.projectId,
     });
 
     expect(send).toHaveBeenCalledTimes(1);
@@ -907,7 +1026,9 @@ describe('edit mode: what the UI showed, and what a run may not change', () => {
     const stopped = { ...createRun(3), status: 'idle' as const, stopped: true };
     useRunsStore.setState({ runs: { [chat.id]: stopped } });
     const retry = vi.spyOn(api, 'retry');
-    await useRunsStore.getState().retry(deps, chat.id, { model: chat.model, expectedEditMode: chat.editMode });
+    await useRunsStore
+      .getState()
+      .retry(deps, chat.id, { model: chat.model, expectedEditMode: chat.editMode, expectedProjectId: chat.projectId });
     expect(retry).toHaveBeenCalledTimes(1);
     expect(useRunsStore.getState().runs[chat.id]).toEqual(stopped);
     await vi.waitFor(() => expect(cachedChat(queryClient, chat.id)?.editMode).toBe('auto'));
@@ -922,9 +1043,13 @@ describe('edit mode: what the UI showed, and what a run may not change', () => {
     vi.spyOn(api, 'sendMessage').mockImplementation(() => {
       throw new ApiError(errorInfo('conflict', 'A reply is already in progress.'), 409);
     });
-    await useRunsStore
-      .getState()
-      .send(deps, chat.id, { text: 'hi', attachments: [], model: chat.model, expectedEditMode: chat.editMode });
+    await useRunsStore.getState().send(deps, chat.id, {
+      text: 'hi',
+      attachments: [],
+      model: chat.model,
+      expectedEditMode: chat.editMode,
+      expectedProjectId: chat.projectId,
+    });
     expect(useRunsStore.getState().runs[chat.id]?.error?.message).toBe('A reply is already in progress.');
     expect(useRunsStore.getState().modeRefusals).toEqual({});
   });
@@ -940,9 +1065,13 @@ describe('edit mode: what the UI showed, and what a run may not change', () => {
       await after.promise;
       yield { type: 'done' };
     });
-    const running = useRunsStore
-      .getState()
-      .send(deps, chat.id, { text: 'hi', attachments: [], model: chat.model, expectedEditMode: chat.editMode });
+    const running = useRunsStore.getState().send(deps, chat.id, {
+      text: 'hi',
+      attachments: [],
+      model: chat.model,
+      expectedEditMode: chat.editMode,
+      expectedProjectId: chat.projectId,
+    });
     // The PATCH answer is written (what the composer does), then the old summary arrives.
     patchChatSummary(queryClient, await api.updateChat(chat.id, { editMode: 'auto' }));
     late.open();
@@ -963,9 +1092,13 @@ describe('edit mode: what the UI showed, and what a run may not change', () => {
       await answer.promise; // …and the answer lands late
       return snapshot;
     });
-    const running = useRunsStore
-      .getState()
-      .send(deps, chat.id, { text: 'hi', attachments: [], model: chat.model, expectedEditMode: chat.editMode });
+    const running = useRunsStore.getState().send(deps, chat.id, {
+      text: 'hi',
+      attachments: [],
+      model: chat.model,
+      expectedEditMode: chat.editMode,
+      expectedProjectId: chat.projectId,
+    });
     await vi.waitFor(() => expect(getChat).toHaveBeenCalled());
     patchChatSummary(queryClient, await api.updateChat(chat.id, { editMode: 'auto' }));
     answer.open();
@@ -995,7 +1128,9 @@ describe('edit mode: what the UI showed, and what a run may not change', () => {
       const stopped = { ...createRun(3), status: 'idle' as const, stopped: true };
       useRunsStore.setState({ runs: { [chat.id]: stopped } });
       vi.spyOn(api, 'getChat').mockRejectedValue(new Error('offline'));
-      await useRunsStore.getState().retry(deps, chat.id, { model: chat.model, expectedEditMode: 'review' });
+      await useRunsStore
+        .getState()
+        .retry(deps, chat.id, { model: chat.model, expectedEditMode: 'review', expectedProjectId: chat.projectId });
       await vi.waitFor(() => expect(useEditModes.getState().entries[chat.id]?.status).toBe('unknown'));
       expect(cachedChat(queryClient, chat.id)?.messages).toEqual(chat.messages);
       expect(shown(queryClient, chat.id)).toEqual(chat.messages);
@@ -1007,7 +1142,9 @@ describe('edit mode: what the UI showed, and what a run may not change', () => {
         throw new ApiError(errorInfo('network_error'), 0);
       });
       vi.spyOn(api, 'getChat').mockRejectedValue(new Error('offline'));
-      await useRunsStore.getState().retry(deps, chat.id, { model: chat.model, expectedEditMode: 'review' });
+      await useRunsStore
+        .getState()
+        .retry(deps, chat.id, { model: chat.model, expectedEditMode: 'review', expectedProjectId: chat.projectId });
       const run = useRunsStore.getState().runs[chat.id];
       expect(run?.error?.code).toBe('network_error');
       expect(run?.retryOf).toBeNull();
@@ -1023,7 +1160,9 @@ describe('edit mode: what the UI showed, and what a run may not change', () => {
         throw new DOMException('Aborted', 'AbortError');
       });
       vi.spyOn(api, 'getChat').mockRejectedValue(new Error('offline'));
-      const running = useRunsStore.getState().retry(deps, chat.id, { model: chat.model, expectedEditMode: 'review' });
+      const running = useRunsStore
+        .getState()
+        .retry(deps, chat.id, { model: chat.model, expectedEditMode: 'review', expectedProjectId: chat.projectId });
       await vi.waitFor(() => expect(useRunsStore.getState().runs[chat.id]?.status).toBe('running'));
       expect(shown(queryClient, chat.id)).toHaveLength(lastUserIndex(chat.messages) + 1);
       useRunsStore.getState().stop(chat.id);
@@ -1044,7 +1183,9 @@ describe('edit mode: what the UI showed, and what a run may not change', () => {
           seen.push(r.retryOf);
         }
       });
-      await useRunsStore.getState().retry(deps, chat.id, { model: chat.model, expectedEditMode: 'review' });
+      await useRunsStore
+        .getState()
+        .retry(deps, chat.id, { model: chat.model, expectedEditMode: 'review', expectedProjectId: chat.projectId });
       unsubscribe();
       expect(seen).toEqual([lastUser?.id]);
       expect(hiddenDuringRun).toBe(lastUserIndex(chat.messages) + 1);
@@ -1062,13 +1203,55 @@ describe('edit mode: what the UI showed, and what a run may not change', () => {
           yield ev;
         }
       });
-      await useRunsStore.getState().retry(deps, chat.id, { model: chat.model, expectedEditMode: 'review' });
+      await useRunsStore
+        .getState()
+        .retry(deps, chat.id, { model: chat.model, expectedEditMode: 'review', expectedProjectId: chat.projectId });
       const run = useRunsStore.getState().runs[chat.id];
       expect(run?.error?.code).toBe('provider_error');
       expect(run?.retryOf).toBeNull();
       const stored = (await api.getChat(chat.id)).messages;
       expect(stored.length).toBeGreaterThan(lastUserIndex(stored) + 1);
       expect(shown(queryClient, chat.id)).toEqual(stored);
+    });
+
+    it('a retry that fails before it truncates, then a failed read: a later successful read shows the whole tail', async () => {
+      const { api, chat, deps, queryClient } = await setup('review');
+      expect(chat.messages.length).toBeGreaterThan(lastUserIndex(chat.messages) + 1);
+      // The server's retry failed while preparing (before it truncated or undid anything): `error`, then `done`.
+      const held = gate();
+      vi.spyOn(api, 'retry').mockImplementation(async function* () {
+        await held.promise;
+        yield { type: 'error', error: errorInfo('internal', 'Could not undo the previous attempt.') };
+        yield { type: 'done' };
+      });
+      const real = api.getChat.bind(api);
+      const getChat = vi.spyOn(api, 'getChat').mockRejectedValueOnce(new Error('offline'));
+      const running = useRunsStore.getState().retry(deps, chat.id, {
+        model: chat.model,
+        expectedEditMode: 'review',
+        expectedProjectId: chat.projectId,
+      });
+      await vi.waitFor(() => expect(useRunsStore.getState().runs[chat.id]?.status).toBe('running'));
+      // While the run is active the tail it may replace is hidden.
+      expect(shown(queryClient, chat.id)).toHaveLength(lastUserIndex(chat.messages) + 1);
+      held.open();
+      await running;
+      expect(getChat).toHaveBeenCalledTimes(1);
+      const run = useRunsStore.getState().runs[chat.id];
+      expect(run).toMatchObject({ status: 'idle', retryOf: null });
+      expect(run?.error?.message).toBe('Could not undo the previous attempt.');
+      expect(shown(queryClient, chat.id)).toEqual(chat.messages);
+      // A later read succeeds: nothing was truncated, and nothing it brings is cut.
+      getChat.mockImplementation(real);
+      await queryClient.fetchQuery({ ...chatQueryOptions(api, chat.id), staleTime: 0 });
+      expect(cachedChat(queryClient, chat.id)?.messages).toEqual(chat.messages);
+      expect(shown(queryClient, chat.id)).toEqual(chat.messages);
+    });
+
+    it('an idle run never hides a tail, even with a stale retryOf', () => {
+      const messages = [user, assistant1, tool, assistant2];
+      expect(hideRetriedTail(messages, { ...createRun(1), status: 'idle', retryOf: 'u1' })).toBe(messages);
+      expect(hideRetriedTail(messages, { ...createRun(1), status: 'settling', retryOf: 'u1' })).toEqual([user]);
     });
 
     it('hideRetriedTail cuts after the rerun user message, and leaves the list alone otherwise', () => {
