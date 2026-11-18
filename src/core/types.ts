@@ -226,7 +226,9 @@ export interface ChangesService {
   get(chatId: Id): Promise<ChatChanges>;
   /**
    * One per assistant step: stages and writes are attributed to `messageId`. `turnId` = the user message that started
-   * the turn; `mode` = the turn's edit mode (picks `stage` or `write`).
+   * the turn; `mode` = the turn's edit mode (picks `stage` or `write`); `projectId` = the project the turn is pinned
+   * to. A stage binds an empty pending set to `projectId` and is refused (`conflict`) while the set holds another
+   * project's proposals.
    */
   tools(input: {
     chatId: Id;
@@ -236,9 +238,12 @@ export interface ChangesService {
     turnId: Id;
     mode: EditMode;
   }): ToolChanges;
-  /** At a new user message: remember the pending set so a retry of this turn can restore it. */
+  /**
+   * At a new user message: remember the pending set, and the project it was made for, so a retry of this turn can
+   * restore both.
+   */
   snapshot(chatId: Id, userMessageId: Id): Promise<void>;
-  /** Retry: restore the snapshot taken for this user message. Never touches disk. */
+  /** Retry: restore the snapshot taken for this user message, with its project. Never touches disk. */
   restore(chatId: Id, userMessageId: Id): Promise<void>;
   /**
    * The note for a new user message; marks what it reports as reported. Adds a mode line when `mode` differs from the
@@ -246,9 +251,17 @@ export interface ChangesService {
    * as the last noted mode.
    */
   takeNote(chatId: Id, opts: { mode: EditMode; firstTurn: boolean }): Promise<string | undefined>;
+  /**
+   * Review Apply. `projectId` is the chat's current project and `projectRoot` its folder; `expectedProjectId` the
+   * project the client showed (omitted = unchecked). Under the store lock, before any write: the project the pending
+   * set was made for (an unbound set counts as `projectId`) and `expectedProjectId`, when sent, must equal `projectId`;
+   * otherwise `conflict` (`PROPOSALS_OTHER_PROJECT` / `APPLY_PROJECT_CHANGED`) and nothing changes.
+   */
   apply(input: {
     chatId: Id;
+    projectId: Id;
     projectRoot: string;
+    expectedProjectId?: Id | null;
     revision: number;
     decisions: Record<string, Record<string, HunkDecision>>;
   }): Promise<ApplyChangesResponse>;

@@ -1,12 +1,14 @@
 // The renderer's only way to talk to the backend (plan §4.9).
 
 import {
+  APPLY_PROJECT_CHANGED,
   type ApplyChangesBody,
   type ApplyChangesResponse,
   CHAT_PROJECT_CHANGED,
   EDIT_MODE_CHANGED,
   type HealthResponse,
   PROJECT_NOT_IN_GIT,
+  PROPOSALS_OTHER_PROJECT,
   type UndoBatchResponse,
 } from '@shared/api';
 import type { ApiErrorInfo } from '@shared/errors';
@@ -123,6 +125,10 @@ export interface ApiClient {
   readHomeFile(path: string): Promise<ProjectFileContent>;
   attachHomeFile(path: string): Promise<AttachmentRef>;
   getChatChanges(chatId: Id): Promise<ChatChanges>;
+  /**
+   * Review Apply. `body.expectedProjectId` is the project the screen showed; unless it, the chat's current project and
+   * the project the proposals were made for agree, nothing is written (409, `isApplyProjectRefused`).
+   */
   applyChatChanges(chatId: Id, body: ApplyChangesBody): Promise<ApplyChangesResponse>;
   discardChatChanges(chatId: Id): Promise<ChatChanges>;
   /** The Undo button of an auto batch. Rejects with a 409 while the chat runs or when the batch can't be undone. */
@@ -154,6 +160,14 @@ export function isEditModeChanged(err: unknown): err is ApiError {
 /** The server refused a send, retry or Auto switch because the chat is no longer in the project the UI showed. */
 export function isChatProjectChanged(err: unknown): err is ApiError {
   return isConflict(err, CHAT_PROJECT_CHANGED);
+}
+
+/**
+ * The server refused an Apply because the proposals were made for another project than the chat's current one, or the
+ * UI showed another project than the chat's current one. Nothing was written.
+ */
+export function isApplyProjectRefused(err: unknown): err is ApiError {
+  return isConflict(err, PROPOSALS_OTHER_PROJECT) || isConflict(err, APPLY_PROJECT_CHANGED);
 }
 
 /** The server refused to run Auto in a folder the UI showed as inside Git: the projects list is out of date. */

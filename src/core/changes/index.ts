@@ -4,6 +4,7 @@
 import { randomUUID } from 'node:crypto';
 import { promises as fs, constants as fsConstants } from 'node:fs';
 import path from 'node:path';
+import { APPLY_PROJECT_CHANGED, PROPOSALS_OTHER_PROJECT } from '@shared/api';
 import { EDIT_MODES, LIMITS } from '@shared/constants';
 import type {
   AppliedBatch,
@@ -144,12 +145,20 @@ const snapshotSchema = z.object({
   revision: z.number(),
   messageId: z.string(),
   files: z.array(storedFileSchema),
+  /** The pending set's project when the snapshot was taken (see `pendingProjectId`). */
+  projectId: z.string().optional(),
 });
 const storeSchema = z.object({
   version: z.literal(1),
   revision: z.number(),
   messageId: z.string(),
   files: z.array(storedFileSchema),
+  /**
+   * The project the pending proposals were made for: set by the stage that starts a pending set, dropped when the set
+   * empties. Missing on a non-empty set (an older build's store) = unbound, which `apply` treats as the chat's current
+   * project, as older builds did.
+   */
+  pendingProjectId: z.string().optional(),
   snapshots: z.array(snapshotSchema),
   applied: z.array(batchSchema),
   events: z.array(eventSchema),
@@ -173,6 +182,10 @@ const emptyStore = (): Store => ({
 });
 
 const MAX_SNAPSHOTS = 5;
+/** Model-facing: a stage refused because the pending set holds another project's proposals. */
+const OTHER_PROJECT_PENDING_TEXT =
+  "Not proposed: this chat has proposed edits for another project waiting for the user's review. Ask the user to " +
+  'discard them first.';
 /** Batches kept in the list, review and auto alike. */
 const MAX_APPLIED = 100;
 /** Paths remembered per chat in the read record; the oldest are dropped first. */
@@ -613,6 +626,7 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
 
   function clearPending(store: Store): void {
     store.files = [];
+    delete store.pendingProjectId;
     store.revision += 1;
   }
 
@@ -626,6 +640,7 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
 
   async function stage(
     chatId: Id,
+    projectId: Id,
     projectRoot: string,
     messageId: Id,
     relPath: string,
@@ -636,8 +651,18 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
     const rel = target.rel;
 
     if (content !== null) validateContent(rel, content);
+    // Only needed for an unbound set (see below); read before the store lock, like `apply` (see LOCK ORDER).
+    const current = await chatProject(chatId);
 
     return mutate(chatId, async (store) => {
+      // PROPOSALS STAY IN THEIR PROJECT (invariant): a pending set holds proposals for one project only, the one its
+      // first stage ran in, so applying it can never write a proposal into a project it wasn't made for. An unbound
+      // non-empty set (an older build's store) counts as made for the chat's current project, as `apply` treats it;
+      // without a way to read that project, as made for the staging turn's.
+      if (store.files.length > 0) {
+        const origin = store.pendingProjectId ?? (current === undefined ? projectId : current);
+        if (origin !== projectId) throw new CoreError('conflict', OTHER_PROJECT_PENDING_TEXT);
+      }
       let rec = store.files.find((f) => f.path === rel);
       const isNew = rec === undefined;
       if (!rec) {
@@ -690,6 +715,8 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
         store.revision += 1;
         store.messageId = messageId;
       }
+      if (store.files.length > 0) store.pendingProjectId = projectId;
+      else delete store.pendingProjectId;
       const files = [...store.files].sort(byPath).map(fileChangeOf);
       const file = noop ? null : (files.find((f) => f.path === rel) ?? null);
       // A diff too large to review hunk by hunk could never be applied; refuse it now so the model hears why. The
@@ -957,12 +984,24 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
 
   async function apply(input: {
     chatId: Id;
+    projectId: Id;
     projectRoot: string;
+    expectedProjectId?: Id | null;
     revision: number;
     decisions: Record<string, Record<string, HunkDecision>>;
   }): Promise<{ batch: AppliedBatch; changes: ChatChanges }> {
     const project = await chatProject(input.chatId);
     return mutate(input.chatId, async (store) => {
+      // PROPOSALS STAY IN THEIR PROJECT (invariant): checked under the store lock, before anything is written. The
+      // project the proposals were made for (unbound = the chat's current one) and the project the client showed
+      // (when sent) must both be the chat's current project, the one `projectRoot` belongs to. Otherwise nothing is
+      // written and the set stays pending, so the user can discard it or move the chat back.
+      if (store.files.length > 0 && (store.pendingProjectId ?? input.projectId) !== input.projectId) {
+        throw new CoreError('conflict', PROPOSALS_OTHER_PROJECT);
+      }
+      if (input.expectedProjectId !== undefined && input.expectedProjectId !== input.projectId) {
+        throw new CoreError('conflict', APPLY_PROJECT_CHANGED);
+      }
       if (store.files.length === 0 || input.revision !== store.revision) throw new CoreError('changes_stale');
 
       const written: FileChange[] = [];
@@ -1095,7 +1134,7 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
         },
         async stage(relPath, content) {
           if (mode !== 'review') throw new Error('stage() is for Review turns; this turn is in Auto.');
-          return stage(chatId, projectRoot, messageId, relPath, content);
+          return stage(chatId, projectId, projectRoot, messageId, relPath, content);
         },
         async write(relPath, content, opts) {
           if (mode !== 'auto') throw new Error('write() is for Auto turns; this turn is in Review.');
@@ -1114,6 +1153,10 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
           revision: store.revision,
           messageId: store.messageId,
           files: structuredClone(store.files),
+          // The binding travels with the set, so a retry after a move can't bring proposals back unbound.
+          ...(store.files.length > 0 && store.pendingProjectId !== undefined
+            ? { projectId: store.pendingProjectId }
+            : {}),
         };
         store.snapshots = [...store.snapshots.filter((s) => s.userMessageId !== userMessageId), snap].slice(
           -MAX_SNAPSHOTS,
@@ -1125,6 +1168,8 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
         const snap = store.snapshots.find((s) => s.userMessageId === userMessageId);
         if (!snap) return;
         store.files = structuredClone(snap.files);
+        if (snap.files.length > 0 && snap.projectId !== undefined) store.pendingProjectId = snap.projectId;
+        else delete store.pendingProjectId;
         store.messageId = snap.messageId;
         store.revision += 1;
       }),

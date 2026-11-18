@@ -283,21 +283,28 @@ export function chatRoutes(core: Core): Hono {
     return c.json(await withIdleChat(id, () => core.changes.discard(id)));
   });
 
+  // Review Apply. The chat's project is read under the claim and handed to the change service with the project the
+  // client showed (`expectedProjectId`). The service compares them, and the project the proposals were made for,
+  // under its store lock before any write, so proposals are never written into a project they weren't made for or
+  // that the user wasn't shown (409, nothing written).
   r.post(ROUTES.chatChangesApply, async (c) => {
     const id = c.req.param('id');
     const body = await readJson(c, applyChangesBody);
-    const chat = await core.chats.get(id);
-    if (!chat.projectId) throw new CoreError('conflict', 'This chat has no project to write to.');
-    const project = await core.projects.get(chat.projectId);
+    await core.chats.get(id); // 404 before any claim
     return c.json(
-      await withIdleChat(id, () =>
-        core.changes.apply({
+      await withIdleChat(id, async () => {
+        const chat = await core.chats.get(id);
+        if (!chat.projectId) throw new CoreError('conflict', 'This chat has no project to write to.');
+        const project = await core.projects.get(chat.projectId);
+        return core.changes.apply({
           chatId: id,
+          projectId: project.id,
           projectRoot: project.rootPath,
+          ...(body.expectedProjectId !== undefined ? { expectedProjectId: body.expectedProjectId } : {}),
           revision: body.revision,
           decisions: body.decisions,
-        }),
-      ),
+        });
+      }),
     );
   });
 

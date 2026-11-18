@@ -1,4 +1,10 @@
-import { CHAT_PROJECT_CHANGED, EDIT_MODE_CHANGED, PROJECT_NOT_IN_GIT } from '@shared/api';
+import {
+  APPLY_PROJECT_CHANGED,
+  CHAT_PROJECT_CHANGED,
+  EDIT_MODE_CHANGED,
+  PROJECT_NOT_IN_GIT,
+  PROPOSALS_OTHER_PROJECT,
+} from '@shared/api';
 import { LIMITS, NEW_CHAT_TITLE } from '@shared/constants';
 import type { AgentEvent } from '@shared/events';
 import { describe, expect, it } from 'vitest';
@@ -452,6 +458,66 @@ describe('MockApiClient', () => {
       );
       expect((await api.getChatChanges(chat.id)).pending).not.toBeNull();
       expect(await api.discardChatChanges(chat.id)).toEqual({ pending: null, applied: [], diskSeq: 0 });
+    });
+
+    it('applies proposals only in the project they were made for, and only when it is the shown one', async () => {
+      const api = new MockApiClient({ delayMs: 0 });
+      const [project, other] = await api.listProjects();
+      if (!project || !other) throw new Error('seed missing');
+      const chat = await api.createChat({ projectId: project.id, model: 'anthropic/claude-sonnet-5.5' });
+      // The turn starts in `project`; the chat moves to `other` before it stages anything.
+      const iter = api
+        .sendMessage(
+          chat.id,
+          { text: '[mock:edit]', attachmentIds: [], model: chat.model },
+          new AbortController().signal,
+        )
+        [Symbol.asyncIterator]();
+      await iter.next();
+      expect((await api.getChatChanges(chat.id)).pending).toBeNull();
+      await api.updateChat(chat.id, { projectId: other.id });
+      while (!(await iter.next()).done) {
+        // drain: stages the proposals for `project`
+      }
+      const { pending } = await api.getChatChanges(chat.id);
+      if (!pending) throw new Error('Expected pending proposals');
+      const body = { revision: pending.revision, decisions: {} };
+      for (const expectedProjectId of [other.id, undefined]) {
+        await expect(
+          api.applyChatChanges(chat.id, { ...body, ...(expectedProjectId ? { expectedProjectId } : {}) }),
+        ).rejects.toMatchObject({ status: 409, info: { code: 'conflict', message: PROPOSALS_OTHER_PROJECT } });
+      }
+      expect((await api.getChatChanges(chat.id)).pending).toEqual(pending);
+      // A turn in `other` can't add to them.
+      const events = await collect(
+        api.sendMessage(
+          chat.id,
+          { text: '[mock:edit]', attachmentIds: [], model: chat.model },
+          new AbortController().signal,
+        ),
+      );
+      expect(events.some((e) => e.type === 'changes_updated')).toBe(false);
+      expect((await api.getChatChanges(chat.id)).pending).toEqual(pending);
+      // Discard always works; then a set made in `other` applies there, unless the shown project is stale.
+      expect((await api.discardChatChanges(chat.id)).pending).toBeNull();
+      await collect(
+        api.sendMessage(
+          chat.id,
+          { text: '[mock:edit]', attachmentIds: [], model: chat.model },
+          new AbortController().signal,
+        ),
+      );
+      const fresh = (await api.getChatChanges(chat.id)).pending;
+      if (!fresh) throw new Error('Expected pending proposals');
+      await expect(
+        api.applyChatChanges(chat.id, { revision: fresh.revision, decisions: {}, expectedProjectId: project.id }),
+      ).rejects.toMatchObject({ status: 409, info: { code: 'conflict', message: APPLY_PROJECT_CHANGED } });
+      const res = await api.applyChatChanges(chat.id, {
+        revision: fresh.revision,
+        decisions: {},
+        expectedProjectId: other.id,
+      });
+      expect(res.changes.pending).toBeNull();
     });
   });
 });

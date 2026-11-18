@@ -37,7 +37,7 @@ async function setup(opts: { logger?: StorageLogger } = {}) {
       () => false,
     );
   const apply = async (revision: number, decisions: Record<string, Record<string, HunkDecision>>) =>
-    svc.apply({ chatId: CHAT, projectRoot: realRoot, revision, decisions });
+    svc.apply({ chatId: CHAT, projectId: 'p', projectRoot: realRoot, revision, decisions });
   const pending = async () => (await svc.get(CHAT)).pending;
   const allOf = async (decision: HunkDecision) => {
     const p = await pending();

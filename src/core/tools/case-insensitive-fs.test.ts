@@ -339,7 +339,13 @@ describe('T3 a not-yet-existing denied root (B13)', () => {
 
     const restricted = createChangesService({ dataDir, sandbox: { deniedRoots: [denied] } });
     const result = await restricted
-      .apply({ chatId: 'apply', projectRoot: proj, revision: pending.revision, decisions: acceptAll(pending) })
+      .apply({
+        chatId: 'apply',
+        projectId: 'p',
+        projectRoot: proj,
+        revision: pending.revision,
+        decisions: acceptAll(pending),
+      })
       .then(
         ({ batch }) => ({ written: batch.written.map((f) => f.path), conflicts: batch.conflicts }),
         (error: unknown) => ({ error: (error as { code?: string }).code ?? String(error) }),
@@ -413,6 +419,7 @@ describe('T4 NFC and NFD spellings', () => {
 
       const { batch } = await svc.apply({
         chatId: `t4-${form}`,
+        projectId: 'p',
         projectRoot: proj,
         revision: pending.revision,
         decisions: acceptAll(pending),
@@ -471,7 +478,13 @@ describe('T5 staging a case variant of an existing file', () => {
     const pending = (await svc.get('t5')).pending;
     if (!pending) throw new Error('Expected a pending proposal');
     expect(pending.files.map((f) => f.path)).toEqual(['README.md']);
-    await svc.apply({ chatId: 't5', projectRoot: proj, revision: pending.revision, decisions: acceptAll(pending) });
+    await svc.apply({
+      chatId: 't5',
+      projectId: 'p',
+      projectRoot: proj,
+      revision: pending.revision,
+      decisions: acceptAll(pending),
+    });
     expect(await readdir(proj)).toEqual(['README.md']);
     expect(await readFile(path.join(proj, 'README.md'), 'utf8')).toBe('first\n');
   });
@@ -721,7 +734,13 @@ async function exerciseDeniedRoot(sc: DeniedScenario): Promise<void> {
     )
     .toEqual(['control.txt']);
   const applied = await svc
-    .apply({ chatId: a, projectRoot: sc.projectRoot, revision: pending.revision, decisions: acceptAll(pending) })
+    .apply({
+      chatId: a,
+      projectId: 'p',
+      projectRoot: sc.projectRoot,
+      revision: pending.revision,
+      decisions: acceptAll(pending),
+    })
     .then(({ batch }) => ({ written: batch.written.map((f) => f.path), conflicts: batch.conflicts }));
   expect.soft(applied, 'apply (policy at stage)').toEqual({ written: ['control.txt'], conflicts: [] });
   expect(await readFile(path.join(realRoot, 'control.txt'), 'utf8'), 'control applied').toBe('control\n');
@@ -749,7 +768,13 @@ async function exerciseDeniedRoot(sc: DeniedScenario): Promise<void> {
   expect(late.files, 'both proposals staged while unrestricted').toHaveLength(2);
   const restricted = createChangesService({ dataDir, sandbox });
   const lateApplied = await restricted
-    .apply({ chatId: b, projectRoot: sc.projectRoot, revision: late.revision, decisions: acceptAll(late) })
+    .apply({
+      chatId: b,
+      projectId: 'p',
+      projectRoot: sc.projectRoot,
+      revision: late.revision,
+      decisions: acceptAll(late),
+    })
     .then(
       ({ batch }) => ({ written: batch.written.map((f) => f.path), conflicts: batch.conflicts }),
       (e: unknown) => ({ error: (e as { code?: string }).code ?? String(e) }),
@@ -1102,6 +1127,7 @@ describe('AS-06 re-review: a default data-dir root that is a dangling symlink', 
     if (!pending) throw new Error('Expected a pending proposal');
     const { batch } = await svc.apply({
       chatId,
+      projectId: 'p',
       projectRoot,
       revision: pending.revision,
       decisions: acceptAll(pending),
@@ -1605,7 +1631,13 @@ async function applyPending(svc: ReturnType<typeof createChangesService>, chatId
   const pending = (await svc.get(chatId)).pending;
   if (!pending) throw new Error('Expected a pending proposal (control)');
   const paths = pending.files.map((f) => f.path);
-  const { batch } = await svc.apply({ chatId, projectRoot, revision: pending.revision, decisions: acceptAll(pending) });
+  const { batch } = await svc.apply({
+    chatId,
+    projectId: 'p',
+    projectRoot,
+    revision: pending.revision,
+    decisions: acceptAll(pending),
+  });
   return { pending: paths, written: batch.written.map((f) => f.path), conflicts: batch.conflicts };
 }
 

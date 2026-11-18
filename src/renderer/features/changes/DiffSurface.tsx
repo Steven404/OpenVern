@@ -1,15 +1,17 @@
 // The Diff surface of the right panel: pending Review proposals (changed files, hunks with decisions, the apply bar)
 // on top, and below them the History of written batches (applied in Review, or written in Auto with Undo).
 
+import { useChats } from '@renderer/app/queries';
 import { cx } from '@renderer/components/ui';
-import { ApiError } from '@renderer/lib/api-client';
+import { ApiError, isApplyProjectRefused } from '@renderer/lib/api-client';
 import { useApiClient } from '@renderer/lib/api-context';
 import { queryKeys } from '@renderer/lib/query-keys';
+import { chatQueryOptions, confirmEditMode } from '@renderer/stores/edit-modes';
 import { useRunsStore } from '@renderer/stores/runs';
 import { useUiStore } from '@renderer/stores/ui';
 import { LAYOUT, LIST_RATIO_DEFAULT } from '@shared/constants';
-import type { DiffHunk, FileChange, PendingChanges } from '@shared/types';
-import { useQueryClient } from '@tanstack/react-query';
+import type { DiffHunk, FileChange, Id, PendingChanges } from '@shared/types';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowRight, Check, ChevronsUpDown, Columns2, Rows3, X } from 'lucide-react';
 import {
   type KeyboardEvent as ReactKeyboardEvent,
@@ -21,6 +23,7 @@ import {
   useState,
 } from 'react';
 import { availablePanelWidth } from '../right-panel/layout';
+import { DRAFT_PANEL_CHAT_ID } from '../right-panel/panel-store';
 import { useChatChanges, useChatEditMode } from '../right-panel/queries';
 import type { SurfaceProps } from '../right-panel/surfaces';
 import { AppliedList, type HistoryFocus } from './AppliedList';
@@ -43,6 +46,19 @@ import { HunkLines, PathLabel, StatusBadge, Totals } from './parts';
 import { type DiffMode, useDecisions, useReviewStore, useReviewView } from './review-store';
 
 const STALE_MESSAGE = 'The proposed edits changed while you were reviewing. Review them again.';
+
+/**
+ * The project the chat header shows: the project of the chat summary it renders, the newer of the listed and the
+ * loaded one (as on the chat screen). `undefined` until the chat is known. Apply sends this, so proposals are never
+ * written into a project the user wasn't shown.
+ */
+function useShownProject(chatId: Id): Id | null | undefined {
+  const api = useApiClient();
+  const listed = useChats().data?.find((c) => c.id === chatId);
+  const loaded = useQuery({ ...chatQueryOptions(api, chatId), enabled: chatId !== DRAFT_PANEL_CHAT_ID }).data;
+  const shown = !listed || !loaded ? (listed ?? loaded) : loaded.updatedAt > listed.updatedAt ? loaded : listed;
+  return shown?.projectId;
+}
 
 /**
  * Scrolls `nav` the least it takes to bring `row` inside its visible box. Only `nav` moves: `scrollIntoView` would
@@ -166,6 +182,7 @@ export function DiffSurface({ chatId, params }: SurfaceProps) {
   const pending = changes.data?.pending ?? null;
   const applied = changes.data?.applied ?? [];
   const editMode = useChatEditMode(chatId);
+  const shownProject = useShownProject(chatId);
   const decisions = useDecisions(chatId, pending);
   const { mode, current } = useReviewView(chatId);
   const { setMode, setCurrent, setAll, clearDecisions } = useReviewStore.getState();
@@ -322,7 +339,8 @@ export function DiffSurface({ chatId, params }: SurfaceProps) {
   );
   const progress = progressOf(files, decisions);
   const discarding = pending !== null && allRejected(progress);
-  const applyDisabled = !pending || busy || streaming || (!discarding && progress.accepted === 0);
+  const applyDisabled =
+    !pending || busy || streaming || (!discarding && (progress.accepted === 0 || shownProject === undefined));
 
   const act = async () => {
     if (!pending || applyDisabled) return;
@@ -331,11 +349,16 @@ export function DiffSurface({ chatId, params }: SurfaceProps) {
     try {
       const key = queryKeys.chatChanges(chatId);
       if (discarding) {
+        // Discard works in any project, so proposals made for another one can always be dropped.
         queryClient.setQueryData(key, await api.discardChatChanges(chatId));
       } else {
+        if (shownProject === undefined) return;
         const res = await api.applyChatChanges(chatId, {
           revision: pending.revision,
           decisions: buildDecisions(pending.files, decisions),
+          // The project this render shows: the server writes nothing unless it is the chat's current project and the
+          // one the proposals were made for.
+          expectedProjectId: shownProject,
         });
         queryClient.setQueryData(key, res.changes);
       }
@@ -349,6 +372,11 @@ export function DiffSurface({ chatId, params }: SurfaceProps) {
           void queryClient.invalidateQueries({ queryKey: queryKeys.chatChanges(chatId) });
         }
         setError(STALE_MESSAGE);
+      } else if (isApplyProjectRefused(err)) {
+        // Nothing was written. Read the chat and its edits again, so the header and this surface show where they are.
+        setError(err.info.message);
+        void confirmEditMode({ api, queryClient }, chatId);
+        void queryClient.invalidateQueries({ queryKey: queryKeys.chatChanges(chatId) });
       } else {
         setError(err instanceof ApiError ? err.info.message : "Couldn't update the edits. Try again.");
       }

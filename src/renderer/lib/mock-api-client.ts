@@ -2,11 +2,13 @@
 // streams a fake turn (text → read_file → text with a code block) for any message.
 
 import {
+  APPLY_PROJECT_CHANGED,
   type ApplyChangesBody,
   type ApplyChangesResponse,
   CHAT_PROJECT_CHANGED,
   EDIT_MODE_CHANGED,
   PROJECT_NOT_IN_GIT,
+  PROPOSALS_OTHER_PROJECT,
   type UndoBatchResponse,
 } from '@shared/api';
 import { sniffAttachmentBytes } from '@shared/attachment-sniff';
@@ -151,7 +153,11 @@ export class MockApiClient implements ApiClient {
   private chats: Chat[] = [];
   private attachments = new Map<Id, StoredAttachment>();
   private running = new Set<Id>();
-  private changes = new Map<Id, { revision: number; messageId: Id; files: FileChange[] } | null>();
+  /** `projectId`: the project the turn that staged the set ran in; Apply refuses it in any other project. */
+  private changes = new Map<
+    Id,
+    { revision: number; messageId: Id; files: FileChange[]; projectId: Id | null } | null
+  >();
   private applied = new Map<Id, MockBatch[]>();
   /** Bumps whenever the chat changed project files (apply, auto write, undo), like the server's `diskSeq`. */
   private diskSeq = new Map<Id, number>();
@@ -403,7 +409,8 @@ export class MockApiClient implements ApiClient {
 
     this.running.add(chatId);
     // The turn uses the mode it checked above for the whole run: a mode change during the run applies from the next
-    // turn.
+    // turn. Its project is pinned here too, like the server's: proposals are bound to it even if the chat moves.
+    const turnProjectId = chat.projectId;
     let turnId: Id;
     let retryNotice: string | undefined;
     try {
@@ -568,25 +575,30 @@ export class MockApiClient implements ApiClient {
             if (result) yield { type: 'auto_batch_updated', batchId: result };
             continue;
           }
-          const staged = step.stages ? sampleProposal().slice(0, i + 1) : null;
+          // Like the server, a pending set holds one project's proposals: a stage from another project is refused.
+          const prior = this.changes.get(chatId);
+          const otherProject = step.stages === true && prior != null && prior.projectId !== turnProjectId;
+          const staged = step.stages && !otherProject ? sampleProposal().slice(0, i + 1) : null;
           const tool: ToolMessage = {
             id: crypto.randomUUID(),
             role: 'tool',
             createdAt: now(),
             toolCallId: call.id,
             name: call.name,
-            ok: true,
-            output: staged
-              ? `Proposed ${staged[i]?.path}. Proposed, not written yet.`
-              : 'File: README.md (3 lines, showing 1-3)\n1\t# OpenVern\n2\t\n3\tA desktop AI app.',
-            summary: staged ? (staged[i]?.path ?? '') : 'README.md',
+            ok: !otherProject,
+            output: otherProject
+              ? "Not proposed: this chat has proposed edits for another project waiting for the user's review. Ask the user to discard them first."
+              : staged
+                ? `Proposed ${staged[i]?.path}. Proposed, not written yet.`
+                : 'File: README.md (3 lines, showing 1-3)\n1\t# OpenVern\n2\t\n3\tA desktop AI app.',
+            summary: staged ? (staged[i]?.path ?? '') : otherProject ? (sampleProposal()[i]?.path ?? '') : 'README.md',
             durationMs: this.delayMs * 8,
           };
           chat.messages.push(tool);
           yield { type: 'tool_result', message: clone(tool) };
           if (staged) {
             const revision = (this.changes.get(chatId)?.revision ?? 0) + 1;
-            this.changes.set(chatId, { revision, messageId: msg.id, files: staged });
+            this.changes.set(chatId, { revision, messageId: msg.id, files: staged, projectId: turnProjectId });
             yield { type: 'changes_updated', messageId: msg.id, changes: summarize(staged, revision, msg.id) };
           }
         }
@@ -701,9 +713,14 @@ export class MockApiClient implements ApiClient {
   }
 
   async applyChatChanges(chatId: Id, body: ApplyChangesBody): Promise<ApplyChangesResponse> {
-    this.chat(chatId);
+    const chat = this.chat(chatId);
     if (this.running.has(chatId)) fail('conflict', 409, 'Wait for the reply to finish first.');
     const pending = this.changes.get(chatId) ?? null;
+    // Like the server: proposals are written only into the project they were made for, and only when that is the
+    // chat's current project and the one the client showed (when sent).
+    if (pending && pending.projectId !== chat.projectId) fail('conflict', 409, PROPOSALS_OTHER_PROJECT);
+    if (body.expectedProjectId !== undefined && body.expectedProjectId !== chat.projectId)
+      fail('conflict', 409, APPLY_PROJECT_CHANGED);
     if (!pending || pending.revision !== body.revision) fail('changes_stale', 409);
     const { written, rejectedHunks, skippedHunks } = acceptedOnly(pending?.files ?? [], body.decisions);
     const batch: MockBatch = {
