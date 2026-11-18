@@ -1,4 +1,4 @@
-import type { Id } from '@shared/types';
+import type { ChatSummary } from '@shared/types';
 import { Fragment, useCallback, useLayoutEffect, useMemo, useRef } from 'react';
 import { Button, Spinner } from '../../components/ui';
 import { hideRetriedTail, selectRun, useRunsStore } from '../../stores/runs';
@@ -14,11 +14,17 @@ import { UserBubble } from './UserBubble';
 const STICK_THRESHOLD = 64;
 
 export interface ConversationProps {
-  chatId: Id;
+  /**
+   * The chat as this screen renders it, the same value the header and the composer get. Retry's project, fallback
+   * model, effort and mode gate come from it, never from the chat read below: that read can be newer than what the
+   * screen shows (a move the header hasn't caught up with), and a retry must not act on a project nobody was shown.
+   */
+  chat: ChatSummary;
 }
 
 /** The scrolling message list of a chat: persisted messages plus the in-flight run (S7.3 – S7.8). */
-export function Conversation({ chatId }: ConversationProps) {
+export function Conversation({ chat: shownChat }: ConversationProps) {
+  const chatId = shownChat.id;
   const chatQuery = useChat(chatId);
   const run = useRunsStore(selectRun(chatId));
   const selectedModel = useRunsStore((s) => s.chatModels[chatId]);
@@ -50,22 +56,24 @@ export function Conversation({ chatId }: ConversationProps) {
   const runError = run?.error && !lastAssistantErrored ? run.error : null;
 
   // Retry runs in the mode the composer's chip shows, through the same gate as a send: it is offered only while that
-  // mode is on screen and confirmed, and it sends the value of this render, with the project this render shows.
-  const retryModel = selectedModel ?? chat?.model ?? '';
-  const shownProject = chat?.projectId ?? null;
+  // mode is on screen and confirmed, and it sends the value of this render, with the project this render shows. All of
+  // it comes from the chat the header and the composer render, so Retry can't name a project they don't show.
+  const retryModel = selectedModel ?? shownChat.model;
+  const shownProject = shownChat.projectId;
+  const shownEffort = shownChat.effort;
   const shownMode = useReplyEditMode(chatId, shownProject, retryModel);
   const expectedEditMode = shownMode.ready ? shownMode.entry.mode : null;
   const retry = useCallback(() => {
-    if (!chat || expectedEditMode === null) return;
+    if (expectedEditMode === null) return;
     // F3: a retry uses the effort chosen in this chat; otherwise the chat keeps the effort it already stored.
-    const picked = selectedEffort === undefined ? chat.effort : selectedEffort;
+    const picked = selectedEffort === undefined ? shownEffort : selectedEffort;
     void retryRun(deps, chatId, {
       model: retryModel,
       effort: picked,
       expectedEditMode,
       expectedProjectId: shownProject,
     });
-  }, [retryRun, deps, chatId, retryModel, selectedEffort, chat, expectedEditMode, shownProject]);
+  }, [retryRun, deps, chatId, retryModel, selectedEffort, shownEffort, expectedEditMode, shownProject]);
 
   // ── stick to bottom ────────────────────────────────────────────────────────
   const scrollRef = useRef<HTMLElement>(null);

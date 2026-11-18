@@ -54,18 +54,50 @@ async function resolveProjectRoot(
   }
 }
 
+/** A `.git` file is one short line; anything much larger isn't one. */
+const GITFILE_MAX_BYTES = 64 * 1024;
+
 /**
- * True when a `.git` directory or file (worktrees and submodules use a file) exists in `root` or one of its ancestors.
- * Any error on the way counts as "not found" for that folder, so an unreadable ancestor never throws.
+ * Whether the `.git` file at `file` (a linked worktree or a submodule) still points at a repository. It must read
+ * `gitdir: <path>` (a relative path counts from the folder that holds the file), and that path must be a directory with
+ * a `HEAD` file. Without this check a worktree whose repository was deleted would still count as in Git, and Auto would
+ * be turned on there without the no-Git warning. Anything malformed or unreadable is false: it fails closed.
+ */
+async function gitfilePointsAtRepo(file: string): Promise<boolean> {
+  try {
+    const stat = await fs.stat(file);
+    if (!stat.isFile() || stat.size > GITFILE_MAX_BYTES) return false;
+    const match = /^gitdir: ([^\r\n]+)\r?(?:\n|$)/.exec(await fs.readFile(file, 'utf8'));
+    const target = match?.[1];
+    if (!target) return false;
+    const gitDir = path.resolve(path.dirname(file), target);
+    if (!(await fs.stat(gitDir)).isDirectory()) return false;
+    return (await fs.stat(path.join(gitDir, 'HEAD'))).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * True when the nearest `.git` in `root` or one of its ancestors is a repository: a `.git` directory, or a `.git` file
+ * (worktrees and submodules use one) that points at an existing git dir. Git itself stops at the nearest `.git`, so a
+ * broken `.git` file is false rather than a reason to keep looking upward. An error while looking for `.git` counts as
+ * "not found" for that folder, so an unreadable ancestor never throws. Never runs `git`.
  */
 export async function inGitRepo(root: string): Promise<boolean> {
   let dir = root;
   for (;;) {
-    const found = await fs.lstat(path.join(dir, '.git')).then(
+    const dotGit = path.join(dir, '.git');
+    const found = await fs.lstat(dotGit).then(
       () => true,
       () => false,
     );
-    if (found) return true;
+    if (found) {
+      // Followed, so a link to a repository counts as before; a dangling link is broken, not "not found".
+      const stat = await fs.stat(dotGit).catch(() => null);
+      if (stat?.isDirectory()) return true;
+      return stat?.isFile() ? gitfilePointsAtRepo(dotGit) : false;
+    }
     const parent = path.dirname(dir);
     if (parent === dir) return false;
     dir = parent;

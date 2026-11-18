@@ -306,3 +306,116 @@ describe('the move warning belongs to the chat it opened for', () => {
     expect(useUiStore.getState().autoNoGitAcknowledged).toEqual({});
   });
 });
+
+describe('moving a chat whose Auto is not on screen', () => {
+  /**
+   * A loose chat stored in Auto with no API key set: neither the chip nor the composer's Auto notice shows. Or
+   * (`no tools`) a chat in a project whose model can't use tools, so the chip is hidden there too.
+   */
+  async function hiddenChat(mode: EditMode, where: 'loose, no key' | 'no tools' = 'loose, no key') {
+    const seed = await seededClient();
+    const { client } = seed;
+    const git = seed.projects.find((p) => p.inGitRepo && p.id !== seed.project.id);
+    const noGit = seed.projects.find((p) => !p.inGitRepo);
+    if (!git || !noGit) throw new Error('seed needs a Git and a no-Git project');
+    const created =
+      where === 'no tools'
+        ? await client.createChat({ projectId: seed.project.id, model: 'google/gemma-3-4b-it' })
+        : await client.createChat({ projectId: null, model: seed.chat.model });
+    await client.updateChat(created.id, { title: 'Hidden chat', editMode: mode, expectedInGitRepo: true });
+    if (where === 'loose, no key') await client.removeOpenRouterKey();
+    const view = renderApp({ client, route: `/chat/${created.id}` });
+    const header = (await screen.findByRole('heading', { level: 1, name: 'Hidden chat' })).closest('header');
+    if (!header) throw new Error('missing header');
+    await waitFor(() => expect(useEditModes.getState().entries[created.id]).toMatchObject({ mode, status: 'known' }));
+    // The composer has what decides its chip (the key, the models), and the chip stays hidden.
+    await waitFor(() => expect(view.queryClient.getQueryData(queryKeys.settings)).toBeDefined());
+    await waitFor(() => expect(view.queryClient.getQueryState(queryKeys.models)?.status).not.toBe('pending'));
+    await tick();
+    expect(screen.queryByTestId('edit-mode-chip')).toBeNull();
+    const update = vi.spyOn(client, 'updateChat');
+    return { ...view, client, chat: created, header, git, noGit, update };
+  }
+
+  it.each(['loose, no key', 'no tools'] as const)(
+    'into a Git project it asks first (%s), and moves nothing yet',
+    async (where) => {
+      const { header, git, update, client, chat } = await hiddenChat('auto', where);
+      await moveTo(header, git);
+      const dialog = await screen.findByTestId('no-git-dialog');
+      expect(screen.getAllByRole('dialog')).toHaveLength(1);
+      expect(dialog.getAttribute('data-reason')).toBe('move-hidden');
+      expect(within(dialog).getByText('Keep this chat in Auto?')).toBeTruthy();
+      expect(dialog.textContent).toContain(`This chat is in Auto. After the move to ${git.name}`);
+      expect(dialog.textContent).not.toContain('Git repository');
+      await tick();
+      expect(update).not.toHaveBeenCalled();
+      expect((await client.getChat(chat.id)).projectId).toBe(chat.projectId);
+    },
+  );
+
+  it('"Switch to Review" moves it and sets Review in one PATCH', async () => {
+    const { header, git, update, client, chat } = await hiddenChat('auto');
+    await moveTo(header, git);
+    fireEvent.click(await screen.findByTestId('no-git-keep-review'));
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+    expect(update).toHaveBeenCalledWith(chat.id, { projectId: git.id, editMode: 'review', expectedEditMode: 'auto' });
+    await waitFor(() => expect(screen.queryByTestId('no-git-dialog')).toBeNull());
+    expect(await client.getChat(chat.id)).toMatchObject({ projectId: git.id, editMode: 'review' });
+    expect(useUiStore.getState().autoNoGitAcknowledged).toEqual({});
+  });
+
+  it('"Keep Auto" moves it in Auto, carrying the Git status, and records no no-Git acknowledgment', async () => {
+    const { header, git, update, client, chat } = await hiddenChat('auto');
+    await moveTo(header, git);
+    fireEvent.click(await screen.findByTestId('no-git-turn-on-auto'));
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+    expect(update).toHaveBeenCalledWith(chat.id, {
+      projectId: git.id,
+      expectedEditMode: 'auto',
+      expectedInGitRepo: true,
+    });
+    await waitFor(() => expect(screen.queryByTestId('no-git-dialog')).toBeNull());
+    expect(await client.getChat(chat.id)).toMatchObject({ projectId: git.id, editMode: 'auto' });
+    expect(useUiStore.getState().autoNoGitAcknowledged).toEqual({});
+  });
+
+  it('into a project without Git, exactly one dialog asks, and it says the chat is in Auto', async () => {
+    const { header, noGit, update } = await hiddenChat('auto');
+    await moveTo(header, noGit);
+    const dialog = await screen.findByTestId('no-git-dialog');
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    expect(dialog.getAttribute('data-reason')).toBe('move');
+    expect(dialog.textContent).toContain(`${noGit.name} isn't a Git repository. This chat is in Auto`);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Keep Auto' }));
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith(expect.any(String), {
+        projectId: noGit.id,
+        expectedEditMode: 'auto',
+        expectedInGitRepo: false,
+      }),
+    );
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(useUiStore.getState().autoNoGitAcknowledged).toEqual({ [noGit.id]: true });
+  });
+
+  it('a Review chat moves without asking', async () => {
+    const { header, git, update, chat } = await hiddenChat('review');
+    await moveTo(header, git);
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith(chat.id, { projectId: git.id, expectedEditMode: 'review' }),
+    );
+    expect(screen.queryByTestId('no-git-dialog')).toBeNull();
+  });
+
+  it('a hidden-Auto chat moved out to No project does not ask (it can write nowhere there)', async () => {
+    const { header, update, chat } = await hiddenChat('auto', 'no tools');
+    openMenu(within(header).getByRole('button', { name: 'Chat options' }));
+    const sub = await screen.findByRole('menuitem', { name: 'Move to project' });
+    sub.focus();
+    fireEvent.keyDown(sub, { key: 'ArrowRight' });
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: 'No project' }));
+    await waitFor(() => expect(update).toHaveBeenCalledWith(chat.id, { projectId: null, expectedEditMode: 'auto' }));
+    expect(screen.queryByTestId('no-git-dialog')).toBeNull();
+  });
+});

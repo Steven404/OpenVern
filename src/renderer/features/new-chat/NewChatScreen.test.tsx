@@ -8,6 +8,7 @@ import { MockApiClient } from '../../lib/mock-api-client';
 import { paths } from '../../lib/routes';
 import { useRunsStore } from '../../stores/runs';
 import { useUiStore } from '../../stores/ui';
+import { useChat } from '../composer/queries';
 import { installDomStubs, renderWithProviders, resetStores } from '../composer/test-utils';
 import { Conversation } from '../conversation';
 import { usePanelStore } from '../right-panel/panel-store';
@@ -38,7 +39,8 @@ function Goto({ to }: { to: string }) {
 
 function ChatRoute() {
   const id = useLocation().pathname.split('/').at(-1) ?? '';
-  return <Conversation chatId={id} />;
+  const chat = useChat(id).data;
+  return chat ? <Conversation chat={chat} /> : null;
 }
 
 function App() {

@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, rm } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { CHAT_PROJECT_CHANGED, EDIT_MODE_CHANGED, PROJECT_NOT_IN_GIT } from '@shared/api';
 import type { AppliedBatch, Chat, EditMode } from '@shared/types';
@@ -549,6 +549,52 @@ describe('expectedInGitRepo: Auto never starts in a folder shown as in Git that 
     expect((await patch({ projectId: repo.id, editMode: 'review', expectedEditMode: 'auto' })).status).toBe(200);
     expect(await h.core.chats.get(chat.id)).toMatchObject({ projectId: repo.id, editMode: 'review' });
     expect((await patch({ projectId, expectedEditMode: 'review' })).status).toBe(200);
+  });
+
+  it('a linked worktree whose repository was deleted after listing is refused like a folder outside Git', async () => {
+    // A worktree's `.git` is a file pointing at `<repo>/.git/worktrees/<name>`; deleting the repository leaves it behind.
+    const repoRoot = path.join(h.homeDir, 'main-repo');
+    const linked = path.join(repoRoot, '.git', 'worktrees', 'wt');
+    await mkdir(linked, { recursive: true });
+    await writeFile(path.join(repoRoot, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+    await writeFile(path.join(linked, 'HEAD'), 'ref: refs/heads/wt\n');
+    const root = path.join(h.homeDir, 'wt');
+    await mkdir(root);
+    await writeFile(path.join(root, '.git'), `gitdir: ${linked}\n`);
+    const worktree = await h.core.projects.create({ rootPath: root });
+    expect((await h.core.projects.list()).find((p) => p.id === worktree.id)?.inGitRepo).toBe(true);
+    await rm(repoRoot, { recursive: true });
+
+    const inWorktree = await h.core.chats.create({ projectId: worktree.id, model: MODEL });
+    const before = await chatFile(inWorktree.id);
+    await error(
+      await h.call(`/api/chats/${inWorktree.id}`, {
+        method: 'PATCH',
+        json: { editMode: 'auto', expectedProjectId: worktree.id, expectedInGitRepo: true },
+      }),
+      409,
+      'conflict',
+      PROJECT_NOT_IN_GIT,
+    );
+    expect(await chatFile(inWorktree.id)).toBe(before);
+    await error(
+      await h.call('/api/chats', {
+        method: 'POST',
+        json: { projectId: worktree.id, model: MODEL, editMode: 'auto', expectedInGitRepo: true },
+      }),
+      409,
+      'conflict',
+      PROJECT_NOT_IN_GIT,
+    );
+    await h.core.chats.update(chat.id, { editMode: 'auto' });
+    await error(
+      await patch({ projectId: worktree.id, expectedEditMode: 'auto', expectedInGitRepo: true }),
+      409,
+      'conflict',
+      PROJECT_NOT_IN_GIT,
+    );
+    expect(await h.core.chats.get(chat.id)).toMatchObject({ projectId, editMode: 'auto' });
+    expect((await h.core.projects.list()).find((p) => p.id === worktree.id)?.inGitRepo).toBe(false);
   });
 
   it('a folder that is in Git goes through whatever the client showed', async () => {

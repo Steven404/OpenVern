@@ -48,7 +48,7 @@ export function ChatScreen() {
     <>
       <ChatHeader chat={summary} />
       <div className="flex min-h-0 flex-1 flex-col">
-        <Conversation chatId={id} />
+        <Conversation chat={summary} />
       </div>
       <ReplyComposer chat={summary} />
     </>

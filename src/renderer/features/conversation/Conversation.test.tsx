@@ -1,11 +1,14 @@
-import { EDIT_MODE_CHANGED } from '@shared/api';
+import { CHAT_PROJECT_CHANGED, EDIT_MODE_CHANGED } from '@shared/api';
 import { TREE_UNAVAILABLE_NOTICE } from '@shared/constants';
 import { errorInfo } from '@shared/errors';
 import { SAMPLE_MODELS } from '@shared/sample-data';
 import type { AssistantMessage, Chat, Message, ModelInfo, ToolMessage, UserMessage } from '@shared/types';
 import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { Route, Routes } from 'react-router';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ChatScreen } from '../../app/ChatScreen';
 import { MockApiClient } from '../../lib/mock-api-client';
+import { queryKeys } from '../../lib/query-keys';
 import { useEditModes } from '../../stores/edit-modes';
 import { createRun, PENDING_PREFIX, useRunsStore } from '../../stores/runs';
 import { useUiStore } from '../../stores/ui';
@@ -107,7 +110,7 @@ describe('turn grouping', () => {
 
   it('renders one article per assistant turn', async () => {
     const { api, chat } = await seededChat();
-    renderWithProviders(<Conversation chatId={chat.id} />, { api });
+    renderWithProviders(<Conversation chat={chat} />, { api });
     const turns = await screen.findAllByTestId('assistant-turn');
     expect(turns).toHaveLength(1);
     expect(screen.getAllByTestId('user-bubble')).toHaveLength(1);
@@ -127,7 +130,7 @@ describe('turn grouping', () => {
       ...chat,
       messages: [user('u1', 'q'), assistant('a1', 'the answer', { notice: TREE_UNAVAILABLE_NOTICE })],
     };
-    renderWithProviders(<Conversation chatId={chat.id} />, { api, chats: [full] });
+    renderWithProviders(<Conversation chat={full} />, { api, chats: [full] });
     expect(await screen.findByText('the answer')).toBeTruthy();
     const notice = screen.getByRole('status');
     expect(notice.textContent).toBe(TREE_UNAVAILABLE_NOTICE);
@@ -140,7 +143,7 @@ describe('turn grouping', () => {
       ...chat,
       messages: [user('u1', 'q'), assistant('a1', 'partial answer', { status: 'stopped' })],
     };
-    renderWithProviders(<Conversation chatId={chat.id} />, { api, chats: [full] });
+    renderWithProviders(<Conversation chat={full} />, { api, chats: [full] });
     expect(await screen.findByText('partial answer')).toBeTruthy();
     expect(screen.getByTestId('stopped-label').textContent).toBe('Stopped');
     // Offered once the chat's mode is on screen (see `useReplyEditMode`).
@@ -250,7 +253,7 @@ describe('Conversation run overlay', () => {
     const { api, chat } = await seededChat();
     const pending: UserMessage = { ...user(`${PENDING_PREFIX}1`, 'brand new question'), attachments: [] };
     useRunsStore.setState({ runs: { [chat.id]: createRun(1, pending) } });
-    renderWithProviders(<Conversation chatId={chat.id} />, { api });
+    renderWithProviders(<Conversation chat={chat} />, { api });
     expect(await screen.findByText('brand new question')).toBeTruthy();
     expect(screen.getByText('Thinking…')).toBeTruthy();
   });
@@ -267,7 +270,7 @@ describe('Conversation run overlay', () => {
         },
       },
     });
-    renderWithProviders(<Conversation chatId={chat.id} />, { api });
+    renderWithProviders(<Conversation chat={chat} />, { api });
     expect(await screen.findByText('reading now')).toBeTruthy();
     expect(screen.queryByText('Thinking…')).toBeNull();
     const rows = screen.getAllByTestId('tool-row');
@@ -287,7 +290,7 @@ describe('Conversation run overlay', () => {
         },
       },
     });
-    renderWithProviders(<Conversation chatId={chat.id} />, { api });
+    renderWithProviders(<Conversation chat={chat} />, { api });
     await screen.findByText('reading now');
     const group = screen.getByTestId('tool-group');
     expect(group.getAttribute('data-state')).toBe('live');
@@ -301,7 +304,7 @@ describe('Conversation run overlay', () => {
     useRunsStore.setState({
       runs: { [chat.id]: { ...createRun(1), status: 'idle', error: errorInfo('invalid_api_key') } },
     });
-    renderWithProviders(<Conversation chatId={chat.id} />, { api });
+    renderWithProviders(<Conversation chat={chat} />, { api });
     const card = await screen.findByTestId('error-card');
     expect(within(card).queryByRole('button', { name: 'Retry' })).toBeNull();
     fireEvent.click(within(card).getByRole('button', { name: 'Open settings' }));
@@ -314,7 +317,7 @@ describe('Conversation run overlay', () => {
     useRunsStore.setState({
       runs: { [chat.id]: { ...createRun(1), status: 'idle', error: errorInfo('provider_error') } },
     });
-    renderWithProviders(<Conversation chatId={chat.id} />, { api });
+    renderWithProviders(<Conversation chat={chat} />, { api });
     const card = await screen.findByTestId('error-card');
     expect(within(card).queryByRole('button', { name: 'Open settings' })).toBeNull();
     const button = await within(card).findByRole('button', { name: 'Retry' });
@@ -340,7 +343,10 @@ describe('Conversation run overlay', () => {
       chatEfforts: { [chat.id]: 'high' },
       runs: { [chat.id]: { ...createRun(1), status: 'idle', error: errorInfo('provider_error') } },
     });
-    renderWithProviders(<Conversation chatId={chat.id} />, { api, chats: [{ ...full, effort: 'low' }] });
+    renderWithProviders(<Conversation chat={{ ...full, effort: 'low' }} />, {
+      api,
+      chats: [{ ...full, effort: 'low' }],
+    });
     const card = await screen.findByTestId('error-card');
     const button = await within(card).findByRole('button', { name: 'Retry' });
     await act(async () => {
@@ -362,7 +368,10 @@ describe('Conversation run overlay', () => {
     useRunsStore.setState({
       runs: { [chat.id]: { ...createRun(1), status: 'idle', error: errorInfo('provider_error') } },
     });
-    renderWithProviders(<Conversation chatId={chat.id} />, { api, chats: [{ ...full, effort: 'low' }] });
+    renderWithProviders(<Conversation chat={{ ...full, effort: 'low' }} />, {
+      api,
+      chats: [{ ...full, effort: 'low' }],
+    });
     const card = await screen.findByTestId('error-card');
     const button = await within(card).findByRole('button', { name: 'Retry' });
     await act(async () => {
@@ -389,7 +398,10 @@ describe('Conversation run overlay', () => {
       chatEfforts: { [chat.id]: 'high' },
       runs: { [chat.id]: { ...createRun(1), status: 'idle', error: errorInfo('provider_error') } },
     });
-    renderWithProviders(<Conversation chatId={chat.id} />, { api, chats: [{ ...full, effort: 'low' }] });
+    renderWithProviders(<Conversation chat={{ ...full, effort: 'low' }} />, {
+      api,
+      chats: [{ ...full, effort: 'low' }],
+    });
     const card = await screen.findByTestId('error-card');
     const button = await within(card).findByRole('button', { name: 'Retry' });
     await act(async () => {
@@ -413,7 +425,7 @@ describe('Conversation run overlay', () => {
     useRunsStore.setState({
       runs: { [chat.id]: { ...createRun(1), status: 'idle', error: errorInfo('insufficient_credits') } },
     });
-    renderWithProviders(<Conversation chatId={chat.id} />, { api, chats: [full] });
+    renderWithProviders(<Conversation chat={full} />, { api, chats: [full] });
     const cards = await screen.findAllByTestId('error-card');
     expect(cards).toHaveLength(1);
     expect(within(cards[0] as HTMLElement).getByRole('button', { name: 'Open settings' })).toBeTruthy();
@@ -450,7 +462,7 @@ describe('Retry and the edit mode the chip shows', () => {
     useRunsStore.setState({ runs: { [created.id]: stopped } });
     renderWithProviders(
       <>
-        <Conversation chatId={created.id} />
+        <Conversation chat={created} />
         <ReplyComposer chat={created} />
       </>,
       { api },
@@ -494,7 +506,7 @@ describe('Retry and the edit mode the chip shows', () => {
     const full = await api.getChat(created.id);
     const stopped = { ...createRun(1), status: 'idle' as const, stopped: true };
     useRunsStore.setState({ runs: { [created.id]: stopped } });
-    renderWithProviders(<Conversation chatId={created.id} />, { api, chats: [full] });
+    renderWithProviders(<Conversation chat={full} />, { api, chats: [full] });
     const undo = await screen.findByRole('button', { name: 'Undo the edits from this turn' });
     expect(undo).toBeTruthy();
     // Another window switched the chat to Review: the chip here still shows Auto, so the retry is refused.
@@ -537,7 +549,7 @@ describe('a retry that failed before it truncated keeps the earlier write visibl
     }
     const full = await api.getChat(created.id);
     useRunsStore.setState({ runs: { [created.id]: { ...createRun(1), status: 'idle', stopped: true } } });
-    const view = renderWithProviders(<Conversation chatId={created.id} />, { api, chats: [full] });
+    const view = renderWithProviders(<Conversation chat={full} />, { api, chats: [full] });
     await screen.findByRole('button', { name: 'Undo the edits from this turn' });
     // The retry fails while preparing, before anything was truncated or undone, and the read after it fails too.
     vi.spyOn(api, 'retry').mockImplementation(async function* () {
@@ -595,7 +607,7 @@ describe('Auto that is not on screen never goes out', () => {
     const retry = vi.spyOn(api, 'retry');
     renderWithProviders(
       <>
-        <Conversation chatId={full.id} />
+        <Conversation chat={full} />
         <ReplyComposer chat={full} />
       </>,
       { api, chats: [full] },
@@ -627,4 +639,83 @@ describe('Auto that is not on screen never goes out', () => {
       expect(textarea.value).toBe('write it');
     },
   );
+});
+
+describe('Retry acts on the chat the screen shows, not a newer read of it', () => {
+  /**
+   * Another window moved the chat to project B, keeping Auto. This window then read the chat again (B), but its chat
+   * list did not refresh, and a move keeps `updatedAt`, so the header and the composer still show where it was before.
+   */
+  async function movedBehindTheHeader(before: 'project A' | 'no project') {
+    const api = new MockApiClient({ delayMs: 0 });
+    const gitProjects = (await api.listProjects()).filter((p) => p.inGitRepo);
+    const [a, b] = gitProjects;
+    if (!a || !b) throw new Error('seed needs two Git projects');
+    const created = await api.createChat({
+      projectId: a.id,
+      model: 'anthropic/claude-sonnet-5.5',
+      editMode: 'auto',
+      expectedInGitRepo: true,
+    });
+    for await (const _ of api.sendMessage(
+      created.id,
+      { text: 'hello', attachmentIds: [], model: created.model, expectedEditMode: 'auto', expectedProjectId: a.id },
+      new AbortController().signal,
+    )) {
+      // one finished turn, so there is something to retry
+    }
+    if (before === 'no project') await api.updateChat(created.id, { projectId: null, expectedEditMode: 'auto' });
+    const listed = (await api.listChats()).find((c) => c.id === created.id);
+    if (!listed) throw new Error('chat not listed');
+    useRunsStore.setState({ runs: { [created.id]: { ...createRun(1), status: 'idle', stopped: true } } });
+    const retry = vi.spyOn(api, 'retry');
+    const view = renderWithProviders(
+      <Routes>
+        <Route path="/chat/:id" element={<ChatScreen />} />
+      </Routes>,
+      { api, route: `/chat/${created.id}` },
+    );
+    await screen.findByTestId('stopped-label');
+    await waitFor(() => expect(useEditModes.getState().entries[created.id]?.status).toBe('known'));
+
+    await api.updateChat(created.id, { projectId: b.id, expectedEditMode: 'auto', expectedInGitRepo: true });
+    const moved = await api.getChat(created.id);
+    expect(moved.updatedAt).toBe(listed.updatedAt);
+    vi.spyOn(api, 'listChats').mockRejectedValue(new Error('offline'));
+    await act(async () => {
+      await view.queryClient.refetchQueries({ queryKey: queryKeys.chat(created.id) });
+      await view.queryClient.refetchQueries({ queryKey: queryKeys.chats });
+    });
+    expect(view.queryClient.getQueryData<Chat>(queryKeys.chat(created.id))?.projectId).toBe(b.id);
+    expect(useEditModes.getState().entries[created.id]).toMatchObject({ mode: 'auto', status: 'known' });
+    return { api, a, b, created, retry };
+  }
+
+  it('with a stale header in project A, Retry carries A (refused), never the B of the newer read', async () => {
+    const { api, a, b, created, retry } = await movedBehindTheHeader('project A');
+    const before = await api.getChat(created.id);
+    const header = screen.getByRole('banner');
+    expect(within(header).getByText(a.name)).toBeTruthy();
+    expect(within(header).queryByText(b.name)).toBeNull();
+    const label = (screen.getByTestId('stopped-label').parentElement ?? document.body) as HTMLElement;
+    await act(async () => {
+      fireEvent.click(await within(label).findByRole('button', { name: 'Retry' }));
+    });
+    await waitFor(() => expect(retry).toHaveBeenCalledTimes(1));
+    expect(retry.mock.calls[0]?.[1]).toMatchObject({ expectedEditMode: 'auto', expectedProjectId: a.id });
+    // The server refused it: the composer says why, and the turn in B was never run.
+    expect(await screen.findByText(CHAT_PROJECT_CHANGED)).toBeTruthy();
+    await waitFor(() => expect(useRunsStore.getState().runs[created.id]?.status).toBe('idle'));
+    expect((await api.getChat(created.id)).messages).toEqual(before.messages);
+  });
+
+  it('with a stale loose header (no chip), Retry is not offered for the Auto the newer read put in B', async () => {
+    const { retry } = await movedBehindTheHeader('no project');
+    expect(screen.queryByTestId('edit-mode-chip')).toBeNull();
+    expect(await screen.findByText(AUTO_HIDDEN_NOTICE)).toBeTruthy();
+    const label = (screen.getByTestId('stopped-label').parentElement ?? document.body) as HTMLElement;
+    expect(within(label).queryByRole('button', { name: 'Retry' })).toBeNull();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(retry).not.toHaveBeenCalled();
+  });
 });

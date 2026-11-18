@@ -1,8 +1,9 @@
+import { execFileSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createProjectsService } from './projects';
+import { createProjectsService, inGitRepo } from './projects';
 import { cleanupTempDirs, makeStorage, makeTempDir } from './test-helpers';
 
 cleanupTempDirs();
@@ -272,11 +273,114 @@ describe('ProjectsService.list inGitRepo', () => {
     expect(await listed(storage, (await storage.projects.create({ rootPath: dir })).id)).toBe(true);
   });
 
-  it('is true for a .git file (worktree or submodule)', async () => {
+  /**
+   * A repository with one linked worktree: `.git` in the worktree is a file pointing at `<repo>/.git/worktrees/wt`.
+   * Made with `git` where it is installed, otherwise laid out by hand the same way.
+   */
+  async function linkedWorktree(): Promise<{ repo: string; worktree: string; gitDir: string }> {
+    const base = await makeTempDir();
+    const repo = path.join(base, 'repo');
+    const worktree = path.join(base, 'wt');
+    await fs.mkdir(repo);
+    const git = (...args: string[]) =>
+      execFileSync('git', args, {
+        cwd: repo,
+        stdio: 'ignore',
+        env: { ...process.env, GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: '1' },
+      });
+    let made = false;
+    try {
+      git('init', '-q');
+      git('-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-q', '--allow-empty', '-m', 'init');
+      git('worktree', 'add', '-q', worktree);
+      made = true;
+    } catch {
+      // No usable git here: build the same structure by hand.
+    }
+    if (!made) {
+      await fs.rm(repo, { recursive: true, force: true });
+      await fs.rm(worktree, { recursive: true, force: true });
+      const linked = path.join(repo, '.git', 'worktrees', 'wt');
+      await fs.mkdir(linked, { recursive: true });
+      await fs.writeFile(path.join(repo, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+      await fs.writeFile(path.join(linked, 'HEAD'), 'ref: refs/heads/wt\n');
+      await fs.mkdir(worktree);
+      await fs.writeFile(path.join(worktree, '.git'), `gitdir: ${linked}\n`);
+    }
+    const worktreeReal = await fs.realpath(worktree);
+    const line = (await fs.readFile(path.join(worktreeReal, '.git'), 'utf8')).trim();
+    expect(line.startsWith('gitdir: ')).toBe(true);
+    const gitDir = path.resolve(worktreeReal, line.slice('gitdir: '.length));
+    return { repo: await fs.realpath(repo), worktree: worktreeReal, gitDir };
+  }
+
+  it('is true for a .git file (linked worktree) that points at an existing git dir', async () => {
     const { storage } = await makeStorage();
-    const dir = await makeDir('wt');
-    await fs.writeFile(path.join(dir, '.git'), 'gitdir: /elsewhere/.git/worktrees/wt\n');
-    expect(await listed(storage, (await storage.projects.create({ rootPath: dir })).id)).toBe(true);
+    const { worktree } = await linkedWorktree();
+    expect((await fs.lstat(path.join(worktree, '.git'))).isFile()).toBe(true);
+    expect(await listed(storage, (await storage.projects.create({ rootPath: worktree })).id)).toBe(true);
+    expect(await inGitRepo(worktree)).toBe(true);
+  });
+
+  it('is false for a .git file whose repository was deleted, even inside another repository', async () => {
+    const { storage } = await makeStorage();
+    const { repo, worktree } = await linkedWorktree();
+    const project = await storage.projects.create({ rootPath: worktree });
+    expect(await listed(storage, project.id)).toBe(true);
+    await fs.rm(repo, { recursive: true, force: true });
+    // An enclosing repository doesn't make the broken pointer count: git stops at the nearest .git.
+    await fs.mkdir(path.join(path.dirname(worktree), '.git'));
+    expect(await listed(storage, project.id)).toBe(false);
+    expect(await inGitRepo(worktree)).toBe(false);
+  });
+
+  it('is false for a .git file whose git dir lost its HEAD', async () => {
+    const { gitDir, worktree } = await linkedWorktree();
+    await fs.rm(path.join(gitDir, 'HEAD'));
+    expect(await inGitRepo(worktree)).toBe(false);
+  });
+
+  it('resolves a relative gitdir: path against the folder that holds the .git file', async () => {
+    const base = await fs.realpath(await makeTempDir());
+    const gitDir = path.join(base, 'modules', 'sub');
+    await fs.mkdir(gitDir, { recursive: true });
+    await fs.writeFile(path.join(gitDir, 'HEAD'), 'ref: refs/heads/main\n');
+    const project = path.join(base, 'checkout', 'sub');
+    await fs.mkdir(project, { recursive: true });
+    await fs.writeFile(path.join(project, '.git'), 'gitdir: ../../modules/sub\r\n');
+    expect(await inGitRepo(project)).toBe(true);
+    // The same path read against any other folder (the process cwd, the parent) would find nothing.
+    await fs.writeFile(path.join(project, '.git'), 'gitdir: ../modules/sub\n');
+    expect(await inGitRepo(project)).toBe(false);
+  });
+
+  it.each([
+    ['empty', ''],
+    ['no gitdir: prefix', '/elsewhere/.git\n'],
+    ['an empty path', 'gitdir: \n'],
+    ['another key', 'worktree: /somewhere\n'],
+  ])('is false for a malformed .git file (%s)', async (_label, content) => {
+    const { storage } = await makeStorage();
+    const { gitDir } = await linkedWorktree();
+    const dir = await makeDir('malformed');
+    // A real git dir exists, so only the file's shape decides.
+    await fs.writeFile(path.join(dir, '.git'), content.replace('/elsewhere/.git', gitDir));
+    expect(await listed(storage, (await storage.projects.create({ rootPath: dir })).id)).toBe(false);
+  });
+
+  it('is false for a .git file it cannot read', async () => {
+    if (process.getuid?.() === 0) return; // root ignores permission bits
+    const { gitDir } = await linkedWorktree();
+    const dir = await makeDir('unreadable');
+    const file = path.join(dir, '.git');
+    await fs.writeFile(file, `gitdir: ${gitDir}\n`);
+    expect(await inGitRepo(dir)).toBe(true);
+    await fs.chmod(file, 0o000);
+    try {
+      expect(await inGitRepo(dir)).toBe(false);
+    } finally {
+      await fs.chmod(file, 0o644);
+    }
   });
 
   it('is true when .git is in an ancestor folder', async () => {

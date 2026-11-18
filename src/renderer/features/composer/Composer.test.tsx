@@ -129,7 +129,7 @@ describe('stop', () => {
     const { api, chat } = await setup({ delayMs: 5 });
     renderWithProviders(
       <>
-        <Conversation chatId={chat.id} />
+        <Conversation chat={chat} />
         <ReplyComposer chat={chat} />
       </>,
       { api },
@@ -157,7 +157,7 @@ describe('stop during a tool run', () => {
     const { api, chat } = await setup({ delayMs: 5 });
     renderWithProviders(
       <>
-        <Conversation chatId={chat.id} />
+        <Conversation chat={chat} />
         <ReplyComposer chat={chat} />
       </>,
       { api },
