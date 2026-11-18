@@ -1,15 +1,21 @@
 // Test-only in-memory `ChangesService` for the route tests. Stands in for `createChangesService` behind the same
-// interface: it holds a seeded pending set and seeded auto batches, enforces the revision and the undo rules (auto,
-// not undone, within retention, same project), records what it was asked, and never touches disk.
+// interface: it holds a seeded pending set and seeded auto batches, enforces the revision, the apply project rule
+// (the set's project and the shown one must be the chat's current project) and the undo rules (auto, not undone,
+// within retention, same project), records what it was asked, and never touches disk.
 
-import type { ApplyChangesResponse, UndoBatchResponse } from '@shared/api';
+import {
+  APPLY_PROJECT_CHANGED,
+  type ApplyChangesResponse,
+  PROPOSALS_OTHER_PROJECT,
+  type UndoBatchResponse,
+} from '@shared/api';
 import type { AppliedBatch, BatchUndo, ChatChanges, Id, PendingChanges } from '@shared/types';
 import { CoreError } from '../core/errors';
 import type { ChangesService } from '../core/types';
 
 export interface MemoryChanges extends ChangesService {
-  /** Puts a pending set on a chat. */
-  seed(chatId: Id, pending: PendingChanges): void;
+  /** Puts a pending set on a chat, made for `opts.projectId` (omitted = unbound: the chat's current project). */
+  seed(chatId: Id, pending: PendingChanges, opts?: { projectId?: Id }): void;
   /**
    * Adds a batch to a chat's history (newest last). An auto batch needs `projectId`, the project it was written into;
    * it is undoable while `undoable` is true and it has no `undo` (seed `undoable: false` for one past retention).
@@ -39,6 +45,8 @@ export function createMemoryChanges(): MemoryChanges {
   const retryCalls: MemoryChanges['retryCalls'] = [];
   /** batch id → the project an auto batch was written into. */
   const batchProject = new Map<Id, Id>();
+  /** chat id → the project its pending set was made for. */
+  const pendingProject = new Map<Id, Id>();
 
   /** Undoes a seeded auto batch in place: every written file counts as restored. */
   const undoInPlace = (s: ChatChanges, batch: AppliedBatch, by: BatchUndo['by']): BatchUndo => {
@@ -60,8 +68,10 @@ export function createMemoryChanges(): MemoryChanges {
     applyCalls,
     undoCalls,
     retryCalls,
-    seed: (chatId, pending) => {
+    seed: (chatId, pending, opts) => {
       of(chatId).pending = pending;
+      if (opts?.projectId !== undefined) pendingProject.set(chatId, opts.projectId);
+      else pendingProject.delete(chatId);
     },
     seedBatch: (chatId, batch, opts) => {
       of(chatId).applied.push(structuredClone(batch));
@@ -77,6 +87,12 @@ export function createMemoryChanges(): MemoryChanges {
     apply: async (input): Promise<ApplyChangesResponse> => {
       applyCalls.push(input);
       const s = of(input.chatId);
+      if (s.pending && (pendingProject.get(input.chatId) ?? input.projectId) !== input.projectId) {
+        throw new CoreError('conflict', PROPOSALS_OTHER_PROJECT);
+      }
+      if (input.expectedProjectId !== undefined && input.expectedProjectId !== input.projectId) {
+        throw new CoreError('conflict', APPLY_PROJECT_CHANGED);
+      }
       if (!s.pending || s.pending.revision !== input.revision) throw new CoreError('changes_stale');
       let accepted = 0;
       let rejected = 0;
@@ -103,13 +119,24 @@ export function createMemoryChanges(): MemoryChanges {
       s.applied.push(batch);
       if (accepted > 0) s.diskSeq += 1;
       s.pending = null;
+      pendingProject.delete(input.chatId);
       return { batch: structuredClone(batch), changes: copy(s) };
     },
     discard: async (chatId) => {
       const s = of(chatId);
       s.pending = null;
+      pendingProject.delete(chatId);
       return copy(s);
     },
+    // Nothing here can interleave (no await between the check and `commit`'s start), so there's no lock to take.
+    changeProject: async (chatId, commit) =>
+      commit({
+        pending: of(chatId).pending !== null,
+        discard: async () => {
+          of(chatId).pending = null;
+          pendingProject.delete(chatId);
+        },
+      }),
     undoBatch: async (input): Promise<UndoBatchResponse> => {
       undoCalls.push(input);
       const s = of(input.chatId);

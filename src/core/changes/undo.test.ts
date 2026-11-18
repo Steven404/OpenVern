@@ -465,7 +465,13 @@ describe('undoBatch: refusals', () => {
     const decisions = {
       'a.txt': Object.fromEntries((p?.files[0]?.hunks ?? []).map((h) => [h.id, 'accepted' as const])),
     };
-    const res = await s.svc.apply({ chatId: 'chat1', projectRoot: s.root, revision: p?.revision ?? 0, decisions });
+    const res = await s.svc.apply({
+      chatId: 'chat1',
+      projectId: 'p',
+      projectRoot: s.root,
+      revision: p?.revision ?? 0,
+      decisions,
+    });
     expect(res.batch).toMatchObject({ source: 'review', undoable: false });
     await expect(s.undo(res.batch.id)).rejects.toMatchObject({ code: 'conflict', message: CONFLICT_MESSAGE });
     expect(await s.read('a.txt')).toBe('b\n');
@@ -523,14 +529,20 @@ describe('undoable and the chat’s project (chatProjectId)', () => {
     current = 'p';
     expect((await s.get()).applied[0]?.undoable).toBe(true);
     await s.svc.discard('chat1');
-    // apply
-    await s.turn({ mode: 'review' }).stage('a.txt', 'c\n');
+    // apply, after the chat moved to another project (made in, and applied to, that project; same folder here)
+    current = 'moved';
+    await s.turn({ mode: 'review', projectId: 'moved' }).stage('a.txt', 'c\n');
     const p = (await s.get()).pending;
     const decisions = {
       'a.txt': Object.fromEntries((p?.files[0]?.hunks ?? []).map((h) => [h.id, 'accepted' as const])),
     };
-    current = 'moved';
-    const res = await s.svc.apply({ chatId: 'chat1', projectRoot: s.root, revision: p?.revision ?? 0, decisions });
+    const res = await s.svc.apply({
+      chatId: 'chat1',
+      projectId: 'moved',
+      projectRoot: s.root,
+      revision: p?.revision ?? 0,
+      decisions,
+    });
     expect(res.changes.applied.find((b) => b.source === 'auto')?.undoable).toBe(false);
   });
 
@@ -611,7 +623,13 @@ describe('prepareRetry', () => {
     const decisions = {
       'a.txt': Object.fromEntries((p?.files[0]?.hunks ?? []).map((h) => [h.id, 'accepted' as const])),
     };
-    const applied = await s.svc.apply({ chatId: 'chat1', projectRoot: s.root, revision: p?.revision ?? 0, decisions });
+    const applied = await s.svc.apply({
+      chatId: 'chat1',
+      projectId: 'p',
+      projectRoot: s.root,
+      revision: p?.revision ?? 0,
+      decisions,
+    });
     const before = await s.get();
     // Same turn id as the review turn, a never-seen turn id, and a fresh chat.
     expect(await s.retry('tR')).toBeNull();

@@ -226,6 +226,10 @@ describe('HttpApiClient', () => {
       expect(apply.url).toBe('/api/chats/c1/changes/apply');
       expect(apply.init?.method).toBe('POST');
       expect(apply.init?.body).toBe('{"revision":2,"decisions":{"a.ts":{"h":"accepted"}}}');
+      const shown = await calls((a) =>
+        a.applyChatChanges('c1', { revision: 2, decisions: {}, expectedProjectId: 'p1' }),
+      );
+      expect(JSON.parse(shown.init?.body as string)).toEqual({ revision: 2, decisions: {}, expectedProjectId: 'p1' });
       const del = await calls((a) => a.discardChatChanges('c1'));
       expect(del.url).toBe('/api/chats/c1/changes');
       expect(del.init?.method).toBe('DELETE');

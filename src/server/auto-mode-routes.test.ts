@@ -326,14 +326,16 @@ describe('expectedEditMode: a turn or a move never relies on a mode the client n
   it('PATCH: a move held in its pending-edits check loses to a mode change that commits first', async () => {
     const other = (await h.core.projects.create({ rootPath: h.homeDir })).id;
     const hold = gate();
-    const original = h.changes.get.bind(h.changes);
-    vi.spyOn(h.changes, 'get').mockImplementation(async (id) => {
-      await hold.hold();
-      return original(id);
-    });
+    const original = h.changes.changeProject.bind(h.changes);
+    // The move's pending check runs inside `changeProject`; hold it there, before it commits.
+    vi.spyOn(h.changes, 'changeProject').mockImplementation((id, commit) =>
+      original(id, async (state) => {
+        await hold.hold();
+        return commit(state);
+      }),
+    );
     const moving = patch({ projectId: other, expectedEditMode: 'review' });
     await hold.entered;
-    vi.mocked(h.changes.get).mockImplementation(original);
     expect((await patch({ editMode: 'auto', expectedInGitRepo: false })).status).toBe(200);
     hold.open();
     await error(await moving, 409, 'conflict', EDIT_MODE_CHANGED);

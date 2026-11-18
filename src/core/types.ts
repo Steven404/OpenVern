@@ -226,7 +226,9 @@ export interface ChangesService {
   get(chatId: Id): Promise<ChatChanges>;
   /**
    * One per assistant step: stages and writes are attributed to `messageId`. `turnId` = the user message that started
-   * the turn; `mode` = the turn's edit mode (picks `stage` or `write`).
+   * the turn; `mode` = the turn's edit mode (picks `stage` or `write`); `projectId` = the project the turn is pinned
+   * to. A stage binds an empty pending set to `projectId` and is refused (`conflict`) while the set holds another
+   * project's proposals.
    */
   tools(input: {
     chatId: Id;
@@ -236,9 +238,15 @@ export interface ChangesService {
     turnId: Id;
     mode: EditMode;
   }): ToolChanges;
-  /** At a new user message: remember the pending set so a retry of this turn can restore it. */
+  /**
+   * At a new user message: remember the pending set, and the project it was made for, so a retry of this turn can
+   * restore both. An unbound set is recorded as made for the chat's current project.
+   */
   snapshot(chatId: Id, userMessageId: Id): Promise<void>;
-  /** Retry: restore the snapshot taken for this user message. Never touches disk. */
+  /**
+   * Retry: restore the snapshot taken for this user message, with its project. A non-empty snapshot that names no
+   * project comes back bound to no project at all: Apply and stage refuse it, Discard clears it. Never touches disk.
+   */
   restore(chatId: Id, userMessageId: Id): Promise<void>;
   /**
    * The note for a new user message; marks what it reports as reported. Adds a mode line when `mode` differs from the
@@ -246,13 +254,34 @@ export interface ChangesService {
    * as the last noted mode.
    */
   takeNote(chatId: Id, opts: { mode: EditMode; firstTurn: boolean }): Promise<string | undefined>;
+  /**
+   * Review Apply. `projectId` is the chat's project as the caller read it and `projectRoot` its folder;
+   * `expectedProjectId` the project the client showed (omitted = unchecked). Under the store lock, held through the
+   * writes, before any write: the chat's current project, read there, must be `projectId` (else `conflict` /
+   * `APPLY_PROJECT_CHANGED`); the project the pending set was made for (an unbound set counts as the current one) must
+   * be it too (`PROPOSALS_OTHER_PROJECT`); and so must `expectedProjectId`, when sent (`APPLY_PROJECT_CHANGED`).
+   * Otherwise nothing changes.
+   */
   apply(input: {
     chatId: Id;
+    projectId: Id;
     projectRoot: string;
+    expectedProjectId?: Id | null;
     revision: number;
     decisions: Record<string, Record<string, HunkDecision>>;
   }): Promise<ApplyChangesResponse>;
   discard(chatId: Id): Promise<ChatChanges>;
+  /**
+   * Runs `commit`, a change of the chat's project (a move, or a detach when its project is removed), under the chat's
+   * store lock, so it can't land between a stage and the pending check, or between Apply's project check and its
+   * writes. `pending` = proposals were pending when the lock was taken; `discard()` drops them (recorded for the next
+   * note, like `discard`) and saves that at once. LOCK ORDER: the store lock first, then whatever `commit` takes (the
+   * chat storage lock). `commit` must not call this service.
+   */
+  changeProject<T>(
+    chatId: Id,
+    commit: (state: { pending: boolean; discard(): Promise<void> }) => Promise<T>,
+  ): Promise<T>;
   /**
    * The Undo button: restores the batch's files that are still exactly as the turn left them and reports the rest.
    * Throws `not_found` (unknown batch) or `conflict` (a review batch, already undone, past retention, or written into

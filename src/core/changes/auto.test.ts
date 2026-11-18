@@ -456,7 +456,13 @@ describe('auto write: more edges', () => {
       await fs.rm(s.abs('dir'), { recursive: true });
       await fs.symlink(s.outside, s.abs('dir'));
     };
-    const res = await s.svc.apply({ chatId: 'chat1', projectRoot: s.root, revision: p?.revision ?? 0, decisions });
+    const res = await s.svc.apply({
+      chatId: 'chat1',
+      projectId: 'p',
+      projectRoot: s.root,
+      revision: p?.revision ?? 0,
+      decisions,
+    });
     expect(await fs.readFile(path.join(s.outside, 'x.txt'), 'utf8')).toBe('OUTSIDE\n');
     expect(res.batch.written).toEqual([]);
     expect(res.batch.conflicts).toEqual([{ path: 'dir/x.txt', reason: 'blocked' }]);
@@ -498,7 +504,7 @@ async function stageAll(s: AutoSetup, rel: string, content: string | null) {
   const decisions: Record<string, Record<string, HunkDecision>> = {};
   for (const f of p?.files ?? [])
     decisions[f.path] = Object.fromEntries(f.hunks.map((h) => [h.id, 'accepted' as const]));
-  return { chatId: 'chat1', projectRoot: s.root, revision: p?.revision ?? 0, decisions };
+  return { chatId: 'chat1', projectId: 'p', projectRoot: s.root, revision: p?.revision ?? 0, decisions };
 }
 
 describe('the file changes after the checks, inside the hook', () => {
@@ -1164,7 +1170,13 @@ describe('retention', () => {
         const p = (await s.get()).pending;
         const decisions: Record<string, Record<string, HunkDecision>> = {};
         for (const f of p?.files ?? []) decisions[f.path] = Object.fromEntries(f.hunks.map((h) => [h.id, 'accepted']));
-        await s.svc.apply({ chatId: 'chat1', projectRoot: s.root, revision: p?.revision ?? 0, decisions });
+        await s.svc.apply({
+          chatId: 'chat1',
+          projectId: 'p',
+          projectRoot: s.root,
+          revision: p?.revision ?? 0,
+          decisions,
+        });
       }
       const { applied } = await s.get();
       expect(applied).toHaveLength(25);
@@ -1292,7 +1304,13 @@ describe('concurrency (deterministic, via the hook)', () => {
         order.push(`${info.op}:${info.chatId}`);
         if (info.op === 'apply') await g.hold();
       };
-      const applying = s.svc.apply({ chatId: 'chatA', projectRoot: s.root, revision: p?.revision ?? 0, decisions });
+      const applying = s.svc.apply({
+        chatId: 'chatA',
+        projectId: 'p',
+        projectRoot: s.root,
+        revision: p?.revision ?? 0,
+        decisions,
+      });
       await g.entered;
       let bSettled = false;
       const pb = B.write('f.txt', 'from auto\n', { tool: 'write_file', baseHash }).finally(() => {
@@ -1334,7 +1352,7 @@ describe('concurrency (deterministic, via the hook)', () => {
       };
       let applied = false;
       const applying = s.svc
-        .apply({ chatId: 'chatA', projectRoot: s.root, revision: p?.revision ?? 0, decisions })
+        .apply({ chatId: 'chatA', projectId: 'p', projectRoot: s.root, revision: p?.revision ?? 0, decisions })
         .finally(() => {
           applied = true;
         });
@@ -1364,7 +1382,7 @@ describe('concurrency (deterministic, via the hook)', () => {
       };
       const B = s.turn({ chatId: 'chatB' });
       const [applyRes, autoRes] = await Promise.allSettled([
-        s.svc.apply({ chatId: 'chatA', projectRoot: s.root, revision: p?.revision ?? 0, decisions }),
+        s.svc.apply({ chatId: 'chatA', projectId: 'p', projectRoot: s.root, revision: p?.revision ?? 0, decisions }),
         B.write('new.txt', 'auto\n', { tool: 'write_file', baseHash: '' }),
       ]);
       const applyWrote = applyRes.status === 'fulfilled' && applyRes.value.batch.written.length === 1;

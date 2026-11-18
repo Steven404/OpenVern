@@ -4,6 +4,7 @@ import { makeFileChange, makeHunk, sampleProposal } from '@renderer/lib/mock-cha
 import { queryKeys } from '@renderer/lib/query-keys';
 import { createRun, useRunsStore } from '@renderer/stores/runs';
 import { readPersistedUi, STORAGE_KEYS, useUiStore } from '@renderer/stores/ui';
+import { APPLY_PROJECT_CHANGED, PROPOSALS_OTHER_PROJECT } from '@shared/api';
 import { LAYOUT } from '@shared/constants';
 import { errorInfo } from '@shared/errors';
 import type { AppliedBatch, PendingChanges } from '@shared/types';
@@ -307,6 +308,33 @@ describe('review pane', () => {
     expect(await within(p).findByText('All 3 changes reviewed')).toBeTruthy();
     expect(within(p).getByRole('button', { name: 'Apply 3' })).toBeTruthy();
   });
+
+  it('Apply sends the project the chat screen shows', async () => {
+    const { client, chat, p } = await openReview();
+    expect(chat.projectId).toBeTruthy();
+    const spy = vi.spyOn(client, 'applyChatChanges');
+    fireEvent.click(within(p).getByRole('button', { name: 'Accept all' }));
+    fireEvent.click(within(p).getByRole('button', { name: /Apply 4/ }));
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    expect(spy.mock.calls[0]?.[1]).toMatchObject({ expectedProjectId: chat.projectId });
+  });
+
+  it.each([PROPOSALS_OTHER_PROJECT, APPLY_PROJECT_CHANGED])(
+    'a 409 project refusal (%s) shows the message and reads the chat and its edits again',
+    async (message) => {
+      const { client, chat, p } = await openReview();
+      fireEvent.click(within(p).getByRole('button', { name: 'Accept all' }));
+      vi.spyOn(client, 'applyChatChanges').mockRejectedValue(new ApiError(errorInfo('conflict', message), 409));
+      const getChat = vi.spyOn(client, 'getChat');
+      const getChanges = vi.spyOn(client, 'getChatChanges');
+      fireEvent.click(within(p).getByRole('button', { name: /Apply 4/ }));
+      expect(await within(p).findByText(message)).toBeTruthy();
+      await waitFor(() => expect(getChat).toHaveBeenCalledWith(chat.id));
+      await waitFor(() => expect(getChanges).toHaveBeenCalledWith(chat.id));
+      // Nothing was written: the proposals are still there.
+      expect((await client.getChatChanges(chat.id)).pending).not.toBeNull();
+    },
+  );
 
   it('shows other apply errors inline', async () => {
     const { client, p } = await openReview();

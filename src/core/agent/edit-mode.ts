@@ -240,6 +240,14 @@ export function tooLargeToReviewText(path: string): string {
   );
 }
 
+/**
+ * `stage` refuses a proposal while the pending set holds proposals made for another project (or for a project that
+ * can't be known any more); they can only be discarded.
+ */
+export const OTHER_PROJECT_PENDING_TEXT =
+  "Not proposed: this chat has proposed edits for another project waiting for the user's review. Ask the user to " +
+  'discard them first.';
+
 /** Auto: the file's bytes differ from what the tool based its change on, or from what the chat last read. */
 export function autoStaleText(path: string): string {
   return (

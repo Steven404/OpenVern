@@ -336,17 +336,18 @@ describe('change set lifecycle', () => {
     const chat = await newChat(null);
     const patch = (id: string, body: unknown) => h.call(`/api/chats/${id}`, { method: 'PATCH', json: body });
     let archivedMidMove = false;
-    const get = h.changes.get.bind(h.changes);
-    // A move reads the chat, then checks pending edits, then writes. Archive the chat inside that check, so the
-    // archive lands after the move's first read and before its write.
-    h.changes.get = async (id) => {
-      if (id === chat.id && !archivedMidMove) {
-        archivedMidMove = true;
-        const archived = await patch(id, { archived: true });
-        expect(archived.status).toBe(200);
-      }
-      return get(id);
-    };
+    const changeProject = h.changes.changeProject.bind(h.changes);
+    // A move reads the chat, then checks pending edits (in `changeProject`), then writes. Archive the chat inside that
+    // check, so the archive lands after the move's first read and before its write.
+    h.changes.changeProject = (id, commit) =>
+      changeProject(id, async (state) => {
+        if (id === chat.id && !archivedMidMove) {
+          archivedMidMove = true;
+          const archived = await patch(id, { archived: true });
+          expect(archived.status).toBe(200);
+        }
+        return commit(state);
+      });
 
     const res = await patch(chat.id, { projectId: p.id });
     expect(archivedMidMove).toBe(true);
