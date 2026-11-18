@@ -128,6 +128,15 @@ export function createMemoryChanges(): MemoryChanges {
       pendingProject.delete(chatId);
       return copy(s);
     },
+    // Nothing here can interleave (no await between the check and `commit`'s start), so there's no lock to take.
+    changeProject: async (chatId, commit) =>
+      commit({
+        pending: of(chatId).pending !== null,
+        discard: async () => {
+          of(chatId).pending = null;
+          pendingProject.delete(chatId);
+        },
+      }),
     undoBatch: async (input): Promise<UndoBatchResponse> => {
       undoCalls.push(input);
       const s = of(input.chatId);

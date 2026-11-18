@@ -133,31 +133,46 @@ export function chatRoutes(core: Core): Hono {
     if (mode !== undefined) expect.editMode = mode;
     if (expectedProjectId !== undefined) expect.projectId = expectedProjectId;
     if (patch.projectId !== undefined || patch.archived !== undefined) {
-      const chat = await core.chats.get(id); // 404 before any claim
-      const rejectPendingMove = async (projectId: Id | null) => {
-        if (patch.projectId !== undefined && projectId !== patch.projectId && (await core.changes.get(id)).pending)
-          throw new CoreError('conflict', 'Apply or discard the proposed edits first.');
+      await core.chats.get(id); // 404 before any claim
+      /**
+       * Commits the patch; `beforeCommit` runs right before the write, after the pending check. A move is refused
+       * while proposals are pending, and commits under the chat's change-store lock (`changeProject`) with that check,
+       * read fresh there: a stage can't slip in between the check and the write, and the move can't land between
+       * Apply's project check and its writes.
+       */
+      const commit = (beforeCommit?: () => void) => {
+        const { projectId } = patch;
+        if (projectId === undefined) {
+          beforeCommit?.();
+          return core.chats.update(id, patch, expect);
+        }
+        // LOCK ORDER: the chat's change-store lock (`changeProject`), then the chat storage lock (`chats.update`).
+        return core.changes.changeProject(id, async ({ pending }) => {
+          if (pending && (await core.chats.get(id)).projectId !== projectId)
+            throw new CoreError('conflict', 'Apply or discard the proposed edits first.');
+          beforeCommit?.();
+          return core.chats.update(id, patch, expect);
+        });
       };
       // Only `archived` changes the flag (a move keeps it). Archive changes need the chat idle: hold the run
-      // claim across a fresh read so a turn can't start between the check and the write.
+      // claim across the commit so a turn can't start between the check and the write.
       if (patch.archived !== undefined) {
-        if (starting.has(id))
-          throw new CoreError('conflict', 'Wait for the response to finish before archiving or unarchiving this chat.');
+        const busy = () =>
+          new CoreError('conflict', 'Wait for the response to finish before archiving or unarchiving this chat.');
+        if (starting.has(id)) throw busy();
         starting.add(id);
         try {
-          const fresh = await core.chats.get(id);
-          await rejectPendingMove(fresh.projectId);
-          if (core.agent.isRunning(id))
-            throw new CoreError(
-              'conflict',
-              'Wait for the response to finish before archiving or unarchiving this chat.',
-            );
-          return c.json(await core.chats.update(id, patch, expect));
+          await core.chats.get(id); // fresh read under the claim: 404 if the chat went meanwhile
+          return c.json(
+            await commit(() => {
+              if (core.agent.isRunning(id)) throw busy();
+            }),
+          );
         } finally {
           starting.delete(id);
         }
       }
-      await rejectPendingMove(chat.projectId);
+      return c.json(await commit());
     }
     return c.json(await core.chats.update(id, patch, expect));
   });
@@ -283,10 +298,11 @@ export function chatRoutes(core: Core): Hono {
     return c.json(await withIdleChat(id, () => core.changes.discard(id)));
   });
 
-  // Review Apply. The chat's project is read under the claim and handed to the change service with the project the
-  // client showed (`expectedProjectId`). The service compares them, and the project the proposals were made for,
-  // under its store lock before any write, so proposals are never written into a project they weren't made for or
-  // that the user wasn't shown (409, nothing written).
+  // Review Apply. The chat's project is read under the claim to find the folder, and handed to the change service with
+  // the project the client showed (`expectedProjectId`). The service reads the chat's project again under its store
+  // lock, where a move or a detach can't commit (`changeProject`), and compares all of them, and the project the
+  // proposals were made for, before any write and holding that lock through the writes. So proposals are never written
+  // into a project they weren't made for, that the chat has left, or that the user wasn't shown (409, nothing written).
   r.post(ROUTES.chatChangesApply, async (c) => {
     const id = c.req.param('id');
     const body = await readJson(c, applyChangesBody);

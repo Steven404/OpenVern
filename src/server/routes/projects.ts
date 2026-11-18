@@ -64,10 +64,24 @@ export function projectRoutes(core: Core): Hono {
 
   r.delete(ROUTES.project, async (c) => {
     const id = c.req.param('id');
-    // §3.2: removing a project discards its chats' pending edits (they move to "Chats" and could never be applied).
+    await core.projects.get(id); // 404 before any chat is touched
+    // Removing a project discards its chats' pending edits (they move to "Chats" and could never be applied). Each
+    // chat is discarded and detached together under its change-store lock (`changeProject`), so a detach can't land
+    // between Apply's project check and its writes, and a stage can't add proposals between the discard and the
+    // detach. `projects.remove` then detaches any chat that joined the project since the list, as before.
     for (const chat of await core.chats.list()) {
       if (chat.projectId !== id) continue;
-      if ((await core.changes.get(chat.id)).pending) await core.changes.discard(chat.id);
+      // LOCK ORDER: the chat's change-store lock (`changeProject`), then the chat storage lock (`chats.update`).
+      await core.changes.changeProject(chat.id, async ({ pending, discard }) => {
+        const current = await core.chats.get(chat.id).catch((err) => {
+          if (err instanceof CoreError && err.code === 'not_found') return null;
+          throw err;
+        });
+        // Moved away (or removed) since the list: not this project's chat any more.
+        if (current?.projectId !== id) return;
+        if (pending) await discard();
+        await core.chats.update(chat.id, { projectId: null });
+      });
     }
     await core.projects.remove(id);
     return c.body(null, 204);

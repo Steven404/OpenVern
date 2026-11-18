@@ -32,6 +32,11 @@ describe('edit wording contracts', () => {
       w.autoPendingText('a.ts'),
     ]).toMatchSnapshot();
   });
+  it('pins the stage refusal while proposals for another project are pending', () => {
+    expect(w.OTHER_PROJECT_PENDING_TEXT).toBe(
+      "Not proposed: this chat has proposed edits for another project waiting for the user's review. Ask the user to discard them first.",
+    );
+  });
   it('preserves the Review result and note wording', () => {
     expect([
       w.editResultText(diff),

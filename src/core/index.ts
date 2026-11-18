@@ -60,7 +60,11 @@ export async function createCore(deps: CoreDeps): Promise<Core> {
     dataDir: dataReal,
     sandbox: { deniedRoots, deniedFiles },
     // Lets `get`, `apply` and `discard` mark an auto batch written into another project than the chat's current one
-    // as not undoable. A chat that can't be read counts as having no project (nothing undoable).
+    // as not undoable, and lets `apply`, `stage` and `snapshot` check the project the proposals were made for. A chat
+    // that can't be read counts as having no project (nothing undoable, nothing applied).
+    // LOCK ORDER: `apply`, `stage` and `snapshot` call this under the chat's change-store lock. `chats.get` takes only
+    // the chat file's own lock, briefly, and nothing that holds that lock or the chat storage lock waits for a store
+    // lock, so no cycle can form.
     chatProjectId: (chatId) => chats.get(chatId).then((chat) => chat.projectId),
   });
   const terminalReads = createTerminalReadBroker();

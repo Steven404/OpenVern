@@ -27,6 +27,7 @@ import {
   autoUnreadText,
   autoWriteFailedText,
   modeChangedNote,
+  OTHER_PROJECT_PENDING_TEXT,
   tooLargeToReviewText,
   tooManyProposedText,
   undoneNote,
@@ -145,7 +146,11 @@ const snapshotSchema = z.object({
   revision: z.number(),
   messageId: z.string(),
   files: z.array(storedFileSchema),
-  /** The pending set's project when the snapshot was taken (see `pendingProjectId`). */
+  /**
+   * The project the snapshot's files were made for: the set's `pendingProjectId`, or for an unbound set the chat's
+   * project when the snapshot was taken. Missing on a non-empty snapshot (an older build's, or one whose project
+   * couldn't be read) = unknown: `restore` binds it to `UNKNOWN_PROJECT`.
+   */
   projectId: z.string().optional(),
 });
 const storeSchema = z.object({
@@ -156,7 +161,7 @@ const storeSchema = z.object({
   /**
    * The project the pending proposals were made for: set by the stage that starts a pending set, dropped when the set
    * empties. Missing on a non-empty set (an older build's store) = unbound, which `apply` treats as the chat's current
-   * project, as older builds did.
+   * project, as older builds did. `UNKNOWN_PROJECT` = made for a project that can't be known any more.
    */
   pendingProjectId: z.string().optional(),
   snapshots: z.array(snapshotSchema),
@@ -182,10 +187,13 @@ const emptyStore = (): Store => ({
 });
 
 const MAX_SNAPSHOTS = 5;
-/** Model-facing: a stage refused because the pending set holds another project's proposals. */
-const OTHER_PROJECT_PENDING_TEXT =
-  "Not proposed: this chat has proposed edits for another project waiting for the user's review. Ask the user to " +
-  'discard them first.';
+/**
+ * The `pendingProjectId` of proposals whose project can't be known: a retry restored a non-empty snapshot that names
+ * no project. No project has this id (ids are never empty), so `apply` and `stage` always refuse such a set as made
+ * for another project, while `discard` clears it. Binding it to the chat's project at restore time instead could
+ * write the proposals into a project they were never made for.
+ */
+const UNKNOWN_PROJECT = '';
 /** Batches kept in the list, review and auto alike. */
 const MAX_APPLIED = 100;
 /** Paths remembered per chat in the read record; the oldest are dropped first. */
@@ -602,7 +610,9 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
   /**
    * Read-modify-write under the chat's store lock. `fn` must not call `load` or `mutate` (the lock isn't re-entrant).
    * LOCK ORDER: this store lock is taken first; inside `fn`, at most one project-file write lock at a time
-   * (`withWriteLock`), never another chat's store lock. A throw leaves the stored file unchanged.
+   * (`withWriteLock`), never another chat's store lock. `fn` may read the chat's project (`chatProjectId`, which takes
+   * only the chat file's own lock, briefly, and never while a write lock is held). A throw leaves the stored file
+   * unchanged.
    */
   async function mutate<T>(chatId: Id, fn: (store: Store) => Promise<T> | T): Promise<T> {
     const file = storeFileOf(chatId);
@@ -630,6 +640,16 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
     store.revision += 1;
   }
 
+  /** Discards the pending set, recording it for the next note. Under the store lock only. */
+  function discardPending(store: Store): void {
+    if (store.files.length === 0) return;
+    store.events.push({
+      type: 'discarded',
+      files: [...store.files].sort(byPath).map((f) => ({ path: f.path, kind: kindOf(f) })),
+    });
+    clearPending(store);
+  }
+
   /** Deletes the blobs no batch references any more. Under the store lock only. */
   const collectBlobs = (chatId: Id, store: Store): Promise<void> =>
     blobsFor(chatId)
@@ -651,16 +671,19 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
     const rel = target.rel;
 
     if (content !== null) validateContent(rel, content);
-    // Only needed for an unbound set (see below); read before the store lock, like `apply` (see LOCK ORDER).
-    const current = await chatProject(chatId);
 
     return mutate(chatId, async (store) => {
       // PROPOSALS STAY IN THEIR PROJECT (invariant): a pending set holds proposals for one project only, the one its
       // first stage ran in, so applying it can never write a proposal into a project it wasn't made for. An unbound
       // non-empty set (an older build's store) counts as made for the chat's current project, as `apply` treats it;
-      // without a way to read that project, as made for the staging turn's.
+      // without a way to read that project, as made for the staging turn's. The chat's project is read under the store
+      // lock, where a move can't change it (see `changeProject`).
       if (store.files.length > 0) {
-        const origin = store.pendingProjectId ?? (current === undefined ? projectId : current);
+        let origin: ProjectCheck = store.pendingProjectId;
+        if (origin === undefined) {
+          const current = await chatProject(chatId);
+          origin = current === undefined ? projectId : current;
+        }
         if (origin !== projectId) throw new CoreError('conflict', OTHER_PROJECT_PENDING_TEXT);
       }
       let rec = store.files.find((f) => f.path === rel);
@@ -990,16 +1013,22 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
     revision: number;
     decisions: Record<string, Record<string, HunkDecision>>;
   }): Promise<{ batch: AppliedBatch; changes: ChatChanges }> {
-    const project = await chatProject(input.chatId);
     return mutate(input.chatId, async (store) => {
-      // PROPOSALS STAY IN THEIR PROJECT (invariant): checked under the store lock, before anything is written. The
-      // project the proposals were made for (unbound = the chat's current one) and the project the client showed
-      // (when sent) must both be the chat's current project, the one `projectRoot` belongs to. Otherwise nothing is
-      // written and the set stays pending, so the user can discard it or move the chat back.
-      if (store.files.length > 0 && (store.pendingProjectId ?? input.projectId) !== input.projectId) {
+      // PROPOSALS STAY IN THEIR PROJECT (invariant): checked under the store lock, before anything is written, and the
+      // lock is held through the writes. The chat's current project is read here, not taken from the caller: a move or
+      // a detach commits under this same lock (`changeProject`), so the project can't change between this check and
+      // the last write. The project `projectRoot` belongs to (what the caller read earlier), the project the proposals
+      // were made for (unbound = the chat's current one) and the project the client showed (when sent) must all be
+      // the chat's current project. Otherwise nothing is written and the set stays pending, so the user can discard it.
+      // LOCK ORDER: the chat's store lock (held by `mutate`), then the chat's file lock for this read (`chatProjectId`,
+      // released at once), then the per-file write locks below.
+      const read = await chatProject(input.chatId);
+      const project = read === undefined ? input.projectId : read;
+      if (project !== input.projectId) throw new CoreError('conflict', APPLY_PROJECT_CHANGED);
+      if (store.files.length > 0 && (store.pendingProjectId ?? project) !== project) {
         throw new CoreError('conflict', PROPOSALS_OTHER_PROJECT);
       }
-      if (input.expectedProjectId !== undefined && input.expectedProjectId !== input.projectId) {
+      if (input.expectedProjectId !== undefined && input.expectedProjectId !== project) {
         throw new CoreError('conflict', APPLY_PROJECT_CHANGED);
       }
       if (store.files.length === 0 || input.revision !== store.revision) throw new CoreError('changes_stale');
@@ -1105,7 +1134,7 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
       }
       if (written.length > 0) store.diskSeq = (store.diskSeq ?? 0) + 1;
       clearPending(store);
-      return { batch: batchOf(batch, project), changes: chatChangesOf(store, project) };
+      return { batch: batchOf(batch, read), changes: chatChangesOf(store, read) };
     });
   }
 
@@ -1147,16 +1176,20 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
     },
 
     snapshot: (chatId, userMessageId) =>
-      mutate(chatId, (store) => {
+      mutate(chatId, async (store) => {
+        // The binding travels with the set, so a retry after a move can't bring proposals back unbound. An unbound set
+        // (an older build's) is made for the chat's current project, which is still known here: read under the store
+        // lock, where a move can't change it, and recorded as the snapshot's project. When it can't be read, the
+        // snapshot names none and `restore` binds it to `UNKNOWN_PROJECT`.
+        // LOCK ORDER: the chat's store lock (held by `mutate`), then the chat's file lock for this read only.
+        let origin: Id | undefined;
+        if (store.files.length > 0) origin = store.pendingProjectId ?? (await chatProject(chatId)) ?? undefined;
         const snap = {
           userMessageId,
           revision: store.revision,
           messageId: store.messageId,
           files: structuredClone(store.files),
-          // The binding travels with the set, so a retry after a move can't bring proposals back unbound.
-          ...(store.files.length > 0 && store.pendingProjectId !== undefined
-            ? { projectId: store.pendingProjectId }
-            : {}),
+          ...(origin !== undefined ? { projectId: origin } : {}),
         };
         store.snapshots = [...store.snapshots.filter((s) => s.userMessageId !== userMessageId), snap].slice(
           -MAX_SNAPSHOTS,
@@ -1168,7 +1201,10 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
         const snap = store.snapshots.find((s) => s.userMessageId === userMessageId);
         if (!snap) return;
         store.files = structuredClone(snap.files);
-        if (snap.files.length > 0 && snap.projectId !== undefined) store.pendingProjectId = snap.projectId;
+        // A non-empty snapshot that names no project (an older build's, or one whose project couldn't be read) comes
+        // back bound to `UNKNOWN_PROJECT`, never to whatever project the chat is in now: Apply refuses it, Discard
+        // clears it.
+        if (snap.files.length > 0) store.pendingProjectId = snap.projectId ?? UNKNOWN_PROJECT;
         else delete store.pendingProjectId;
         store.messageId = snap.messageId;
         store.revision += 1;
@@ -1193,14 +1229,30 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
     discard: async (chatId) => {
       const project = await chatProject(chatId);
       return mutate(chatId, (store) => {
-        if (store.files.length > 0) {
-          store.events.push({
-            type: 'discarded',
-            files: [...store.files].sort(byPath).map((f) => ({ path: f.path, kind: kindOf(f) })),
-          });
-          clearPending(store);
-        }
+        discardPending(store);
         return chatChangesOf(store, project);
+      });
+    },
+
+    // MOVES WAIT FOR APPLY (invariant): a change of the chat's project commits under the chat's store lock, with its
+    // pending check, so it can't land between a stage and the move's check, or between Apply's project check and its
+    // writes (both run under this lock). Reads the store without writing it, so a chat with no change history gets no
+    // store file; `discard` writes it at once, before `commit`.
+    // LOCK ORDER: this store lock first, then whatever `commit` takes (the chat storage lock, then the chat's file
+    // lock). `commit` must not call this service: the store lock isn't re-entrant.
+    changeProject: async (chatId, commit) => {
+      const file = storeFileOf(chatId);
+      return withFileLock(file, async () => {
+        const store = await failClosed(() => readStore(file));
+        const pending = store !== null && store.files.length > 0;
+        let discarded = false;
+        const discard = async (): Promise<void> => {
+          if (!store || !pending || discarded) return;
+          discardPending(store);
+          await failClosed(() => writeStore(file, store));
+          discarded = true;
+        };
+        return commit({ pending, discard });
       });
     },
 

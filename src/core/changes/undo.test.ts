@@ -529,16 +529,16 @@ describe('undoable and the chat’s project (chatProjectId)', () => {
     current = 'p';
     expect((await s.get()).applied[0]?.undoable).toBe(true);
     await s.svc.discard('chat1');
-    // apply
-    await s.turn({ mode: 'review' }).stage('a.txt', 'c\n');
+    // apply, after the chat moved to another project (made in, and applied to, that project; same folder here)
+    current = 'moved';
+    await s.turn({ mode: 'review', projectId: 'moved' }).stage('a.txt', 'c\n');
     const p = (await s.get()).pending;
     const decisions = {
       'a.txt': Object.fromEntries((p?.files[0]?.hunks ?? []).map((h) => [h.id, 'accepted' as const])),
     };
-    current = 'moved';
     const res = await s.svc.apply({
       chatId: 'chat1',
-      projectId: 'p',
+      projectId: 'moved',
       projectRoot: s.root,
       revision: p?.revision ?? 0,
       decisions,

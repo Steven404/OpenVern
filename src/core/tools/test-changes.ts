@@ -146,6 +146,9 @@ export function createFakeChangesService(): FakeChangesService {
       forChat(chatId).clear();
       return { pending: null, applied: [], diskSeq: 0 };
     },
+    async changeProject(chatId, commit) {
+      return commit({ pending: forChat(chatId).size > 0, discard: async () => forChat(chatId).clear() });
+    },
     async undoBatch(): Promise<UndoBatchResponse> {
       throw new Error('not implemented in the fake');
     },

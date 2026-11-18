@@ -80,11 +80,14 @@ export const EDIT_MODE_CHANGED = "This chat's edit mode changed. Check Review / 
 export const CHAT_PROJECT_CHANGED = 'This chat moved to another project. Check Review / Auto and try again.';
 /**
  * The 409 `conflict` message of an Apply whose proposals were made for another project than the chat's current one.
- * Nothing is written; the proposals stay pending until they are discarded or the chat is moved back.
+ * Nothing is written; the proposals stay pending until they are discarded. Only Discard is offered: moving the chat
+ * back is refused while proposals are pending.
  */
-export const PROPOSALS_OTHER_PROJECT =
-  'These proposed edits were made for another project. Discard them or move the chat back.';
-/** The 409 `conflict` message of an Apply whose `expectedProjectId` differs from the chat's current project. */
+export const PROPOSALS_OTHER_PROJECT = 'These proposed edits were made for another project. Discard them to continue.';
+/**
+ * The 409 `conflict` message of an Apply whose `expectedProjectId` differs from the chat's current project, or whose
+ * chat moved to another project (or lost its project) while the Apply was on its way.
+ */
 export const APPLY_PROJECT_CHANGED = 'This chat moved to another project. Check the proposed edits and apply again.';
 /** The 409 `conflict` message of a request that would run Auto in a folder its client showed as inside Git. */
 export const PROJECT_NOT_IN_GIT =
