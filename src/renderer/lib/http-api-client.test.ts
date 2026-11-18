@@ -1,7 +1,8 @@
+import { EDIT_MODE_CHANGED } from '@shared/api';
 import type { AgentEvent } from '@shared/events';
 import { TERMINAL, type TerminalReadAnswer } from '@shared/terminal';
 import { describe, expect, it, vi } from 'vitest';
-import { ApiError } from './api-client';
+import { ApiError, isEditModeChanged } from './api-client';
 import { HttpApiClient } from './http-api-client';
 
 const json = (body: unknown, status = 200) =>
@@ -228,6 +229,107 @@ describe('HttpApiClient', () => {
       const del = await calls((a) => a.discardChatChanges('c1'));
       expect(del.url).toBe('/api/chats/c1/changes');
       expect(del.init?.method).toBe('DELETE');
+    });
+  });
+  describe('Auto mode calls', () => {
+    const call = async (fn: (api: HttpApiClient) => Promise<unknown>, body: unknown = {}) => {
+      const fetchMock = vi.fn(async (_u: string | URL | Request, _i?: RequestInit) => json(body));
+      const result = await fn(new HttpApiClient('/api', fetchMock as typeof fetch));
+      const [url, init] = fetchMock.mock.calls[0] ?? [];
+      return { url, init, result, calls: fetchMock.mock.calls.length };
+    };
+
+    it('createChat POSTs the mode with the project and model', async () => {
+      const r = await call((a) => a.createChat({ projectId: 'p1', model: 'm', editMode: 'auto' }));
+      expect(r.url).toBe('/api/chats');
+      expect(r.init?.method).toBe('POST');
+      expect(JSON.parse(r.init?.body as string)).toEqual({ projectId: 'p1', model: 'm', editMode: 'auto' });
+      expect(new Headers(r.init?.headers).get('Content-Type')).toBe('application/json');
+    });
+
+    it('createChat without a mode sends none, so the server default (review) applies', async () => {
+      const r = await call((a) => a.createChat({ projectId: null, model: 'm' }));
+      expect(JSON.parse(r.init?.body as string)).toEqual({ projectId: null, model: 'm' });
+    });
+
+    it('updateChat PATCHes the edit mode alone', async () => {
+      const r = await call((a) => a.updateChat('c 1', { editMode: 'auto' }));
+      expect(r.url).toBe('/api/chats/c%201');
+      expect(r.init?.method).toBe('PATCH');
+      expect(r.init?.body).toBe('{"editMode":"auto"}');
+    });
+
+    it('send, retry and a move carry expectedEditMode, and turning Auto on expectedProjectId, in their bodies', async () => {
+      const fetchMock = vi.fn(async (_u: string | URL | Request, _i?: RequestInit) => json({}));
+      const api = new HttpApiClient('/api', fetchMock as typeof fetch);
+      await api.updateChat('c1', { projectId: 'p2', expectedEditMode: 'auto' });
+      await api.updateChat('c1', { editMode: 'auto', expectedProjectId: 'p1' });
+      // A stream request is sent when it is first read; an empty JSON body ends it at once.
+      const drain = async (it: AsyncIterable<unknown>) => {
+        for await (const _ of it) {
+          // nothing
+        }
+      };
+      await drain(
+        api.sendMessage(
+          'c1',
+          { text: 'hi', attachmentIds: [], model: 'm', expectedEditMode: 'review' },
+          new AbortController().signal,
+        ),
+      ).catch(() => {});
+      await drain(api.retry('c1', { model: 'm', expectedEditMode: 'auto' }, new AbortController().signal)).catch(
+        () => {},
+      );
+      const bodies = fetchMock.mock.calls.map(([url, init]) => [url, init?.method, JSON.parse(init?.body as string)]);
+      expect(bodies).toEqual([
+        ['/api/chats/c1', 'PATCH', { projectId: 'p2', expectedEditMode: 'auto' }],
+        ['/api/chats/c1', 'PATCH', { editMode: 'auto', expectedProjectId: 'p1' }],
+        ['/api/chats/c1/messages', 'POST', { text: 'hi', attachmentIds: [], model: 'm', expectedEditMode: 'review' }],
+        ['/api/chats/c1/retry', 'POST', { model: 'm', expectedEditMode: 'auto' }],
+      ]);
+    });
+
+    it("a 409 for a changed edit mode is recognised by isEditModeChanged; other 409s aren't", async () => {
+      const reply = (message: string) =>
+        new HttpApiClient('/api', (async () =>
+          json({ error: { code: 'conflict', message, retryable: false } }, 409)) as typeof fetch);
+      const changed = await reply(EDIT_MODE_CHANGED)
+        .updateChat('c1', { projectId: null, expectedEditMode: 'auto' })
+        .catch((e: unknown) => e);
+      expect(isEditModeChanged(changed)).toBe(true);
+      const other = await reply('Apply or discard the proposed edits first.')
+        .updateChat('c1', { projectId: null })
+        .catch((e: unknown) => e);
+      expect(other).toBeInstanceOf(ApiError);
+      expect(isEditModeChanged(other)).toBe(false);
+    });
+
+    it('undoChatBatch POSTs an empty JSON body to the encoded batch URL and returns the response', async () => {
+      const res = { batch: { id: 'b 1' }, changes: { pending: null, applied: [], diskSeq: 3 } };
+      const r = await call((a) => a.undoChatBatch('c 1', 'b/1'), res);
+      expect(r.url).toBe('/api/chats/c%201/changes/batches/b%2F1/undo');
+      expect(r.init?.method).toBe('POST');
+      expect(r.init?.body).toBe('{}');
+      expect(new Headers(r.init?.headers).get('Content-Type')).toBe('application/json');
+      expect(new Headers(r.init?.headers).get('X-OpenVern-Client')).toBe('1');
+      expect(r.result).toEqual(res);
+    });
+
+    it('undoChatBatch rejects with the server error (a 409 while the chat runs)', async () => {
+      const api = new HttpApiClient('/api', (async () =>
+        json(
+          {
+            error: {
+              code: 'conflict',
+              message: 'Wait for the response to finish before undoing edits.',
+              retryable: false,
+            },
+          },
+          409,
+        )) as typeof fetch);
+      const err = await api.undoChatBatch('c1', 'b1').catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ApiError);
+      expect(err).toMatchObject({ status: 409, info: { code: 'conflict' } });
     });
   });
 });

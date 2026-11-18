@@ -5,6 +5,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo } from 'react';
 import { useApiClient } from '../../lib/api-context';
 import { queryKeys } from '../../lib/query-keys';
+import { chatQueryOptions } from '../../stores/edit-modes';
 import type { RunDeps } from '../../stores/runs';
 import { getTerminalBridge } from '../terminal/bridge';
 
@@ -31,7 +32,7 @@ export function useProjects() {
 
 export function useChat(chatId: Id) {
   const api = useApiClient();
-  return useQuery({ queryKey: queryKeys.chat(chatId), queryFn: () => api.getChat(chatId) });
+  return useQuery(chatQueryOptions(api, chatId));
 }
 
 /** Dependencies the runs store needs to talk to the server and patch caches. */

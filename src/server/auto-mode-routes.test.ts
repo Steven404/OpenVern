@@ -1,5 +1,10 @@
+import { existsSync } from 'node:fs';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { CHAT_PROJECT_CHANGED, EDIT_MODE_CHANGED, PROJECT_NOT_IN_GIT } from '@shared/api';
 import type { AppliedBatch, Chat, EditMode } from '@shared/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { editPromptLines, editToolDescriptions } from '../core/agent/edit-mode';
 import { gate } from '../core/changes/auto-test-helpers';
 import { CoreError } from '../core/errors';
 import { collectEvents, createHarness, type Harness, PNG_BYTES } from './test-helpers';
@@ -49,7 +54,8 @@ describe('Auto mode public routes', () => {
   it.each(['auto', 'review'] as const)(
     'PATCH persists valid editMode %s without bumping updatedAt',
     async (editMode) => {
-      expect((await patch({ editMode })).status).toBe(200);
+      // The test project's folder isn't in Git: Auto there needs the client to have shown that.
+      expect((await patch({ editMode, expectedInGitRepo: false })).status).toBe(200);
       expect(await h.core.chats.get(chat.id)).toMatchObject({ editMode, updatedAt: chat.updatedAt });
     },
   );
@@ -62,7 +68,7 @@ describe('Auto mode public routes', () => {
     async (editMode: EditMode | undefined) => {
       const res = await h.call('/api/chats', {
         method: 'POST',
-        json: { projectId, model: MODEL, ...(editMode ? { editMode } : {}) },
+        json: { projectId, model: MODEL, ...(editMode ? { editMode } : {}), expectedInGitRepo: false },
       });
       expect(res.status).toBe(200);
       const created = (await res.json()) as Chat;
@@ -85,7 +91,7 @@ describe('Auto mode public routes', () => {
     await hold.entered;
     expect(h.core.agent.isRunning(chat.id)).toBe(true);
     try {
-      expect((await patch({ editMode: 'auto' })).status).toBe(200);
+      expect((await patch({ editMode: 'auto', expectedInGitRepo: false })).status).toBe(200);
       await error(
         await patch({ editMode: 'review', archived: true }),
         409,
@@ -192,5 +198,411 @@ describe('Auto mode public routes', () => {
       'invalid_request',
     );
     expect(h.changes.undoCalls).toEqual([]);
+  });
+});
+
+describe('expectedEditMode: a turn or a move never relies on a mode the client no longer shows', () => {
+  const send = (json: object) =>
+    h.call(`/api/chats/${chat.id}/messages`, {
+      method: 'POST',
+      json: { text: 'hello', model: MODEL, attachmentIds: [], ...json },
+    });
+  const retry = (json: object) =>
+    h.call(`/api/chats/${chat.id}/retry`, { method: 'POST', json: { model: MODEL, ...json } });
+  /** One finished turn in the chat, so there is something to retry. */
+  async function oneTurn() {
+    const res = await send({});
+    expect(res.status).toBe(200);
+    await collectEvents(res);
+    return (await h.core.chats.get(chat.id)).messages;
+  }
+
+  it('send: a mismatch is a 409 and stores, binds and starts nothing; the claim is released', async () => {
+    await h.core.chats.update(chat.id, { editMode: 'auto' });
+    const attachment = await h.core.attachments.create({ name: 'note.txt', bytes: new TextEncoder().encode('hi') });
+    const runTurn = vi.spyOn(h.core.agent, 'runTurn');
+    await error(
+      await send({ expectedEditMode: 'review', attachmentIds: [attachment.id] }),
+      409,
+      'conflict',
+      EDIT_MODE_CHANGED,
+    );
+    expect(runTurn).not.toHaveBeenCalled();
+    expect(h.provider.calls).toEqual([]);
+    expect(h.core.agent.isRunning(chat.id)).toBe(false);
+    expect((await h.core.chats.get(chat.id)).messages).toEqual([]);
+    expect((await h.core.attachments.get(attachment.id)).chatId).toBeNull();
+    // Released: the same send with the mode the chat has goes through.
+    const ok = await send({ expectedEditMode: 'auto' });
+    expect(ok.status).toBe(200);
+    expect((await collectEvents(ok)).map((e) => e.type)).toContain('user_message');
+  });
+
+  it('retry: a mismatch is a 409 and neither truncates, undoes nor starts anything', async () => {
+    const before = await oneTurn();
+    expect(before.length).toBeGreaterThan(1);
+    await h.core.chats.update(chat.id, { editMode: 'auto' });
+    const runTurn = vi.spyOn(h.core.agent, 'runTurn');
+    const calls = h.provider.calls.length;
+    await error(await retry({ expectedEditMode: 'review' }), 409, 'conflict', EDIT_MODE_CHANGED);
+    expect(runTurn).not.toHaveBeenCalled();
+    expect(h.provider.calls).toHaveLength(calls);
+    expect(h.core.agent.isRunning(chat.id)).toBe(false);
+    expect((await h.core.chats.get(chat.id)).messages).toEqual(before);
+    const ok = await retry({ expectedEditMode: 'auto' });
+    expect(ok.status).toBe(200);
+    expect((await collectEvents(ok)).map((e) => e.type)).toContain('assistant_start');
+  });
+
+  it.each([
+    ['a move', (other: string) => ({ projectId: other })],
+    ['a move to no project', () => ({ projectId: null })],
+    ['a move that also archives', (other: string) => ({ projectId: other, archived: true })],
+    ['a mode change', () => ({ editMode: 'review' })],
+    ['a rename', () => ({ title: 'Renamed' })],
+  ])('PATCH: %s with a mismatched expectedEditMode is a 409 and changes nothing', async (_, body) => {
+    const other = (await h.core.projects.create({ rootPath: h.homeDir })).id;
+    await h.core.chats.update(chat.id, { editMode: 'auto' });
+    const stored = await h.core.chats.get(chat.id);
+    await error(await patch({ ...body(other), expectedEditMode: 'review' }), 409, 'conflict', EDIT_MODE_CHANGED);
+    expect(await h.core.chats.get(chat.id)).toEqual(stored);
+  });
+
+  it('a matching expectedEditMode goes through on send, retry and move', async () => {
+    await h.core.chats.update(chat.id, { editMode: 'auto' });
+    const sent = await send({ expectedEditMode: 'auto' });
+    expect(sent.status).toBe(200);
+    await collectEvents(sent);
+    const retried = await retry({ expectedEditMode: 'auto' });
+    expect(retried.status).toBe(200);
+    await collectEvents(retried);
+    const other = (await h.core.projects.create({ rootPath: h.homeDir })).id;
+    const moved = await patch({ projectId: other, expectedEditMode: 'auto', expectedInGitRepo: false });
+    expect(moved.status).toBe(200);
+    expect(await h.core.chats.get(chat.id)).toMatchObject({ projectId: other, editMode: 'auto' });
+  });
+
+  it('omitting expectedEditMode expects Review: in an Auto chat, send, retry and move are refused and change nothing', async () => {
+    const before = await oneTurn();
+    await h.core.chats.update(chat.id, { editMode: 'auto' });
+    const stored = await h.core.chats.get(chat.id);
+    const runTurn = vi.spyOn(h.core.agent, 'runTurn');
+    const prepareRetry = vi.spyOn(h.changes, 'prepareRetry');
+    const calls = h.provider.calls.length;
+    await error(await send({}), 409, 'conflict', EDIT_MODE_CHANGED);
+    await error(await retry({}), 409, 'conflict', EDIT_MODE_CHANGED);
+    const other = (await h.core.projects.create({ rootPath: h.homeDir })).id;
+    await error(await patch({ projectId: other }), 409, 'conflict', EDIT_MODE_CHANGED);
+    expect(runTurn).not.toHaveBeenCalled();
+    expect(prepareRetry).not.toHaveBeenCalled();
+    expect(h.provider.calls).toHaveLength(calls);
+    expect(h.core.agent.isRunning(chat.id)).toBe(false);
+    expect(await h.core.chats.get(chat.id)).toEqual(stored);
+    expect(stored.messages).toEqual(before);
+    // The claim was released: the same send naming Auto goes through.
+    const ok = await send({ expectedEditMode: 'auto' });
+    expect(ok.status).toBe(200);
+    await collectEvents(ok);
+  });
+
+  it('omitting expectedEditMode in a Review chat runs the turn in Review; a mode-only PATCH stays unchecked', async () => {
+    const firstCall = h.provider.calls.length;
+    const sent = await send({ text: '[fake:write=omit.txt]' });
+    expect(sent.status).toBe(200);
+    const events = await collectEvents(sent);
+    expect(events.some((e) => e.type === 'auto_batch_updated')).toBe(false);
+    expect(existsSync(path.join(h.projectDir, 'omit.txt'))).toBe(false);
+    for (const line of editPromptLines('review')) expect(h.provider.calls[firstCall]?.system).toContain(line);
+    const retried = await retry({});
+    expect(retried.status).toBe(200);
+    await collectEvents(retried);
+    const other = (await h.core.projects.create({ rootPath: h.homeDir })).id;
+    expect((await patch({ projectId: other })).status).toBe(200);
+    expect((await patch({ editMode: 'auto', expectedInGitRepo: false })).status).toBe(200);
+    expect((await patch({ editMode: 'review' })).status).toBe(200);
+    expect(await h.core.chats.get(chat.id)).toMatchObject({ projectId: other, editMode: 'review' });
+  });
+
+  it('PATCH: a move held in its pending-edits check loses to a mode change that commits first', async () => {
+    const other = (await h.core.projects.create({ rootPath: h.homeDir })).id;
+    const hold = gate();
+    const original = h.changes.get.bind(h.changes);
+    vi.spyOn(h.changes, 'get').mockImplementation(async (id) => {
+      await hold.hold();
+      return original(id);
+    });
+    const moving = patch({ projectId: other, expectedEditMode: 'review' });
+    await hold.entered;
+    vi.mocked(h.changes.get).mockImplementation(original);
+    expect((await patch({ editMode: 'auto', expectedInGitRepo: false })).status).toBe(200);
+    hold.open();
+    await error(await moving, 409, 'conflict', EDIT_MODE_CHANGED);
+    expect(await h.core.chats.get(chat.id)).toMatchObject({ projectId, editMode: 'auto' });
+  });
+
+  it('PATCH: turning Auto on names the project it warned about; a move that landed first refuses it', async () => {
+    const other = (await h.core.projects.create({ rootPath: h.homeDir })).id;
+    expect((await patch({ projectId: other, expectedEditMode: 'review' })).status).toBe(200);
+    await error(await patch({ editMode: 'auto', expectedProjectId: projectId }), 409, 'conflict', CHAT_PROJECT_CHANGED);
+    expect(await h.core.chats.get(chat.id)).toMatchObject({ projectId: other, editMode: 'review' });
+    // Naming the project the chat is in goes through.
+    expect((await patch({ editMode: 'auto', expectedProjectId: other, expectedInGitRepo: false })).status).toBe(200);
+    expect(await h.core.chats.get(chat.id)).toMatchObject({ projectId: other, editMode: 'auto' });
+  });
+
+  it('send: a move landing after the check, before the agent reads the chat, does not move the turn', async () => {
+    await h.core.chats.update(chat.id, { editMode: 'auto' });
+    const other = (await h.core.projects.create({ rootPath: h.homeDir })).id;
+    const original = h.core.chats.get.bind(h.core.chats);
+    const hold = gate();
+    let reads = 0;
+    // Read 1 is the route's, under the start claim; read 2 is the agent's first. Hold the agent's.
+    vi.spyOn(h.core.chats, 'get').mockImplementation(async (id) => {
+      reads++;
+      if (reads === 2) await hold.hold();
+      return original(id);
+    });
+    const started = send({ text: '[fake:write=pinned.txt]', expectedEditMode: 'auto' });
+    await hold.entered;
+    expect((await patch({ projectId: other, expectedEditMode: 'auto', expectedInGitRepo: false })).status).toBe(200);
+    hold.open();
+    await collectEvents(await started);
+    // The turn ran in the project that was checked with its mode, not the one the chat moved to.
+    expect(existsSync(path.join(h.projectDir, 'pinned.txt'))).toBe(true);
+    expect(existsSync(path.join(h.homeDir, 'pinned.txt'))).toBe(false);
+    expect((await original(chat.id)).projectId).toBe(other);
+  });
+
+  it.each(['send', 'retry'] as const)(
+    '%s: a PATCH to Auto landing after the check, before the agent reads the chat, does not change the turn',
+    async (kind) => {
+      const text = '[fake:write=race.txt]';
+      // A retry needs a turn whose user message asks for the write (proposed in Review, so nothing on disk yet).
+      if (kind === 'retry') await collectEvents(await send({ text }));
+      const firstCall = h.provider.calls.length;
+      const original = h.core.chats.get.bind(h.core.chats);
+      const hold = gate();
+      let reads = 0;
+      // Read 1 is the route's, under the start claim; read 2 is the agent's first. Hold the agent's.
+      vi.spyOn(h.core.chats, 'get').mockImplementation(async (id) => {
+        reads++;
+        if (reads === 2) await hold.hold();
+        return original(id);
+      });
+      const started =
+        kind === 'send' ? send({ text, expectedEditMode: 'review' }) : retry({ expectedEditMode: 'review' });
+      await hold.entered;
+      expect((await patch({ editMode: 'auto', expectedInGitRepo: false })).status).toBe(200);
+      hold.open();
+      const events = await collectEvents(await started);
+      // The turn ran in Review, the mode that was checked: proposed, not written; Review wording to the model.
+      expect(events.some((e) => e.type === 'tool_result' && e.message.name === 'write_file')).toBe(true);
+      expect(existsSync(path.join(h.projectDir, 'race.txt'))).toBe(false);
+      expect(events.some((e) => e.type === 'auto_batch_updated')).toBe(false);
+      const request = h.provider.calls[firstCall];
+      for (const line of editPromptLines('review')) expect(request?.system).toContain(line);
+      expect(request?.tools?.find((t) => t.name === 'write_file')?.description).toBe(
+        editToolDescriptions('review').write,
+      );
+      // The PATCH is kept and applies from the next turn.
+      expect((await original(chat.id)).editMode).toBe('auto');
+    },
+  );
+});
+
+describe('expectedProjectId on send and retry: a turn never runs in a project the sender did not see', () => {
+  const send = (json: object) =>
+    h.call(`/api/chats/${chat.id}/messages`, {
+      method: 'POST',
+      json: { text: '[fake:write=stale.txt]', model: MODEL, attachmentIds: [], ...json },
+    });
+  const retry = (json: object) =>
+    h.call(`/api/chats/${chat.id}/retry`, { method: 'POST', json: { model: MODEL, ...json } });
+
+  it('a chat moved from another window: send and retry naming the old project are 409s and change nothing', async () => {
+    const first = await send({ text: 'hello', expectedProjectId: projectId });
+    expect(first.status).toBe(200);
+    await collectEvents(first);
+    // Another window moves the Auto chat to "No project", then into a project this sender never saw.
+    await h.core.chats.update(chat.id, { editMode: 'auto' });
+    const other = (await h.core.projects.create({ rootPath: h.homeDir })).id;
+    await h.core.chats.update(chat.id, { projectId: null });
+    await h.core.chats.update(chat.id, { projectId: other });
+    const stored = await h.core.chats.get(chat.id);
+    const runTurn = vi.spyOn(h.core.agent, 'runTurn');
+    const prepareRetry = vi.spyOn(h.changes, 'prepareRetry');
+    const calls = h.provider.calls.length;
+    const attachment = await h.core.attachments.create({ name: 'note.txt', bytes: new TextEncoder().encode('hi') });
+
+    // The sender saw "No project" (and so no chip), or the first project.
+    for (const shown of [null, projectId]) {
+      await error(
+        await send({ expectedEditMode: 'auto', expectedProjectId: shown, attachmentIds: [attachment.id] }),
+        409,
+        'conflict',
+        CHAT_PROJECT_CHANGED,
+      );
+      await error(
+        await retry({ expectedEditMode: 'auto', expectedProjectId: shown }),
+        409,
+        'conflict',
+        CHAT_PROJECT_CHANGED,
+      );
+    }
+    expect(runTurn).not.toHaveBeenCalled();
+    expect(prepareRetry).not.toHaveBeenCalled();
+    expect(h.provider.calls).toHaveLength(calls);
+    expect(h.core.agent.isRunning(chat.id)).toBe(false);
+    expect(await h.core.chats.get(chat.id)).toEqual(stored);
+    expect((await h.core.attachments.get(attachment.id)).chatId).toBeNull();
+    expect(existsSync(path.join(h.homeDir, 'stale.txt'))).toBe(false);
+    expect(existsSync(path.join(h.projectDir, 'stale.txt'))).toBe(false);
+
+    // Released: naming the project the chat is in goes through.
+    const ok = await send({ expectedEditMode: 'auto', expectedProjectId: other });
+    expect(ok.status).toBe(200);
+    await collectEvents(ok);
+    expect(existsSync(path.join(h.homeDir, 'stale.txt'))).toBe(true);
+  });
+
+  it('a matching expectedProjectId, null for a chat with no project, goes through', async () => {
+    await h.core.chats.update(chat.id, { projectId: null });
+    const sent = await send({ text: 'hello', expectedProjectId: null });
+    expect(sent.status).toBe(200);
+    await collectEvents(sent);
+    const retried = await retry({ expectedProjectId: null });
+    expect(retried.status).toBe(200);
+    await collectEvents(retried);
+  });
+});
+
+describe('expectedInGitRepo: Auto never starts in a folder shown as in Git that is no longer in Git', () => {
+  /** A project whose folder was in Git when it was listed, and whose `.git` has been removed since. */
+  async function formerRepo() {
+    const root = path.join(h.homeDir, 'repo');
+    await mkdir(path.join(root, '.git'), { recursive: true });
+    const project = await h.core.projects.create({ rootPath: root });
+    expect((await h.core.projects.list()).find((p) => p.id === project.id)?.inGitRepo).toBe(true);
+    await rm(path.join(root, '.git'), { recursive: true });
+    return project;
+  }
+  const chatFile = (id: string) => readFile(path.join(h.dataDir, 'chats', `${id}.json`), 'utf8');
+
+  it('PATCH Auto, createChat Auto and a move that keeps Auto are refused and change nothing', async () => {
+    const repo = await formerRepo();
+    const inRepo = await h.core.chats.create({ projectId: repo.id, model: MODEL });
+    const before = await chatFile(inRepo.id);
+    const chats = (await h.core.chats.list()).length;
+
+    for (const shown of [{ expectedInGitRepo: true }, {}]) {
+      await error(
+        await h.call(`/api/chats/${inRepo.id}`, {
+          method: 'PATCH',
+          json: { editMode: 'auto', expectedProjectId: repo.id, ...shown },
+        }),
+        409,
+        'conflict',
+        PROJECT_NOT_IN_GIT,
+      );
+      await error(
+        await h.call('/api/chats', {
+          method: 'POST',
+          json: { projectId: repo.id, model: MODEL, editMode: 'auto', ...shown },
+        }),
+        409,
+        'conflict',
+        PROJECT_NOT_IN_GIT,
+      );
+    }
+    expect(await chatFile(inRepo.id)).toBe(before);
+    expect(await h.core.chats.list()).toHaveLength(chats);
+
+    // "Keep Auto": an Auto chat moved into the former repository.
+    await h.core.chats.update(chat.id, { editMode: 'auto' });
+    const moving = await chatFile(chat.id);
+    for (const shown of [{ expectedInGitRepo: true }, {}]) {
+      await error(
+        await patch({ projectId: repo.id, expectedEditMode: 'auto', ...shown }),
+        409,
+        'conflict',
+        PROJECT_NOT_IN_GIT,
+      );
+    }
+    expect(await chatFile(chat.id)).toBe(moving);
+  });
+
+  it('goes through when the client showed the folder outside Git, and for anything that leaves Auto off', async () => {
+    const repo = await formerRepo();
+    const inRepo = await h.core.chats.create({ projectId: repo.id, model: MODEL });
+    const turnOn = await h.call(`/api/chats/${inRepo.id}`, {
+      method: 'PATCH',
+      json: { editMode: 'auto', expectedProjectId: repo.id, expectedInGitRepo: false },
+    });
+    expect(turnOn.status).toBe(200);
+    const created = await h.call('/api/chats', {
+      method: 'POST',
+      json: { projectId: repo.id, model: MODEL, editMode: 'auto', expectedInGitRepo: false },
+    });
+    expect(created.status).toBe(200);
+    // "Switch to Review" and Review moves never ask about Git.
+    await h.core.chats.update(chat.id, { editMode: 'auto' });
+    expect((await patch({ projectId: repo.id, editMode: 'review', expectedEditMode: 'auto' })).status).toBe(200);
+    expect(await h.core.chats.get(chat.id)).toMatchObject({ projectId: repo.id, editMode: 'review' });
+    expect((await patch({ projectId, expectedEditMode: 'review' })).status).toBe(200);
+  });
+
+  it('a linked worktree whose repository was deleted after listing is refused like a folder outside Git', async () => {
+    // A worktree's `.git` is a file pointing at `<repo>/.git/worktrees/<name>`; deleting the repository leaves it behind.
+    const repoRoot = path.join(h.homeDir, 'main-repo');
+    const linked = path.join(repoRoot, '.git', 'worktrees', 'wt');
+    await mkdir(linked, { recursive: true });
+    await writeFile(path.join(repoRoot, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+    await writeFile(path.join(linked, 'HEAD'), 'ref: refs/heads/wt\n');
+    const root = path.join(h.homeDir, 'wt');
+    await mkdir(root);
+    await writeFile(path.join(root, '.git'), `gitdir: ${linked}\n`);
+    const worktree = await h.core.projects.create({ rootPath: root });
+    expect((await h.core.projects.list()).find((p) => p.id === worktree.id)?.inGitRepo).toBe(true);
+    await rm(repoRoot, { recursive: true });
+
+    const inWorktree = await h.core.chats.create({ projectId: worktree.id, model: MODEL });
+    const before = await chatFile(inWorktree.id);
+    await error(
+      await h.call(`/api/chats/${inWorktree.id}`, {
+        method: 'PATCH',
+        json: { editMode: 'auto', expectedProjectId: worktree.id, expectedInGitRepo: true },
+      }),
+      409,
+      'conflict',
+      PROJECT_NOT_IN_GIT,
+    );
+    expect(await chatFile(inWorktree.id)).toBe(before);
+    await error(
+      await h.call('/api/chats', {
+        method: 'POST',
+        json: { projectId: worktree.id, model: MODEL, editMode: 'auto', expectedInGitRepo: true },
+      }),
+      409,
+      'conflict',
+      PROJECT_NOT_IN_GIT,
+    );
+    await h.core.chats.update(chat.id, { editMode: 'auto' });
+    await error(
+      await patch({ projectId: worktree.id, expectedEditMode: 'auto', expectedInGitRepo: true }),
+      409,
+      'conflict',
+      PROJECT_NOT_IN_GIT,
+    );
+    expect(await h.core.chats.get(chat.id)).toMatchObject({ projectId, editMode: 'auto' });
+    expect((await h.core.projects.list()).find((p) => p.id === worktree.id)?.inGitRepo).toBe(false);
+  });
+
+  it('a folder that is in Git goes through whatever the client showed', async () => {
+    const root = path.join(h.homeDir, 'repo');
+    await mkdir(path.join(root, '.git'), { recursive: true });
+    const repo = await h.core.projects.create({ rootPath: root });
+    await h.core.chats.update(chat.id, { editMode: 'auto' });
+    expect((await patch({ projectId: repo.id, expectedEditMode: 'auto' })).status).toBe(200);
+    expect(await h.core.chats.get(chat.id)).toMatchObject({ projectId: repo.id, editMode: 'auto' });
   });
 });

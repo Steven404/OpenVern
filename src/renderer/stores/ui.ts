@@ -11,6 +11,8 @@ export const STORAGE_KEYS = {
   rightPanelOpen: 'openvern.rightPanelOpen',
   rightPanelWidth: 'openvern.rightPanelWidth',
   diffListRatio: 'openvern.diffListRatio',
+  /** JSON array of project ids whose "no Git" warning for Auto was accepted on this device. */
+  autoNoGitAcknowledged: 'openvern.autoNoGitAcknowledged',
 } as const;
 
 /** Hard cap so a bad stored value cannot cover the window. The layout also clamps to the space beside the chat. */
@@ -59,25 +61,35 @@ function writeStorage(key: string, value: string): void {
   }
 }
 
+/** A stored JSON array of ids as a set. Missing, corrupt or unreadable storage gives an empty set. */
+function readIdSet(key: string): Record<Id, true> {
+  try {
+    const parsed: unknown = JSON.parse(readStorage(key) ?? '[]');
+    if (!Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      parsed.filter((v): v is string => typeof v === 'string').map((id) => [id, true as const]),
+    );
+  } catch {
+    return {};
+  }
+}
+
 /** Persisted slice of the UI state. Exported so tests can simulate a reload. */
 export function readPersistedUi(): Pick<
   UiState,
-  'sidebarCollapsed' | 'expandedProjects' | 'rightPanelOpen' | 'rightPanelWidth' | 'diffListRatio'
+  | 'sidebarCollapsed'
+  | 'expandedProjects'
+  | 'rightPanelOpen'
+  | 'rightPanelWidth'
+  | 'diffListRatio'
+  | 'autoNoGitAcknowledged'
 > {
-  let expandedProjects: Record<Id, true> = {};
-  try {
-    const parsed: unknown = JSON.parse(readStorage(STORAGE_KEYS.expandedProjects) ?? '[]');
-    if (Array.isArray(parsed)) {
-      expandedProjects = Object.fromEntries(
-        parsed.filter((v): v is string => typeof v === 'string').map((id) => [id, true as const]),
-      );
-    }
-  } catch {
-    // Corrupt value: start with everything collapsed.
-  }
   return {
     sidebarCollapsed: readStorage(STORAGE_KEYS.sidebarCollapsed) === '1',
-    expandedProjects,
+    // Corrupt value: start with everything collapsed.
+    expandedProjects: readIdSet(STORAGE_KEYS.expandedProjects),
+    // Losing this only shows the warning again, so a corrupt or unavailable value starts empty.
+    autoNoGitAcknowledged: readIdSet(STORAGE_KEYS.autoNoGitAcknowledged),
     rightPanelOpen: readStorage(STORAGE_KEYS.rightPanelOpen) === '1',
     rightPanelWidth: readPanelWidth(),
     diffListRatio: readListRatio(),
@@ -155,6 +167,13 @@ export interface UiState {
   toggleProject(id: Id): void;
   expandProject(id: Id): void;
   collapseProject(id: Id): void;
+
+  /**
+   * Projects whose "folder without Git" warning was accepted when turning Auto on, by project id. Per device: persisted
+   * (`openvern.autoNoGitAcknowledged`), so the warning shows once per project.
+   */
+  autoNoGitAcknowledged: Record<Id, true>;
+  acknowledgeAutoNoGit(projectId: Id): void;
 }
 
 function persistExpanded(expanded: Record<Id, true>): void {
@@ -211,5 +230,14 @@ export const useUiStore = create<UiState>()((set, get) => ({
     const { [id]: _removed, ...expandedProjects } = get().expandedProjects;
     persistExpanded(expandedProjects);
     set({ expandedProjects });
+  },
+
+  acknowledgeAutoNoGit: (projectId) => {
+    if (get().autoNoGitAcknowledged[projectId]) return;
+    const autoNoGitAcknowledged = { ...get().autoNoGitAcknowledged, [projectId]: true as const };
+    // Kept in memory even when storage is unavailable (writeStorage swallows that): the warning then shows again
+    // only after a reload.
+    writeStorage(STORAGE_KEYS.autoNoGitAcknowledged, JSON.stringify(Object.keys(autoNoGitAcknowledged)));
+    set({ autoNoGitAcknowledged });
   },
 }));

@@ -51,6 +51,36 @@ const modelId = z.string().trim().min(1);
 /** F3: `null` is Default (no `reasoning` field); omitted means "keep what the chat already has". */
 const reasoningEffort = z.enum(REASONING_EFFORTS);
 const editMode = z.enum(EDIT_MODES);
+/**
+ * The edit mode the client showed when the user acted. A mismatch with the chat's stored mode is refused with a 409
+ * `conflict` and `EDIT_MODE_CHANGED` and changes nothing, so a turn never runs, and a chat never moves or switches,
+ * in a mode the user wasn't shown. On a send, a retry or a move, omitted means `'review'`: a request that showed
+ * nothing can only start a Review turn (which writes nothing without approval) or move a Review chat. Running or
+ * moving an Auto chat needs an explicit `'auto'` that some UI drew.
+ */
+const expectedEditMode = editMode.optional();
+/**
+ * The project the client showed when the user sent or retried (`null` = no project). A mismatch with the chat's
+ * project, read under the same start claim as the mode, is refused with a 409 `conflict` and `CHAT_PROJECT_CHANGED`
+ * and persists nothing, so a turn never runs in a project the sender didn't see. Omitted means unchecked.
+ */
+const expectedProjectId = id.nullable().optional();
+/**
+ * Whether the client showed the target project's folder as inside Git, on a request that turns Auto on or keeps it on
+ * in another project. The server checks the folder again when it commits: if it is outside Git now and the client
+ * didn't show it so (`true` or omitted), it refuses with a 409 `conflict` and `PROJECT_NOT_IN_GIT` and changes
+ * nothing, so a stale "in Git" can't skip the no-Git warning. `false` (the client showed the folder outside Git, so
+ * its warning was decided) is never refused for this.
+ */
+const expectedInGitRepo = z.boolean().optional();
+
+/** The 409 `conflict` message of a request whose `expectedEditMode` differs from the chat's stored mode. */
+export const EDIT_MODE_CHANGED = "This chat's edit mode changed. Check Review / Auto and send again.";
+/** The 409 `conflict` message of a request whose `expectedProjectId` differs from the chat's stored project. */
+export const CHAT_PROJECT_CHANGED = 'This chat moved to another project. Check Review / Auto and try again.';
+/** The 409 `conflict` message of a request that would run Auto in a folder its client showed as inside Git. */
+export const PROJECT_NOT_IN_GIT =
+  "This project's folder is no longer a Git repository. Check the warning and try again.";
 
 /** `PUT /settings/openrouter-key` */
 export const setOpenRouterKeyBody = z.object({ apiKey: z.string().trim().min(1) });
@@ -72,6 +102,8 @@ export const createChatBody = z.object({
   model: modelId,
   /** Omitted = 'review'. */
   editMode: editMode.optional(),
+  /** Checked with `editMode: 'auto'` in a project (see `expectedInGitRepo`). */
+  expectedInGitRepo,
 });
 /** `PATCH /chats/:id` */
 export const updateChatBody = z.object({
@@ -81,6 +113,19 @@ export const updateChatBody = z.object({
   archived: z.boolean().optional(),
   /** Allowed while a run is active: the agent reads the mode once at turn start, so it applies from the next turn. */
   editMode: editMode.optional(),
+  /**
+   * Checked against the stored mode, under the lock that commits the change (see `expectedEditMode`). With
+   * `projectId` (a move), omitted means `'review'`; otherwise omitted means unchecked.
+   */
+  expectedEditMode,
+  /**
+   * Checked against the stored project under the same lock; a mismatch is a 409 `CHAT_PROJECT_CHANGED` and changes
+   * nothing. Turning Auto on sends the project whose no-Git warning was decided, so a move that lands first can't
+   * carry Auto into a project the user wasn't warned about.
+   */
+  expectedProjectId,
+  /** Checked when the PATCH turns Auto on in a project, or moves an Auto chat into another one (`expectedInGitRepo`). */
+  expectedInGitRepo,
 });
 /** `POST /chats/:id/messages` → `text/event-stream` of `AgentEvent` */
 export const sendMessageBody = z
@@ -92,6 +137,13 @@ export const sendMessageBody = z
     effort: reasoningEffort.nullable().optional(),
     /** The client can answer terminal reads (Electron with the terminal bridge), so offer `read_terminal`. */
     terminal: z.boolean().optional(),
+    /**
+     * Checked under the turn's start claim; the turn then runs in exactly that mode (see `expectedEditMode`).
+     * Omitted means `'review'`.
+     */
+    expectedEditMode,
+    /** Checked under the same claim; the turn runs in exactly that project (see `expectedProjectId`). */
+    expectedProjectId,
   })
   .refine((b) => b.text.trim().length > 0 || b.attachmentIds.length > 0, {
     message: 'A message needs text or at least one attachment.',
@@ -102,6 +154,10 @@ export const retryBody = z.object({
   effort: reasoningEffort.nullable().optional(),
   /** As in `sendMessageBody`. */
   terminal: z.boolean().optional(),
+  /** As in `sendMessageBody` (omitted means `'review'`). */
+  expectedEditMode,
+  /** As in `sendMessageBody` (omitted means unchecked). */
+  expectedProjectId,
 });
 /** `POST /projects/:id/files/attach` → `AttachmentRef` */
 export const attachProjectFileBody = z.object({ path: z.string().min(1) });

@@ -1,4 +1,4 @@
-// The "Proposed edits" / "Edits applied" card under an assistant turn (plan §5.2, G5.1).
+// The "Proposed edits" / "Edits applied" card under an assistant turn, and its Auto variant ("Edits applied · Auto").
 
 import { cx } from '@renderer/components/ui';
 import { useUiStore } from '@renderer/stores/ui';
@@ -7,10 +7,11 @@ import { Check } from 'lucide-react';
 import { type ReactNode, useId, useState } from 'react';
 import { DiffIcon } from '../right-panel/icons';
 import { openPanelSurface, useChatPanelState } from '../right-panel/panel-store';
-import { appliedLabel, plural, progressLabel, progressOf } from './diff';
+import { appliedLabel, autoUndoState, plural, progressLabel, progressOf } from './diff';
 import { cardRows } from './list-split';
 import { PathLabel, StatusBadge, Totals } from './parts';
 import { useDecisions } from './review-store';
+import { UndoControl } from './UndoDialog';
 
 /** The Diff surface is the visible panel content. */
 function useReviewing(chatId: string): boolean {
@@ -21,6 +22,9 @@ function useReviewing(chatId: string): boolean {
 
 function CardShell({
   title,
+  badge,
+  testId = 'changes-card',
+  dataAttrs,
   fileCount,
   add,
   del,
@@ -29,6 +33,10 @@ function CardShell({
   footer,
 }: {
   title: string;
+  /** Small label after the title, e.g. "Auto". Part of the card's accessible name. */
+  badge?: string;
+  testId?: string;
+  dataAttrs?: Record<`data-${string}`, string>;
   fileCount: number;
   add: number;
   del: number;
@@ -43,13 +51,15 @@ function CardShell({
   const { shown, collapsible } = cardRows(rows.length, expanded);
   return (
     <section
-      aria-label={title}
-      data-testid="changes-card"
+      aria-label={badge ? `${title} · ${badge}` : title}
+      data-testid={testId}
+      {...dataAttrs}
       className={cx('overflow-hidden rounded-[12px]', highlight ? 'bg-card-active' : 'bg-card')}
     >
       <div className="flex flex-wrap items-center gap-2.5 pt-3 pr-3.5 pb-2.5 pl-4">
         <DiffIcon size={17} className="text-accent" />
         <span className="text-[14px] font-semibold text-text">{title}</span>
+        {badge && <span className="text-[12px] font-medium text-accent-2">{badge}</span>}
         <span className="text-[13px] text-text-muted">{plural(fileCount, 'file')}</span>
         <span className="flex-1" />
         <Totals add={add} del={del} />
@@ -157,9 +167,13 @@ export function ProposedEditsCard({ chatId, pending }: { chatId: string; pending
 export function AppliedEditsCard({ chatId, batch }: { chatId: string; batch: AppliedBatch }) {
   const add = batch.written.reduce((n, f) => n + f.add, 0);
   const del = batch.written.reduce((n, f) => n + f.del, 0);
+  const auto = batch.source === 'auto';
   return (
     <CardShell
       title="Edits applied"
+      badge={auto ? 'Auto' : undefined}
+      testId={auto ? 'auto-edits-card' : undefined}
+      dataAttrs={auto ? { 'data-undo': autoUndoState(batch), 'data-batch-id': batch.id } : undefined}
       fileCount={batch.written.length}
       add={add}
       del={del}
@@ -171,14 +185,20 @@ export function AppliedEditsCard({ chatId, batch }: { chatId: string; batch: App
           kind={f.kind}
           add={f.add}
           del={f.del}
-          onOpen={() => openPanelSurface(chatId, 'diff', { path: f.path })}
+          // The file belongs to this batch, not to the pending proposals: the Diff panel scrolls its History to the
+          // batch and opens the file there.
+          onOpen={() => openPanelSurface(chatId, 'diff', { batchId: batch.id, path: f.path })}
         />
       ))}
       footer={
-        <>
-          <Check aria-hidden="true" size={15} strokeWidth={2.2} className="flex-none text-success" />
-          <span className="min-w-0 flex-1 text-[13px] text-text-secondary">{appliedLabel(batch)}</span>
-        </>
+        auto ? (
+          <UndoControl chatId={chatId} batch={batch} variant="card" />
+        ) : (
+          <>
+            <Check aria-hidden="true" size={15} strokeWidth={2.2} className="flex-none text-success" />
+            <span className="min-w-0 flex-1 text-[13px] text-text-secondary">{appliedLabel(batch)}</span>
+          </>
+        )
       }
     />
   );

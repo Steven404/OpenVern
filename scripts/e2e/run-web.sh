@@ -75,6 +75,9 @@ fi
 # v0.2 edit / review flow (G7.1).
 if [ "${E2E_SKIP_EDITS:-0}" != 1 ]; then node scripts/e2e/edits.mjs || RC=1; fi
 
+# v0.4 Auto mode: no-Git warning, files written without approval, Undo, Retry, Review after Auto, History.
+if [ "${E2E_SKIP_AUTO:-0}" != 1 ]; then node scripts/e2e/auto.mjs || RC=1; fi
+
 # F2 archive project chats (plan §6 F2.6).
 node scripts/e2e/archive.mjs || RC=1
 

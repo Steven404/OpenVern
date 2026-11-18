@@ -1,7 +1,14 @@
 // In-memory `ApiClient` for UI work without a server (`VITE_API=mock`). Seeded with the design's sample data;
 // streams a fake turn (text → read_file → text with a code block) for any message.
 
-import type { ApplyChangesBody, ApplyChangesResponse } from '@shared/api';
+import {
+  type ApplyChangesBody,
+  type ApplyChangesResponse,
+  CHAT_PROJECT_CHANGED,
+  EDIT_MODE_CHANGED,
+  PROJECT_NOT_IN_GIT,
+  type UndoBatchResponse,
+} from '@shared/api';
 import { sniffAttachmentBytes } from '@shared/attachment-sniff';
 import { DEFAULT_MODEL, LIMITS, NEW_CHAT_TITLE } from '@shared/constants';
 import { type ErrorCode, errorInfo } from '@shared/errors';
@@ -11,10 +18,12 @@ import type {
   AppliedBatch,
   AssistantMessage,
   AttachmentRef,
+  BatchUndo,
   Chat,
   ChatChanges,
   ChatSummary,
   ChatUsage,
+  EditMode,
   FileChange,
   HomeFileListing,
   Id,
@@ -33,7 +42,15 @@ import type {
   UserMessage,
 } from '@shared/types';
 import { type ApiClient, ApiError } from './api-client';
-import { acceptedOnly, sampleFileContent, sampleFolder, sampleProposal, sampleSearch, summarize } from './mock-changes';
+import {
+  acceptedOnly,
+  sampleAutoBatch,
+  sampleFileContent,
+  sampleFolder,
+  sampleProposal,
+  sampleSearch,
+  summarize,
+} from './mock-changes';
 
 export interface MockApiClientOptions {
   /** Pause between streamed events, in ms. Default 30; use 0 in tests. */
@@ -114,6 +131,14 @@ const SAMPLE_CODE = [
   '```',
 ].join('\n');
 
+/** A stored batch. `projectId`: the project an auto turn wrote into; never sent (as on the server). */
+type MockBatch = AppliedBatch & { projectId?: Id };
+
+/** The server's messages for an undo it refuses (`POST …/batches/:batchId/undo`). */
+const UNDO_RUNNING = 'Wait for the response to finish before undoing edits.';
+const UNDO_NO_PROJECT = 'This chat has no project to write to.';
+const UNDO_GONE = 'These edits can no longer be undone.';
+
 /** Must match `INTERRUPTED_OUTPUT` in `src/core/agent/history.ts` (the renderer doesn't import `@core`). */
 const INTERRUPTED_OUTPUT = 'Interrupted: the run was stopped before this tool finished.';
 
@@ -127,7 +152,11 @@ export class MockApiClient implements ApiClient {
   private attachments = new Map<Id, StoredAttachment>();
   private running = new Set<Id>();
   private changes = new Map<Id, { revision: number; messageId: Id; files: FileChange[] } | null>();
-  private applied = new Map<Id, ChatChanges['applied']>();
+  private applied = new Map<Id, MockBatch[]>();
+  /** Bumps whenever the chat changed project files (apply, auto write, undo), like the server's `diskSeq`. */
+  private diskSeq = new Map<Id, number>();
+  /** Projects whose folder is not in a Git work tree (`inGitRepo: false`). */
+  private noGit = new Set<Id>();
   private usageTotals = new Map<Id, UsageTotals>();
 
   constructor(opts: MockApiClientOptions = {}) {
@@ -180,9 +209,18 @@ export class MockApiClient implements ApiClient {
       .map((p) => ({
         ...clone(p),
         chatCount: this.chats.filter((c) => c.projectId === p.id).length,
-        inGitRepo: true,
+        inGitRepo: !this.noGit.has(p.id),
       }))
       .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  }
+  /** Test hook: the folder of `projectId` gains or loses its repository (the server checks it on every list). */
+  setProjectInGitRepo(projectId: Id, inGitRepo: boolean) {
+    if (inGitRepo) this.noGit.delete(projectId);
+    else this.noGit.add(projectId);
+  }
+  /** Like the server's Git check: Auto in a folder outside Git needs the UI to have shown it outside Git. */
+  private checkAutoGit(projectId: Id, shown: boolean | undefined) {
+    if (shown !== false && this.noGit.has(projectId)) fail('conflict', 409, PROJECT_NOT_IN_GIT);
   }
   async createProject(input: { rootPath: string; name?: string }) {
     const raw = input.rootPath.trim();
@@ -231,8 +269,9 @@ export class MockApiClient implements ApiClient {
   async listChats() {
     return this.chats.map((c) => this.summary(c)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
-  async createChat(input: { projectId: Id | null; model: string }) {
+  async createChat(input: { projectId: Id | null; model: string; editMode?: EditMode; expectedInGitRepo?: boolean }) {
     if (input.projectId && !this.projects.some((p) => p.id === input.projectId)) fail('not_found', 404);
+    if (input.editMode === 'auto' && input.projectId) this.checkAutoGit(input.projectId, input.expectedInGitRepo);
     const t = now();
     const chat: Chat = {
       id: crypto.randomUUID(),
@@ -244,7 +283,7 @@ export class MockApiClient implements ApiClient {
       archived: false,
       usage: { ...EMPTY_USAGE },
       effort: null,
-      editMode: 'review',
+      editMode: input.editMode ?? 'review',
       messages: [],
     };
     this.chats.push(chat);
@@ -254,20 +293,43 @@ export class MockApiClient implements ApiClient {
   async getChat(id: Id) {
     return clone(this.chat(id));
   }
-  async updateChat(id: Id, patch: { title?: string; projectId?: Id | null; archived?: boolean }) {
+  async updateChat(
+    id: Id,
+    patch: {
+      title?: string;
+      projectId?: Id | null;
+      archived?: boolean;
+      editMode?: EditMode;
+      expectedEditMode?: EditMode;
+      expectedProjectId?: Id | null;
+      expectedInGitRepo?: boolean;
+    },
+  ) {
     // Same rules as `PATCH /chats/:id`. Everything is validated before anything is mutated.
     const c = this.chat(id);
+    // A move that names no mode expects Review; any other PATCH that names none is unchecked.
+    const expected = patch.expectedEditMode ?? (patch.projectId !== undefined ? 'review' : undefined);
+    if (expected !== undefined && expected !== c.editMode) fail('conflict', 409, EDIT_MODE_CHANGED);
+    if (patch.expectedProjectId !== undefined && patch.expectedProjectId !== c.projectId)
+      fail('conflict', 409, CHAT_PROJECT_CHANGED);
     if (patch.archived !== undefined && this.running.has(id))
       fail('conflict', 409, 'Wait for the response to finish before archiving or unarchiving this chat.');
     // A move (alone or with `archived`) is refused while edits are pending; archiving alone is not.
     if (patch.projectId !== undefined && patch.projectId !== c.projectId && this.changes.get(id))
       fail('conflict', 409, 'Apply or discard the proposed edits first.');
     if (patch.projectId && !this.projects.some((p) => p.id === patch.projectId)) fail('not_found', 404);
+    // Turning Auto on in a project, or carrying Auto into another one, checks that folder's Git status.
+    const nextProject = patch.projectId !== undefined ? patch.projectId : c.projectId;
+    const nextMode = patch.editMode ?? c.editMode;
+    const carriesAuto = patch.editMode === 'auto' || (patch.projectId !== undefined && patch.projectId !== c.projectId);
+    if (carriesAuto && nextMode === 'auto' && nextProject) this.checkAutoGit(nextProject, patch.expectedInGitRepo);
 
     if (patch.title !== undefined) c.title = patch.title.trim();
     if (patch.projectId !== undefined) c.projectId = patch.projectId;
     // Any chat can be archived; a move keeps the flag.
     if (patch.archived !== undefined) c.archived = patch.archived;
+    // No run check: the turn read its mode when it started, so a change applies from the next turn.
+    if (patch.editMode !== undefined) c.editMode = patch.editMode;
     return this.summary(c);
   }
   async deleteChat(id: Id) {
@@ -275,6 +337,7 @@ export class MockApiClient implements ApiClient {
     this.chats = this.chats.filter((x) => x !== c);
     this.changes.delete(id);
     this.applied.delete(id);
+    this.diskSeq.delete(id);
     this.usageTotals.delete(id);
     for (const m of c.messages) if (m.role === 'user') for (const a of m.attachments) this.dropAttachment(a.id);
   }
@@ -290,23 +353,32 @@ export class MockApiClient implements ApiClient {
       effort?: ReasoningEffort | null;
       /** Ignored here: the mock never asks for terminal reads (see `answerTerminalRead`). */
       terminal?: boolean;
+      expectedEditMode?: EditMode;
+      expectedProjectId?: Id | null;
     },
     signal: AbortSignal,
   ) {
-    return this.run(chatId, input.model, input.effort, signal, input);
+    return this.run(chatId, input.model, input.effort, input, signal, input);
   }
   retry(
     chatId: Id,
-    input: { model: string; effort?: ReasoningEffort | null; terminal?: boolean },
+    input: {
+      model: string;
+      effort?: ReasoningEffort | null;
+      terminal?: boolean;
+      expectedEditMode?: EditMode;
+      expectedProjectId?: Id | null;
+    },
     signal: AbortSignal,
   ) {
-    return this.run(chatId, input.model, input.effort, signal);
+    return this.run(chatId, input.model, input.effort, input, signal);
   }
 
   private async *run(
     chatId: Id,
     model: string,
     effortInput: ReasoningEffort | null | undefined,
+    expected: { expectedEditMode?: EditMode; expectedProjectId?: Id | null },
     signal: AbortSignal,
     input?: { text: string; attachmentIds: Id[] },
   ): AsyncIterable<AgentEvent> {
@@ -314,6 +386,12 @@ export class MockApiClient implements ApiClient {
     // Backfill the totals before a retry truncates the messages, so the discarded turn keeps counting.
     this.usageOf(chatId, chat.messages);
     if (this.running.has(chatId)) fail('conflict', 409, 'A reply is already in progress.');
+    // Like the server: the turn runs in the mode the UI showed (omitted means Review) and in the project it showed
+    // (omitted means unchecked), or not at all (nothing stored, truncated or undone).
+    const mode: EditMode = chat.editMode;
+    if ((expected.expectedEditMode ?? 'review') !== mode) fail('conflict', 409, EDIT_MODE_CHANGED);
+    if (expected.expectedProjectId !== undefined && expected.expectedProjectId !== chat.projectId)
+      fail('conflict', 409, CHAT_PROJECT_CHANGED);
     if (!this.apiKey) fail('no_api_key', 400);
     const info = SAMPLE_MODELS.find((m) => m.id === model);
     // F3: the body's effort wins; omitted = the chat's stored effort.
@@ -324,6 +402,10 @@ export class MockApiClient implements ApiClient {
     if (info && !info.supportsImages && refs.some((r) => r.kind === 'image')) fail('model_no_image_input', 400);
 
     this.running.add(chatId);
+    // The turn uses the mode it checked above for the whole run: a mode change during the run applies from the next
+    // turn.
+    let turnId: Id;
+    let retryNotice: string | undefined;
     try {
       if (input) {
         const user: UserMessage = {
@@ -338,26 +420,42 @@ export class MockApiClient implements ApiClient {
           if (a) a.bound = true;
         }
         chat.messages.push(user);
+        turnId = user.id;
         yield { type: 'user_message', message: clone(user) };
       } else {
         const lastUser = chat.messages.findLastIndex((m) => m.role === 'user');
+        turnId = chat.messages[lastUser]?.id ?? '';
+        // Like the server: a retry first undoes what the previous attempt wrote, whatever mode the retry runs in.
+        const undone = this.undoTurn(chatId, turnId);
+        if (undone) {
+          yield { type: 'auto_batch_updated', batchId: undone.batchId };
+          const n = undone.undo.restored.length;
+          retryNotice = `Undid the previous attempt's edits (${n} file${n === 1 ? '' : 's'}).`;
+        }
         chat.messages.splice(lastUser + 1);
       }
 
       const useTools = chat.projectId !== null && (info?.supportsTools ?? true);
       const edit = useTools && input?.text.includes('[mock:edit]') === true;
-      const steps: { text: string; toolCalls: ToolCall[]; stages?: boolean }[] = edit
+      const auto = mode === 'auto';
+      const steps: { text: string; toolCalls: ToolCall[]; stages?: boolean; writes?: boolean }[] = edit
         ? [
             {
-              text: "I'll propose those edits.",
-              stages: true,
+              text: auto ? "I'll make those edits." : "I'll propose those edits.",
+              stages: !auto,
+              writes: auto,
               toolCalls: sampleProposal().map((f) => ({
                 id: `call_${crypto.randomUUID()}`,
                 name: f.kind === 'create' ? 'write_file' : 'edit_file',
                 argsJson: JSON.stringify({ path: f.path }),
               })),
             },
-            { text: 'The edits are proposed. Review them and apply the ones you want.', toolCalls: [] },
+            {
+              text: auto
+                ? 'The edits are written. You can undo this turn from its card.'
+                : 'The edits are proposed. Review them and apply the ones you want.',
+              toolCalls: [],
+            },
           ]
         : useTools
           ? [
@@ -379,7 +477,7 @@ export class MockApiClient implements ApiClient {
         throw signal.reason;
       };
 
-      for (const step of steps) {
+      for (const [stepIndex, step] of steps.entries()) {
         if (signal.aborted) stopRun();
         const msg: AssistantMessage = {
           id: crypto.randomUUID(),
@@ -389,6 +487,8 @@ export class MockApiClient implements ApiClient {
           text: '',
           toolCalls: [],
           status: 'complete',
+          // UI-only, on the run's first assistant message: what the retry undid first.
+          ...(stepIndex === 0 && retryNotice !== undefined ? { notice: retryNotice } : {}),
         };
         // Like the server's loop: a stop during (or right after) the text keeps the partial reply as `stopped`.
         const stopText = (): never => {
@@ -442,6 +542,31 @@ export class MockApiClient implements ApiClient {
               });
             }
             stopRun();
+          }
+          if (step.writes) {
+            const file = sampleProposal()[i];
+            if (!file) continue;
+            const result = this.autoWrite(chatId, chat.projectId, turnId, msg.id, file);
+            const tool: ToolMessage = {
+              id: crypto.randomUUID(),
+              role: 'tool',
+              createdAt: now(),
+              toolCallId: call.id,
+              name: call.name,
+              ok: result !== null,
+              output:
+                result === null
+                  ? `Not written: ${file.path} has a proposed edit from an earlier turn waiting for the user's review. Ask the user to apply or discard it first.`
+                  : file.kind === 'create'
+                    ? `Created ${file.path} (${file.add} lines). Written to disk.`
+                    : `Wrote edit to ${file.path}: +${file.add} -${file.del}\nWritten to disk.`,
+              summary: file.path,
+              durationMs: this.delayMs * 8,
+            };
+            chat.messages.push(tool);
+            yield { type: 'tool_result', message: clone(tool) };
+            if (result) yield { type: 'auto_batch_updated', batchId: result };
+            continue;
           }
           const staged = step.stages ? sampleProposal().slice(0, i + 1) : null;
           const tool: ToolMessage = {
@@ -581,7 +706,7 @@ export class MockApiClient implements ApiClient {
     const pending = this.changes.get(chatId) ?? null;
     if (!pending || pending.revision !== body.revision) fail('changes_stale', 409);
     const { written, rejectedHunks, skippedHunks } = acceptedOnly(pending?.files ?? [], body.decisions);
-    const batch: AppliedBatch = {
+    const batch: MockBatch = {
       id: crypto.randomUUID(),
       appliedAt: now(),
       messageId: pending?.messageId ?? '',
@@ -592,9 +717,10 @@ export class MockApiClient implements ApiClient {
       source: 'review',
       undoable: false,
     };
-    this.applied.set(chatId, [...(this.applied.get(chatId) ?? []), batch]);
+    this.pushBatch(chatId, batch);
+    if (written.length > 0) this.bumpDisk(chatId);
     this.changes.set(chatId, null);
-    return { batch: clone(batch), changes: this.chatChanges(chatId) };
+    return { batch: this.batchOut(chatId, batch), changes: this.chatChanges(chatId) };
   }
 
   async discardChatChanges(chatId: Id): Promise<ChatChanges> {
@@ -604,6 +730,17 @@ export class MockApiClient implements ApiClient {
     return this.chatChanges(chatId);
   }
 
+  async undoChatBatch(chatId: Id, batchId: Id): Promise<UndoBatchResponse> {
+    const chat = this.chat(chatId);
+    const batch = this.applied.get(chatId)?.find((b) => b.id === batchId) ?? fail('not_found', 404, 'Edits not found.');
+    // Same order of checks as the route: a running chat first, then the project, then the batch itself.
+    if (this.running.has(chatId)) fail('conflict', 409, UNDO_RUNNING);
+    if (!chat.projectId || !this.projects.some((p) => p.id === chat.projectId)) fail('conflict', 409, UNDO_NO_PROJECT);
+    if (!this.isUndoable(chatId, batch)) fail('conflict', 409, UNDO_GONE);
+    this.restore(chatId, batch, 'user');
+    return { batch: this.batchOut(chatId, batch), changes: this.chatChanges(chatId) };
+  }
+
   async answerTerminalRead(): Promise<void> {
     // The mock never sends `terminal_read_request`, so no request is ever waiting (the server's 404).
     fail('not_found', 404, 'No terminal read is waiting under that id.');
@@ -611,6 +748,78 @@ export class MockApiClient implements ApiClient {
 
   private project(id: Id): Project {
     return this.projects.find((p) => p.id === id) ?? fail('not_found', 404);
+  }
+
+  private pushBatch(chatId: Id, batch: MockBatch): void {
+    // The list keeps the newest 100 batches of both kinds, like the server's change store.
+    this.applied.set(chatId, [...(this.applied.get(chatId) ?? []), batch].slice(-100));
+  }
+
+  private bumpDisk(chatId: Id): void {
+    this.diskSeq.set(chatId, (this.diskSeq.get(chatId) ?? 0) + 1);
+  }
+
+  /**
+   * Undo is offered for an auto batch that isn't undone, is among the chat's newest `autoUndoTurns` auto batches, and
+   * was written into the chat's current project.
+   */
+  private isUndoable(chatId: Id, batch: MockBatch): boolean {
+    if (batch.source !== 'auto' || batch.undo) return false;
+    const autos = (this.applied.get(chatId) ?? []).filter((b) => b.source === 'auto');
+    if (autos.indexOf(batch) < autos.length - LIMITS.autoUndoTurns) return false;
+    return batch.projectId !== undefined && batch.projectId === this.chats.find((c) => c.id === chatId)?.projectId;
+  }
+
+  private batchOut(chatId: Id, batch: MockBatch): AppliedBatch {
+    const { projectId: _projectId, ...out } = batch;
+    return clone({ ...out, undoable: this.isUndoable(chatId, batch) });
+  }
+
+  /**
+   * One write of an Auto turn: lands in the turn's open auto batch (created on its first write). `null` when the path
+   * has a pending Review proposal, which an Auto edit must not build on.
+   */
+  private autoWrite(chatId: Id, projectId: Id | null, turnId: Id, messageId: Id, file: FileChange): Id | null {
+    if (this.changes.get(chatId)?.files.some((f) => f.path === file.path)) return null;
+    const batches = this.applied.get(chatId) ?? [];
+    let batch = batches.find((b) => b.source === 'auto' && b.turnId === turnId && !b.undo);
+    if (!batch) {
+      batch = {
+        id: crypto.randomUUID(),
+        appliedAt: now(),
+        messageId,
+        written: [],
+        rejectedHunks: 0,
+        skippedHunks: 0,
+        conflicts: [],
+        source: 'auto',
+        turnId,
+        undoable: false,
+        ...(projectId ? { projectId } : {}),
+      };
+      this.pushBatch(chatId, batch);
+    }
+    batch.written = [...batch.written.filter((f) => f.path !== file.path), clone(file)].sort((a, b) =>
+      a.path.localeCompare(b.path),
+    );
+    batch.appliedAt = now();
+    this.bumpDisk(chatId);
+    return batch.id;
+  }
+
+  /** The mock has no disk to differ from what the turn wrote, so every file is restored. */
+  private restore(chatId: Id, batch: MockBatch, by: BatchUndo['by']): BatchUndo {
+    const undo: BatchUndo = { at: now(), by, restored: batch.written.map((f) => f.path).sort(), skipped: [] };
+    batch.undo = undo;
+    if (undo.restored.length > 0) this.bumpDisk(chatId);
+    return undo;
+  }
+
+  /** Before a retry: undo the turn's auto batch that isn't undone yet. */
+  private undoTurn(chatId: Id, turnId: Id): { batchId: Id; undo: BatchUndo } | null {
+    const batch = this.applied.get(chatId)?.find((b) => b.source === 'auto' && b.turnId === turnId && !b.undo);
+    if (!batch) return null;
+    return { batchId: batch.id, undo: this.restore(chatId, batch, 'retry') };
   }
 
   private chatChanges(chatId: Id): ChatChanges {
@@ -623,9 +832,8 @@ export class MockApiClient implements ApiClient {
         totalAdd: p.files.reduce((n, f) => n + f.add, 0),
         totalDel: p.files.reduce((n, f) => n + f.del, 0),
       },
-      applied: this.applied.get(chatId) ?? [],
-      // The mock writes nothing to disk; every applied batch stands for one change of the project's files.
-      diskSeq: (this.applied.get(chatId) ?? []).length,
+      applied: (this.applied.get(chatId) ?? []).map((b) => this.batchOut(chatId, b)),
+      diskSeq: this.diskSeq.get(chatId) ?? 0,
     });
   }
 
@@ -658,6 +866,8 @@ export class MockApiClient implements ApiClient {
     const notes = project('Offline Notes App', '/home/you/code/offline-notes');
     const site = project('Portfolio site', '/home/you/code/portfolio');
     this.projects = [openvern, notes, site];
+    // One sample folder outside Git, so the Auto warning can be seen.
+    this.noGit.add(site.id);
 
     let age = 0;
     const chat = (projectId: Id, title: string, messages: Message[] = [], model = DEFAULT_MODEL): Chat => {
@@ -776,6 +986,28 @@ export class MockApiClient implements ApiClient {
 
     for (const c of this.chats) {
       c.usage = this.usageOf(c.id, c.messages);
+    }
+
+    // One chat in Auto with an undoable auto turn, so the Auto card and the Diff history have something to show.
+    const autoChat = this.chats.find((c) => c.title === 'Streaming replies over SSE');
+    const autoUser = autoChat?.messages.find((m) => m.role === 'user');
+    const autoReply = autoChat?.messages.find((m) => m.role === 'assistant');
+    if (autoChat && autoUser && autoReply) {
+      autoChat.editMode = 'auto';
+      this.pushBatch(autoChat.id, {
+        id: crypto.randomUUID(),
+        appliedAt: autoReply.createdAt,
+        messageId: autoReply.id,
+        written: sampleAutoBatch(),
+        rejectedHunks: 0,
+        skippedHunks: 0,
+        conflicts: [],
+        source: 'auto',
+        turnId: autoUser.id,
+        undoable: false,
+        ...(autoChat.projectId ? { projectId: autoChat.projectId } : {}),
+      });
+      this.bumpDisk(autoChat.id);
     }
   }
 }

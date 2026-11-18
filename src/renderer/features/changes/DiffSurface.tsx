@@ -1,5 +1,5 @@
-// The Diff surface of the right panel (plan §5.2, G5.2–G5.5): changed files, hunks with decisions, the apply bar
-// and the read-only list of applied batches.
+// The Diff surface of the right panel: pending Review proposals (changed files, hunks with decisions, the apply bar)
+// on top, and below them the History of written batches (applied in Review, or written in Auto with Undo).
 
 import { cx } from '@renderer/components/ui';
 import { ApiError } from '@renderer/lib/api-client';
@@ -16,13 +16,14 @@ import {
   type PointerEvent as ReactPointerEvent,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react';
 import { availablePanelWidth } from '../right-panel/layout';
-import { useChatChanges } from '../right-panel/queries';
+import { useChatChanges, useChatEditMode } from '../right-panel/queries';
 import type { SurfaceProps } from '../right-panel/surfaces';
-import { AppliedList } from './AppliedList';
+import { AppliedList, type HistoryFocus } from './AppliedList';
 import {
   allRejected,
   buildDecisions,
@@ -164,6 +165,7 @@ export function DiffSurface({ chatId, params }: SurfaceProps) {
   const changes = useChatChanges(chatId);
   const pending = changes.data?.pending ?? null;
   const applied = changes.data?.applied ?? [];
+  const editMode = useChatEditMode(chatId);
   const decisions = useDecisions(chatId, pending);
   const { mode, current } = useReviewView(chatId);
   const { setMode, setCurrent, setAll, clearDecisions } = useReviewStore.getState();
@@ -282,11 +284,17 @@ export function DiffSurface({ chatId, params }: SurfaceProps) {
     setMode(chatId, m);
   };
 
-  // Opened on a file (`openPanelSurface(chatId, 'diff', { path })`); a new params object per call.
+  // Opened on a file: `{ path }` is a pending proposal's file; `{ batchId, path }` is a file of a written batch, shown
+  // in the History. A new params object per call, so the same request repeats.
+  const historyFocus = useMemo((): HistoryFocus | undefined => {
+    const p = params as { batchId?: unknown; path?: unknown } | null;
+    if (typeof p?.batchId !== 'string') return undefined;
+    return { batchId: p.batchId, path: typeof p.path === 'string' ? p.path : undefined, token: params };
+  }, [params]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the params object on purpose
   useEffect(() => {
-    const path = (params as { path?: unknown } | null)?.path;
-    if (typeof path === 'string') setCurrent(chatId, path);
+    const p = params as { batchId?: unknown; path?: unknown } | null;
+    if (typeof p?.path === 'string' && p.batchId === undefined) setCurrent(chatId, p.path);
   }, [params, chatId]);
 
   const files = pending?.files ?? [];
@@ -307,7 +315,11 @@ export function DiffSurface({ chatId, params }: SurfaceProps) {
     if (nav && row) revealInList(nav, row);
   }, [cur?.path]);
 
-  const conflicts = new Map(applied.at(-1)?.conflicts.map((c) => [c.path, c.reason]) ?? []);
+  // The conflicts of the latest apply, marked on the files still pending. Auto batches never have conflicts, so an
+  // Auto turn after the apply must not hide them.
+  const conflicts = new Map(
+    applied.findLast((b) => b.source === 'review')?.conflicts.map((c) => [c.path, c.reason]) ?? [],
+  );
   const progress = progressOf(files, decisions);
   const discarding = pending !== null && allRejected(progress);
   const applyDisabled = !pending || busy || streaming || (!discarding && progress.accepted === 0);
@@ -395,9 +407,13 @@ export function DiffSurface({ chatId, params }: SurfaceProps) {
         {header}
         <div className="min-h-0 flex-1 overflow-y-auto bg-code scrollbar-stable">
           <p className="m-0 px-5 py-6 text-[13px] text-text-muted">
-            {changes.isPending ? 'Loading edits…' : 'No edits are waiting for review.'}
+            {changes.isPending
+              ? 'Loading edits…'
+              : editMode === 'auto'
+                ? 'Nothing is waiting for review. In Auto, edits are written as the model works; undo a turn below.'
+                : 'No edits are waiting for review.'}
           </p>
-          <AppliedList batches={applied} mode={effMode} />
+          <AppliedList chatId={chatId} batches={applied} mode={effMode} focus={historyFocus} />
         </div>
       </section>
     );
@@ -515,7 +531,7 @@ export function DiffSurface({ chatId, params }: SurfaceProps) {
               )}
             </>
           )}
-          <AppliedList batches={applied} mode={effMode} />
+          <AppliedList chatId={chatId} batches={applied} mode={effMode} focus={historyFocus} />
         </div>
       </div>
 

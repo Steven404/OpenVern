@@ -2,7 +2,10 @@
 
 import {
   applyChangesBody,
+  CHAT_PROJECT_CHANGED,
   createChatBody,
+  EDIT_MODE_CHANGED,
+  PROJECT_NOT_IN_GIT,
   ROUTES,
   retryBody,
   sendMessageBody,
@@ -12,11 +15,12 @@ import {
 } from '@shared/api';
 import { LIMITS } from '@shared/constants';
 import { TERMINAL } from '@shared/terminal';
-import type { Id } from '@shared/types';
+import type { EditMode, Id } from '@shared/types';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { CoreError } from '../../core/errors';
-import type { Core } from '../../core/types';
+import { inGitRepo } from '../../core/storage/projects';
+import type { ChatUpdateExpect, Core } from '../../core/types';
 import { errorResponse, readJson } from '../http';
 import { streamTurn } from '../sse';
 
@@ -64,11 +68,44 @@ export function chatRoutes(core: Core): Hono {
     }
   };
 
+  /**
+   * `expected` is the edit mode the client showed when the user acted; omitted means `'review'`, so a request that
+   * showed nothing can only start a Review turn. A mismatch is refused before anything changes, so the user can look
+   * at Review / Auto and act again.
+   */
+  const checkEditMode = (stored: EditMode, expected: EditMode | undefined): EditMode => {
+    if (stored !== (expected ?? 'review')) throw new CoreError('conflict', EDIT_MODE_CHANGED);
+    return stored;
+  };
+
+  /**
+   * `expected` is the project the client showed (`null` = no project); omitted means unchecked. A mismatch is refused
+   * before anything changes, like a mode mismatch, so a turn never runs in a project the sender didn't see.
+   */
+  const checkProject = (stored: Id | null, expected: Id | null | undefined): Id | null => {
+    if (expected !== undefined && stored !== expected) throw new CoreError('conflict', CHAT_PROJECT_CHANGED);
+    return stored;
+  };
+
+  /**
+   * NO-GIT WARNING (invariant): Auto never starts in a folder outside Git that its client showed as inside Git, where
+   * the no-Git warning was skipped. The folder is checked again at commit time (a folder can lose its repository at
+   * any time, and the client's list may be old). `shown` is what the client showed: `false` means the folder was shown
+   * outside Git, so its warning was decided; `true` or omitted (a request that showed nothing) needs the folder to be
+   * in Git now.
+   */
+  const checkAutoGit = async (projectId: Id, shown: boolean | undefined): Promise<void> => {
+    if (shown === false) return;
+    const project = await core.projects.get(projectId);
+    if (!(await inGitRepo(project.rootPath))) throw new CoreError('conflict', PROJECT_NOT_IN_GIT);
+  };
+
   r.get(ROUTES.chats, async (c) => c.json(await core.chats.list()));
 
-  // `editMode` omitted = 'review'.
+  // `editMode` omitted = 'review'. Auto in a project is checked against the folder's Git status first (`checkAutoGit`).
   r.post(ROUTES.chats, async (c) => {
-    const body = await readJson(c, createChatBody);
+    const { expectedInGitRepo, ...body } = await readJson(c, createChatBody);
+    if (body.editMode === 'auto' && body.projectId !== null) await checkAutoGit(body.projectId, expectedInGitRepo);
     return c.json(await core.chats.create(body));
   });
 
@@ -77,19 +114,33 @@ export function chatRoutes(core: Core): Hono {
   /**
    * Rename, move, archive, or change the edit mode. `editMode` takes no run claim and is accepted while a run is
    * active: the agent reads the mode once at turn start, so a change applies from the next turn.
+   *
+   * MODE GUARD (invariant): `expectedEditMode` and `expectedProjectId` are compared by `chats.update`, under the
+   * storage lock that commits the change, so a mode PATCH or a move landing between a check here and the write can't
+   * slip through. A move decides whether to warn about a folder without Git from the mode the client showed, so it
+   * must not go through on a mode the chat no longer has; a move that names no mode expects `'review'`. Turning Auto
+   * on names the project whose warning was decided, so a move that lands first refuses it. Turning Auto on, or moving
+   * an Auto chat into another project, also checks that project's folder against the Git status the client showed
+   * (`checkAutoGit`), under that same lock, with the project the chat will be in.
    */
   r.patch(ROUTES.chat, async (c) => {
     const id = c.req.param('id');
-    const body = await readJson(c, updateChatBody);
-    if (body.projectId !== undefined || body.archived !== undefined) {
+    const { expectedEditMode, expectedProjectId, expectedInGitRepo, ...patch } = await readJson(c, updateChatBody);
+    const expect: ChatUpdateExpect = {
+      checkAutoProject: (projectId) => checkAutoGit(projectId, expectedInGitRepo),
+    };
+    const mode = expectedEditMode ?? (patch.projectId !== undefined ? 'review' : undefined);
+    if (mode !== undefined) expect.editMode = mode;
+    if (expectedProjectId !== undefined) expect.projectId = expectedProjectId;
+    if (patch.projectId !== undefined || patch.archived !== undefined) {
       const chat = await core.chats.get(id); // 404 before any claim
       const rejectPendingMove = async (projectId: Id | null) => {
-        if (body.projectId !== undefined && projectId !== body.projectId && (await core.changes.get(id)).pending)
+        if (patch.projectId !== undefined && projectId !== patch.projectId && (await core.changes.get(id)).pending)
           throw new CoreError('conflict', 'Apply or discard the proposed edits first.');
       };
       // Only `archived` changes the flag (a move keeps it). Archive changes need the chat idle: hold the run
       // claim across a fresh read so a turn can't start between the check and the write.
-      if (body.archived !== undefined) {
+      if (patch.archived !== undefined) {
         if (starting.has(id))
           throw new CoreError('conflict', 'Wait for the response to finish before archiving or unarchiving this chat.');
         starting.add(id);
@@ -101,14 +152,14 @@ export function chatRoutes(core: Core): Hono {
               'conflict',
               'Wait for the response to finish before archiving or unarchiving this chat.',
             );
-          return c.json(await core.chats.update(id, body));
+          return c.json(await core.chats.update(id, patch, expect));
         } finally {
           starting.delete(id);
         }
       }
       await rejectPendingMove(chat.projectId);
     }
-    return c.json(await core.chats.update(id, body));
+    return c.json(await core.chats.update(id, patch, expect));
   });
 
   r.delete(ROUTES.chat, async (c) => {
@@ -124,12 +175,23 @@ export function chatRoutes(core: Core): Hono {
     return c.body(null, 204);
   });
 
+  // CHECKED MODE IS THE TURN'S MODE (invariant), for both routes that start a turn: the chat is read once, under the
+  // start claim; the mode the client showed (`expectedEditMode`, omitted = 'review') is checked against that read,
+  // and the turn is handed that same mode, and the project from the same read, to run in. A PATCH takes no claim and
+  // can land at any time, so a check here followed by a second read in the agent could start a turn in a mode the
+  // user wasn't shown, or run the checked mode in the project a move just put the chat in. A mismatch is refused
+  // (409) before anything is stored or started. The project the client showed (`expectedProjectId`) is checked
+  // against the same read, so a chat moved from another window can't run in a project the sender never saw.
   r.post(ROUTES.chatMessages, async (c) => {
     const chatId = c.req.param('id');
     const body = await readJson(c, sendMessageBody);
-    const chat = await core.chats.get(chatId);
     const release = claim(chatId);
+    let editMode: EditMode;
+    let projectId: Id | null;
     try {
+      const chat = await core.chats.get(chatId);
+      editMode = checkEditMode(chat.editMode, body.expectedEditMode);
+      projectId = checkProject(chat.projectId, body.expectedProjectId);
       if (body.attachmentIds.length > LIMITS.attachmentsPerMessage)
         throw new CoreError('invalid_request', `At most ${LIMITS.attachmentsPerMessage} attachments per message.`);
       let hasImage = false;
@@ -150,6 +212,8 @@ export function chatRoutes(core: Core): Hono {
       newUserMessage: { text: body.text, attachmentIds: body.attachmentIds },
       effort: body.effort,
       terminal: body.terminal,
+      editMode,
+      projectId,
       release,
     });
   });
@@ -157,11 +221,28 @@ export function chatRoutes(core: Core): Hono {
   r.post(ROUTES.chatRetry, async (c) => {
     const chatId = c.req.param('id');
     const body = await readJson(c, retryBody);
-    const chat = await core.chats.get(chatId);
-    if (!chat.messages.some((m) => m.role === 'user'))
-      throw new CoreError('invalid_request', 'There is no message to retry in this chat.');
     const release = claim(chatId);
-    return streamTurn(c, core, { chatId, model: body.model, effort: body.effort, terminal: body.terminal, release });
+    let editMode: EditMode;
+    let projectId: Id | null;
+    try {
+      const chat = await core.chats.get(chatId);
+      if (!chat.messages.some((m) => m.role === 'user'))
+        throw new CoreError('invalid_request', 'There is no message to retry in this chat.');
+      editMode = checkEditMode(chat.editMode, body.expectedEditMode);
+      projectId = checkProject(chat.projectId, body.expectedProjectId);
+    } catch (err) {
+      release();
+      throw err;
+    }
+    return streamTurn(c, core, {
+      chatId,
+      model: body.model,
+      effort: body.effort,
+      terminal: body.terminal,
+      editMode,
+      projectId,
+      release,
+    });
   });
 
   // The client's answer to a `terminal_read_request` (terminal plan §4.2, T2.5). The body is validated before the

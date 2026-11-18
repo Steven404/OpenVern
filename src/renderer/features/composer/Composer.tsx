@@ -1,6 +1,6 @@
 import { IMAGE_ACCEPT, TEXT_ACCEPT } from '@shared/constants';
-import type { AttachmentRef, Id, ReasoningEffort } from '@shared/types';
-import { useQueryClient } from '@tanstack/react-query';
+import type { AttachmentRef, EditMode, Id, ReasoningEffort } from '@shared/types';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowUp, Square } from 'lucide-react';
 import {
   type ChangeEvent,
@@ -14,17 +14,27 @@ import {
   useState,
 } from 'react';
 import { Button } from '../../components/ui';
-import { ApiError } from '../../lib/api-client';
+import { ApiError, isProjectNotInGit } from '../../lib/api-client';
 import { useApiClient } from '../../lib/api-context';
 import { queryKeys } from '../../lib/query-keys';
+import {
+  chatQueryOptions,
+  confirmEditMode,
+  EDIT_MODE_UNKNOWN,
+  type ModeEntry,
+  useEditModeEntry,
+  writeChat,
+} from '../../stores/edit-modes';
+import { patchChatSummary, useRunsStore } from '../../stores/runs';
 import { useUiStore } from '../../stores/ui';
 import { useTerminalUiStore } from '../terminal/terminal-store';
 import { AttachMenu } from './AttachMenu';
 import { ComposerAttachmentChips } from './AttachmentChips';
 import { IMAGE_UNSUPPORTED_MESSAGE, registerAttachmentSink, useDraftAttachments } from './attachments';
+import { EditModePicker } from './EditModePicker';
 import { EffortPicker } from './EffortPicker';
 import { ModelPicker } from './ModelPicker';
-import { useModels, useSettings } from './queries';
+import { useModels, useProjects, useSettings } from './queries';
 import { registerTextSink } from './text-sink';
 
 export type ComposerVariant = 'reply' | 'new';
@@ -32,6 +42,13 @@ export type ComposerVariant = 'reply' | 'new';
 export interface ComposerSendInput {
   text: string;
   attachments: AttachmentRef[];
+  /**
+   * The edit mode the chip rendered when the user sent ('review' when the New chat chip is hidden). It is what the
+   * turn is expected to run in, so it comes from this render, never from a cache read when the send fires.
+   */
+  editMode: EditMode;
+  /** The project the composer showed (`projectId`), which the turn is expected to run in; `null` = no project. */
+  projectId: Id | null;
 }
 
 export interface ComposerProps {
@@ -56,17 +73,63 @@ export interface ComposerProps {
   autoFocus?: boolean;
   /** Lets other features add uploaded files here through `addAttachmentRef(sinkKey, ref)` (reply: the chat id). */
   sinkKey?: string;
+  /**
+   * `new` variant: the edit mode the chat will be created with, and its setter, which gets the project the pick was
+   * decided for and whether that project's folder was shown as inside Git. The reply variant reads and changes the
+   * chat's own mode instead.
+   */
+  editMode?: EditMode;
+  onEditModeChange?: (mode: EditMode, projectId: Id, inGitRepo: boolean) => void;
+  /**
+   * `new` variant: the New chat opening the pick belongs to. A new value remounts the chip, so a no-Git warning opened
+   * for an earlier opening (and its project) closes instead of being confirmed for this one.
+   */
+  editModeScope?: string;
 }
 
 const HINT = 'Enter to send · Shift + Enter for a new line';
 const TOOLS_NOTICE = "This model can't use tools, so it won't read your project files.";
 const NO_KEY_NOTICE = 'Add your OpenRouter API key to start chatting.';
+/** A chat in Auto whose chip can't be shown (no project, or a model without tools): sending would run unseen Auto. */
+export const AUTO_HIDDEN_NOTICE =
+  "This chat is in Auto, which can't be shown here, so sending is paused. Move it into a project or pick a model that can use tools.";
 /** The draft keeps a usable height even when the window is short and the terminal dock takes most of it. */
 const COMPOSER_MIN_MAX_HEIGHT = 96;
 
 /** How tall the growing draft may become: 40% of what the window has left after the terminal dock. */
 export function composerMaxHeight(viewportHeight: number, dockHeight: number): number {
   return Math.max(COMPOSER_MIN_MAX_HEIGHT, Math.round((viewportHeight - dockHeight) * 0.4));
+}
+
+/**
+ * The edit mode a composer shows, and whether a reply may be sent (or a turn retried) in it. Shared by the composer
+ * and Retry, so both act on the same rendered value. `chatId` undefined = the New chat composer, whose mode is the
+ * local `draft`.
+ *
+ * INVARIANT: in a chat that could edit (a project chat whose model isn't known to lack tools), a reply goes out only
+ * with the chip on screen, and only while the chat's mode is `known`: never on a cold load before the chat was read,
+ * and never while a mode change or its check is in flight. Auto goes out only with the chip on screen, in any chat: a
+ * chat in Auto whose chip is hidden (no project, no key, a model without tools) can't send or retry (`autoHidden`),
+ * because a move from another window could put it in a project where that unseen Auto writes.
+ */
+export function useReplyEditMode(chatId: Id | undefined, projectId: Id | null, model: string, draft?: EditMode) {
+  const entry: ModeEntry = useEditModeEntry(chatId);
+  const settings = useSettings();
+  const modelsQuery = useModels();
+  const project = useProjects().data?.find((p) => p.id === projectId);
+  const mode = chatId !== undefined ? entry.mode : (draft ?? null);
+  const noKey =
+    (settings.data ? !settings.data.openRouter.configured : false) ||
+    (modelsQuery.error instanceof ApiError && modelsQuery.error.info.code === 'no_api_key');
+  const info = modelsQuery.data?.find((m) => m.id === model);
+  // Unknown capabilities (the model list not loaded yet) count as tools: the chip shows, so the mode is on screen.
+  const editCapable = projectId !== null && info?.supportsTools !== false;
+  const showChip = editCapable && !noKey && project !== undefined && mode !== null;
+  const known = entry.status === 'known' && entry.mode !== null;
+  // Review may go out without the chip only where it couldn't show (the chat can't edit); Auto never does.
+  const ready = known && (showChip || (!editCapable && entry.mode === 'review'));
+  const autoHidden = chatId !== undefined && known && entry.mode === 'auto' && !editCapable;
+  return { entry, mode, project, showChip, ready, noKey, autoHidden };
 }
 
 /** Shared reply / new-chat composer (D15, D16, D18): textarea, attach, model picker, send / stop, notices and hint. */
@@ -84,17 +147,24 @@ export function Composer({
   projectSlot,
   autoFocus,
   sinkKey,
+  editMode: draftEditMode,
+  onEditModeChange,
+  editModeScope,
 }: ComposerProps) {
   const api = useApiClient();
   const queryClient = useQueryClient();
   const openSettings = useUiStore((s) => s.openSettings);
-  const settings = useSettings();
   const modelsQuery = useModels();
 
   const isNew = variant === 'new';
-  const noKey =
-    (settings.data ? !settings.data.openRouter.configured : false) ||
-    (modelsQuery.error instanceof ApiError && modelsQuery.error.info.code === 'no_api_key');
+  // Edit mode. A reply composer's `sinkKey` is its chat id (see `sinkKey`): its mode is the chat's shown mode
+  // (`stores/edit-modes.ts`), changed with a PATCH. The New chat composer gets it from props.
+  const chatId = variant === 'reply' ? sinkKey : undefined;
+  // Subscribed so the chat is read (and its mode fed to the store) even where nothing else mounts the query; its data
+  // is never read here.
+  useQuery({ ...chatQueryOptions(api, chatId ?? ''), enabled: chatId !== undefined });
+  const shown = useReplyEditMode(chatId, projectId, model, draftEditMode);
+  const { entry, project, noKey } = shown;
   const info = modelsQuery.data?.find((m) => m.id === model);
   // Unknown capabilities (list not loaded yet): do not block; the server still validates.
   const supportsImages = info ? info.supportsImages : true;
@@ -106,6 +176,41 @@ export function Composer({
   const effectiveEffort = effort !== null && efforts.includes(effort) ? effort : null;
   const accept = supportsImages ? `${TEXT_ACCEPT},${IMAGE_ACCEPT}` : TEXT_ACCEPT;
 
+  const editMode = shown.mode;
+  const changeEditMode = (mode: EditMode, forProject: Id, inGitRepo: boolean) => {
+    if (chatId === undefined) {
+      onEditModeChange?.(mode, forProject, inGitRepo);
+      return;
+    }
+    // Turning Auto on names the project whose no-Git warning was decided, and the Git status that decision rested on:
+    // if the chat moved meanwhile, or its folder left Git, the server refuses instead of turning Auto on somewhere the
+    // user wasn't warned about.
+    writeChat({ api, queryClient }, chatId, 'mode', () =>
+      api.updateChat(
+        chatId,
+        mode === 'auto'
+          ? { editMode: 'auto', expectedProjectId: forProject, expectedInGitRepo: inGitRepo }
+          : { editMode: mode },
+      ),
+    )
+      .then((summary) => {
+        if (summary) patchChatSummary(queryClient, summary);
+      })
+      .catch((err: unknown) => {
+        // The store keeps the error for the notice below and checks the server's mode again. A folder that left Git
+        // means the projects list is old: reading it again makes the next pick show the warning.
+        if (isProjectNotInGit(err)) void queryClient.invalidateQueries({ queryKey: queryKeys.projects });
+      });
+  };
+  const modePending = chatId !== undefined && (entry.status === 'saving' || entry.status === 'confirming');
+  const modeUnknown = chatId !== undefined && entry.status === 'unknown';
+  const modeNotice = modeUnknown
+    ? EDIT_MODE_UNKNOWN
+    : chatId !== undefined
+      ? (entry.error ?? (shown.autoHidden && !noKey ? AUTO_HIDDEN_NOTICE : null))
+      : null;
+  const showEditModePicker = shown.showChip;
+
   const [text, setText] = useState('');
   const [imageNotice, setImageNotice] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
@@ -114,6 +219,21 @@ export function Composer({
   const { items, uploading, ready, addRef } = attachments;
 
   useEffect(() => (sinkKey ? registerAttachmentSink(sinkKey, addRef) : undefined), [sinkKey, addRef]);
+
+  // A send or retry the server refused because the chat's edit mode changed: the chip is catching up with the server's
+  // mode (the runs store checks it again, and sending waits for that), so say why nothing was sent and give back what was typed. Taken once, so a remount
+  // (or React's double effect run in development) can't add the text twice. Nothing is resent.
+  const refusal = useRunsStore((s) => (chatId !== undefined ? s.modeRefusals[chatId] : undefined));
+  useEffect(() => {
+    if (chatId === undefined || !refusal) return;
+    const taken = useRunsStore.getState().takeModeRefusal(chatId);
+    if (!taken) return;
+    setSendError(taken.message);
+    const unsent = taken.unsent;
+    if (!unsent) return;
+    setText((current) => (current.trim() === '' ? unsent.text : `${unsent.text}\n\n${current}`));
+    for (const ref of unsent.attachments) addRef(ref);
+  }, [chatId, refusal, addRef]);
 
   // An open terminal dock is fixed space under the composer: the draft grows into what is left of the column instead
   // of pushing the dock (and its prompt) below the window. `sinkKey` is the chat id for a reply composer and
@@ -149,7 +269,16 @@ export function Composer({
   }, [text, dockHeight]);
 
   const hasContent = text.trim().length > 0 || ready.length > 0;
-  const canSend = hasContent && !uploading && !noKey && !running && !busy && !sending;
+  // INVARIANT: a reply is sent only in a mode that is on screen and confirmed (see `useReplyEditMode`). Until the chat
+  // was read, while a mode change or its check is in flight, or after that check failed, the chip may not show the
+  // mode the next turn would run in.
+  const canSend = hasContent && !uploading && !noKey && !running && !busy && !sending && (isNew || shown.ready);
+  // What the turn is expected to run in: the value this render shows.
+  const sendMode: EditMode = isNew
+    ? shown.showChip && editMode !== null
+      ? editMode
+      : 'review'
+    : (entry.mode ?? 'review');
 
   const submit = useCallback(async () => {
     if (!canSend) return;
@@ -167,7 +296,7 @@ export function Composer({
     setText('');
     setSending(true);
     try {
-      await onSend({ text: draft.trim(), attachments: refs });
+      await onSend({ text: draft.trim(), attachments: refs, editMode: sendMode, projectId });
     } catch (err) {
       setText(draft);
       attachments.restore(taken);
@@ -175,7 +304,7 @@ export function Composer({
     } finally {
       setSending(false);
     }
-  }, [canSend, supportsImages, ready, attachments, text, onSend]);
+  }, [canSend, supportsImages, ready, attachments, text, onSend, sendMode, projectId]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key !== 'Enter' || e.shiftKey) return;
@@ -223,7 +352,7 @@ export function Composer({
       : null;
 
   const showToolsNotice = projectId !== null && !supportsTools && !noKey;
-  const hasNotices = imageNotice !== null || sendError !== null || noKey || showToolsNotice;
+  const hasNotices = imageNotice !== null || sendError !== null || modeNotice !== null || noKey || showToolsNotice;
 
   return (
     <div className="flex flex-col" data-variant={variant}>
@@ -269,6 +398,16 @@ export function Composer({
           />
           {projectSlot}
           <span className="flex-1" />
+          {showEditModePicker && editMode !== null && project !== undefined && (
+            <EditModePicker
+              key={editModeScope}
+              value={editMode}
+              onChange={changeEditMode}
+              project={project}
+              running={running || busy}
+              pending={modePending}
+            />
+          )}
           {showEffortPicker && !noKey && (
             <EffortPicker
               value={effectiveEffort}
@@ -319,6 +458,16 @@ export function Composer({
           {sendError && (
             <p role="alert" className="m-0 text-danger">
               {sendError}
+            </p>
+          )}
+          {modeNotice && (
+            <p role="alert" className="m-0 flex flex-wrap items-center gap-x-3 gap-y-1 text-danger">
+              <span>{modeNotice}</span>
+              {modeUnknown && chatId !== undefined && (
+                <Button size="sm" onClick={() => void confirmEditMode({ api, queryClient }, chatId)}>
+                  Try again
+                </Button>
+              )}
             </p>
           )}
           {noKey && (

@@ -8,6 +8,7 @@ import { MockApiClient } from '../../lib/mock-api-client';
 import { paths } from '../../lib/routes';
 import { useRunsStore } from '../../stores/runs';
 import { useUiStore } from '../../stores/ui';
+import { useChat } from '../composer/queries';
 import { installDomStubs, renderWithProviders, resetStores } from '../composer/test-utils';
 import { Conversation } from '../conversation';
 import { usePanelStore } from '../right-panel/panel-store';
@@ -38,7 +39,8 @@ function Goto({ to }: { to: string }) {
 
 function ChatRoute() {
   const id = useLocation().pathname.split('/').at(-1) ?? '';
-  return <Conversation chatId={id} />;
+  const chat = useChat(id).data;
+  return chat ? <Conversation chat={chat} /> : null;
 }
 
 function App() {
@@ -134,7 +136,7 @@ describe('NewChatScreen', () => {
     fireEvent.keyDown(textarea(), { key: 'Enter' });
 
     await waitFor(() => expect(screen.getByTestId('location').textContent).toMatch(/^\/chat\/.+/));
-    expect(create).toHaveBeenCalledWith({ projectId: project?.id, model: DEFAULT_MODEL });
+    expect(create).toHaveBeenCalledWith({ projectId: project?.id, model: DEFAULT_MODEL, editMode: 'review' });
     const chatId = screen.getByTestId('location').textContent?.replace('/chat/', '') ?? '';
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0]?.[0]).toBe(chatId);
@@ -143,6 +145,9 @@ describe('NewChatScreen', () => {
       attachmentIds: [],
       model: DEFAULT_MODEL,
       effort: null,
+      // The mode the chat was just created with, which the New chat chip showed, in the project it showed.
+      expectedEditMode: 'review',
+      expectedProjectId: project?.id,
     });
 
     // the run was started in the store, so the conversation shows the user bubble and then the reply

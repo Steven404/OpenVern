@@ -1,6 +1,6 @@
 // Pure helpers for the review UI: hunk lines, split pairing, labels and progress (plan §5.2).
 
-import type { AppliedBatch, DiffHunk, FileChange, HunkDecision } from '@shared/types';
+import type { AppliedBatch, BatchUndo, DiffHunk, FileChange, HunkDecision } from '@shared/types';
 
 export type FileDecisions = Record<string, HunkDecision>;
 /** path → hunk id → decision */
@@ -161,3 +161,23 @@ export const CONFLICT_LABEL: Record<AppliedBatch['conflicts'][number]['reason'],
   blocked: 'Blocked',
   too_large: 'Too large to review',
 };
+
+/** Where an auto batch stands for Undo: offered, already undone (by the user or a retry), or past keeping. */
+export type AutoUndoState = 'undoable' | 'undone' | 'unavailable';
+
+export function autoUndoState(b: AppliedBatch): AutoUndoState {
+  if (b.undo) return 'undone';
+  return b.undoable ? 'undoable' : 'unavailable';
+}
+
+/** "Undone · 2 files restored", or "Undone by a retry". */
+export function undoneLabel(undo: BatchUndo): string {
+  return undo.by === 'retry' ? 'Undone by a retry' : `Undone · ${plural(undo.restored.length, 'file')} restored`;
+}
+
+/** One file an undo left alone, e.g. "c.ts changed since, left as it is". */
+export function undoSkipLabel(skip: BatchUndo['skipped'][number]): string {
+  if (skip.reason === 'changed_since') return `${skip.path} changed since, left as it is`;
+  if (skip.reason === 'unavailable') return `${skip.path}: its earlier content is no longer available`;
+  return `${skip.path} couldn't be restored`;
+}

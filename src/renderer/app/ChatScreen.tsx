@@ -6,8 +6,8 @@ import { ReplyComposer } from '@renderer/features/composer';
 import { Conversation } from '@renderer/features/conversation';
 import { ApiError } from '@renderer/lib/api-client';
 import { useApiClient } from '@renderer/lib/api-context';
-import { queryKeys } from '@renderer/lib/query-keys';
 import { paths } from '@renderer/lib/routes';
+import { chatQueryOptions } from '@renderer/stores/edit-modes';
 import type { ChatSummary } from '@shared/types';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router';
@@ -23,7 +23,7 @@ export function ChatScreen() {
   const { id = '' } = useParams();
   const api = useApiClient();
   const navigate = useNavigate();
-  const chatQuery = useQuery({ queryKey: queryKeys.chat(id), queryFn: () => api.getChat(id), enabled: id !== '' });
+  const chatQuery = useQuery({ ...chatQueryOptions(api, id), enabled: id !== '' });
   const chats = useChats();
   const summary = newest(
     chats.data?.find((c) => c.id === id),
@@ -48,7 +48,7 @@ export function ChatScreen() {
     <>
       <ChatHeader chat={summary} />
       <div className="flex min-h-0 flex-1 flex-col">
-        <Conversation chatId={id} />
+        <Conversation chat={summary} />
       </div>
       <ReplyComposer chat={summary} />
     </>

@@ -277,6 +277,39 @@ describe('Auto agent loop with real files', () => {
     expect((await s.svc.get(h.chatId)).pending?.files.map((f) => f.path)).toEqual(['review.txt']);
   });
 
+  it.each([
+    ['review', 'auto'],
+    ['auto', 'review'],
+  ] as const)(
+    'runs the whole turn in the mode the caller checked (%s), not the stored one (%s)',
+    async (given, stored) => {
+      const note = vi.spyOn(s.svc, 'takeNote');
+      await setup((_, index) => (index === 0 ? calls(['write_file', { path: 'n.txt', content: 'new' }]) : reply));
+      await h.chats.update(h.chatId, { editMode: stored });
+      const contexts = vi.spyOn(s.svc, 'tools');
+      const events = await h.run({ editMode: given });
+      for (const req of h.provider.calls) {
+        for (const line of editPromptLines(given)) expect(req.system).toContain(line);
+        expect(req.tools?.find((t) => t.name === 'write_file')?.description).toBe(editToolDescriptions(given).write);
+      }
+      expect(note.mock.calls).toEqual([[h.chatId, { mode: given, firstTurn: true }]]);
+      expect(contexts.mock.calls.map(([input]) => input.mode)).toEqual([given, given]);
+      expect(await s.exists('n.txt')).toBe(given === 'auto');
+      expect(events.some((e) => e.type === 'auto_batch_updated')).toBe(given === 'auto');
+      // The stored mode is left alone: it applies to a turn that is given none.
+      expect((await h.chats.get(h.chatId)).editMode).toBe(stored);
+    },
+  );
+
+  it('a retry undoes with the mode the caller checked', async () => {
+    const retry = vi.spyOn(s.svc, 'prepareRetry');
+    await setup(() => reply);
+    await h.run();
+    await h.chats.update(h.chatId, { editMode: 'review' });
+    await h.run({ newUserMessage: undefined, editMode: 'auto' });
+    expect(retry.mock.calls.map(([input]) => input.mode)).toEqual(['auto']);
+  });
+
   it('Stop while a write is in flight keeps the real result of the write', async () => {
     const controller = new AbortController();
     const original = s.svc.tools.bind(s.svc);

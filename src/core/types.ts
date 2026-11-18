@@ -72,6 +72,13 @@ export interface ProjectsService {
   remove(id: Id): Promise<void>;
 }
 
+/** What `ChatsService.update` checks under the lock that commits (see there). */
+export interface ChatUpdateExpect {
+  editMode?: EditMode;
+  projectId?: Id | null;
+  checkAutoProject?: (projectId: Id) => Promise<void>;
+}
+
 export interface ChatsService {
   /** Sorted by `updatedAt` desc. */
   list(): Promise<ChatSummary[]>;
@@ -83,6 +90,12 @@ export interface ChatsService {
    * Bumps `updatedAt` only when `model` or `effort` changes (renames, moves, archive and edit-mode changes don't
    * reorder the sidebar). `archived` applies to any chat, in a project or not. Only `archived` changes the flag: moving a chat
    * between projects, or to and from `projectId: null`, keeps it.
+   *
+   * `expect`: what the client showed when the user acted. Each field that is set is compared with the stored chat
+   * under the lock that commits the write; a mismatch throws `conflict` (`EDIT_MODE_CHANGED` /
+   * `CHAT_PROJECT_CHANGED`) and writes nothing. `checkAutoProject` runs under the same lock, after those checks and
+   * before the write, when the update turns Auto on in a project or moves an Auto chat into another project, with the
+   * project the chat will run in; throwing refuses the update and writes nothing.
    */
   update(
     id: Id,
@@ -94,6 +107,7 @@ export interface ChatsService {
       effort?: ReasoningEffort | null;
       editMode?: EditMode;
     },
+    expect?: ChatUpdateExpect,
   ): Promise<ChatSummary>;
   /**
    * Replaces one user message's `changesNote` (`undefined` removes it); a retry adds what it couldn't undo. Doesn't
@@ -155,6 +169,18 @@ export interface RunTurnInput {
   emit: (event: AgentEvent) => void | Promise<void>;
   /** The client can answer terminal reads (Electron), so `read_terminal` is offered (terminal plan §2). */
   terminal?: boolean;
+  /**
+   * The edit mode this turn runs in. The HTTP routes read it under the turn's start claim and check it against the
+   * mode the client showed, so the turn uses the very value that was checked: a PATCH landing after that read
+   * applies from the next turn. Omitted = the agent reads the chat's stored mode once at turn start.
+   */
+  editMode?: EditMode;
+  /**
+   * The project this turn runs in, read under the start claim together with `editMode`, so a move landing after
+   * that read can't run the checked mode in another project. Omitted = the chat's stored project, read once at
+   * turn start.
+   */
+  projectId?: Id | null;
 }
 
 /** Relays `read_terminal` to the client: a stream event out, an HTTP answer back (terminal plan §3, §4.3). */

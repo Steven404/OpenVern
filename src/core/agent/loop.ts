@@ -285,16 +285,22 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
   async function execute(input: RunTurnInput, signal: AbortSignal, emit: Emit, state: RunState): Promise<void> {
     const { chatId, model } = input;
     let chat = await chats.get(chatId);
-    // MODE READ ONCE PER TURN (invariant): the edit mode is taken from this read and used for the whole run: the tool
-    // descriptions, the system prompt, the note and the write path. A PATCH during the run is stored but applies
-    // from the next turn; reading it again mid-run could tell the model its edits are proposals while they are
-    // written to disk, or the other way round.
-    const editMode: EditMode = chat.editMode;
+    // MODE READ ONCE PER TURN (invariant), and the project with it: the edit mode and the project are read once, at
+    // turn start, and used for the whole run: the tool descriptions, the system prompt, the note, the snapshot, the
+    // retry undo and restore, and the write path. The HTTP routes do that read themselves, under the turn's start
+    // claim, check the mode against the one the client showed, and pass both in as `input.editMode` and
+    // `input.projectId`; the turn must use those very values, because a PATCH can land between their read and this
+    // one (a PATCH takes no run claim). A mode change would run the turn in a mode the user wasn't shown, and a move
+    // would run the checked mode in a project it wasn't checked for. Only a caller that passes neither (tests, direct
+    // use) gets this read. A PATCH during the run is stored but applies from the next turn; reading the mode again
+    // mid-run could tell the model its edits are proposals while they are written to disk, or the other way round.
+    const editMode: EditMode = input.editMode ?? chat.editMode;
+    const projectId: Id | null = input.projectId !== undefined ? input.projectId : chat.projectId;
 
     let project: Project | undefined;
-    if (chat.projectId) {
+    if (projectId) {
       try {
-        project = await projects.get(chat.projectId);
+        project = await projects.get(projectId);
       } catch (err) {
         // A vanished project makes this a loose chat; anything else is a real failure.
         if (!(err instanceof CoreError && err.code === 'not_found')) throw err;
@@ -308,9 +314,7 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
       const { text, attachmentIds } = input.newUserMessage;
       const refs = attachmentIds.length > 0 ? await attachments.bindToChat(attachmentIds, chatId) : [];
       const firstTurn = !chat.messages.some((m) => m.role === 'user');
-      const changesNote = chat.projectId
-        ? await deps.changes?.takeNote(chatId, { mode: editMode, firstTurn })
-        : undefined;
+      const changesNote = projectId ? await deps.changes?.takeNote(chatId, { mode: editMode, firstTurn }) : undefined;
       const message: UserMessage = {
         id: crypto.randomUUID(),
         role: 'user',
@@ -321,7 +325,7 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
       };
       await chats.appendMessage(chatId, message);
       // Remember the pending edits as they were when this turn started, so a retry can restore them (plan §3.2).
-      if (chat.projectId) await deps.changes?.snapshot(chatId, message.id);
+      if (projectId) await deps.changes?.snapshot(chatId, message.id);
       state.modified = true;
       await emit({ type: 'user_message', message });
       chat = await chats.get(chatId);
@@ -358,7 +362,7 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
       }
       chat = await chats.truncateAfterLastUser(chatId);
       state.modified = true;
-      if (chat.projectId) await deps.changes?.restore(chatId, lastUser.id);
+      if (projectId) await deps.changes?.restore(chatId, lastUser.id);
     }
     // The user message that started this turn; auto batches are keyed by it.
     const turnId = chat.messages.findLast((m) => m.role === 'user')?.id ?? '';

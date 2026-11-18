@@ -8,6 +8,7 @@ import { MemoryRouter } from 'react-router';
 import { ApiClientProvider } from '../../lib/api-context';
 import { MockApiClient, type MockApiClientOptions } from '../../lib/mock-api-client';
 import { queryKeys } from '../../lib/query-keys';
+import { noteAnswer, useEditModes } from '../../stores/edit-modes';
 import { useRunsStore } from '../../stores/runs';
 import { useUiStore } from '../../stores/ui';
 
@@ -27,6 +28,7 @@ export function installDomStubs() {
 
 export function resetStores() {
   useRunsStore.setState({ runs: {}, chatModels: {}, chatEfforts: {} });
+  useEditModes.setState({ entries: {} });
   useUiStore.setState({ settingsOpen: false, newProjectOpen: false });
 }
 
@@ -46,7 +48,11 @@ export function renderWithProviders(ui: ReactElement, opts: RenderOptions = {}) 
       mutations: { retry: false },
     },
   });
-  for (const chat of opts.chats ?? []) queryClient.setQueryData(queryKeys.chat(chat.id), chat);
+  // Put in the cache without a read, so their mode is noted as the shown mode, as a `createChat` answer is.
+  for (const chat of opts.chats ?? []) {
+    queryClient.setQueryData(queryKeys.chat(chat.id), chat);
+    noteAnswer(chat.id, chat.editMode);
+  }
   const result = render(
     <QueryClientProvider client={queryClient}>
       <ApiClientProvider client={api}>

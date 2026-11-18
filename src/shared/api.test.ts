@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CHAT_PROJECT_CHANGED,
   createChatBody,
+  EDIT_MODE_CHANGED,
+  PROJECT_NOT_IN_GIT,
   ROUTES,
   retryBody,
   sendMessageBody,
@@ -23,6 +26,66 @@ describe('api schemas', () => {
       expect(createChatBody.safeParse({ projectId: null, model: 'm', editMode }).success).toBe(false);
       expect(updateChatBody.safeParse({ editMode }).success).toBe(false);
     }
+  });
+
+  it('takes an optional expectedEditMode on send, retry and update', () => {
+    const send = { text: 'hi', attachmentIds: [], model: 'm' };
+    for (const expectedEditMode of ['review', 'auto']) {
+      expect(sendMessageBody.parse({ ...send, expectedEditMode }).expectedEditMode).toBe(expectedEditMode);
+      expect(retryBody.parse({ model: 'm', expectedEditMode }).expectedEditMode).toBe(expectedEditMode);
+      expect(updateChatBody.parse({ projectId: null, expectedEditMode }).expectedEditMode).toBe(expectedEditMode);
+    }
+    expect('expectedEditMode' in sendMessageBody.parse(send)).toBe(false);
+    expect('expectedEditMode' in retryBody.parse({ model: 'm' })).toBe(false);
+    expect('expectedEditMode' in updateChatBody.parse({ projectId: null })).toBe(false);
+    for (const expectedEditMode of ['bogus', '', null, 1]) {
+      expect(sendMessageBody.safeParse({ ...send, expectedEditMode }).success).toBe(false);
+      expect(retryBody.safeParse({ model: 'm', expectedEditMode }).success).toBe(false);
+      expect(updateChatBody.safeParse({ expectedEditMode }).success).toBe(false);
+    }
+    expect(EDIT_MODE_CHANGED).toBe("This chat's edit mode changed. Check Review / Auto and send again.");
+  });
+
+  it('takes an optional expectedProjectId on update (a project id or null)', () => {
+    expect(updateChatBody.parse({ editMode: 'auto', expectedProjectId: 'p1' }).expectedProjectId).toBe('p1');
+    expect(updateChatBody.parse({ editMode: 'auto', expectedProjectId: null }).expectedProjectId).toBeNull();
+    expect('expectedProjectId' in updateChatBody.parse({ editMode: 'auto' })).toBe(false);
+    for (const expectedProjectId of ['', 1, false]) {
+      expect(updateChatBody.safeParse({ editMode: 'auto', expectedProjectId }).success).toBe(false);
+    }
+    expect(CHAT_PROJECT_CHANGED).toBe('This chat moved to another project. Check Review / Auto and try again.');
+  });
+
+  it('takes an optional expectedProjectId on send and retry (a project id or null)', () => {
+    const send = { text: 'hi', attachmentIds: [], model: 'm' };
+    for (const expectedProjectId of ['p1', null]) {
+      expect(sendMessageBody.parse({ ...send, expectedProjectId }).expectedProjectId).toBe(expectedProjectId);
+      expect(retryBody.parse({ model: 'm', expectedProjectId }).expectedProjectId).toBe(expectedProjectId);
+    }
+    expect('expectedProjectId' in sendMessageBody.parse(send)).toBe(false);
+    expect('expectedProjectId' in retryBody.parse({ model: 'm' })).toBe(false);
+    for (const expectedProjectId of ['', 1, false]) {
+      expect(sendMessageBody.safeParse({ ...send, expectedProjectId }).success).toBe(false);
+      expect(retryBody.safeParse({ model: 'm', expectedProjectId }).success).toBe(false);
+    }
+  });
+
+  it('takes an optional expectedInGitRepo on createChat and update', () => {
+    for (const expectedInGitRepo of [true, false]) {
+      expect(updateChatBody.parse({ editMode: 'auto', expectedInGitRepo }).expectedInGitRepo).toBe(expectedInGitRepo);
+      expect(
+        createChatBody.parse({ projectId: 'p1', model: 'm', editMode: 'auto', expectedInGitRepo }).expectedInGitRepo,
+      ).toBe(expectedInGitRepo);
+    }
+    expect('expectedInGitRepo' in updateChatBody.parse({ editMode: 'auto' })).toBe(false);
+    expect('expectedInGitRepo' in createChatBody.parse({ projectId: null, model: 'm' })).toBe(false);
+    for (const expectedInGitRepo of ['true', 1, null]) {
+      expect(updateChatBody.safeParse({ editMode: 'auto', expectedInGitRepo }).success).toBe(false);
+      expect(createChatBody.safeParse({ projectId: null, model: 'm', expectedInGitRepo }).success).toBe(false);
+    }
+    expect(PROJECT_NOT_IN_GIT).toBe(
+      "This project's folder is no longer a Git repository. Check the warning and try again.",
+    );
   });
 
   it('exposes the undo route and accepts an empty body', () => {

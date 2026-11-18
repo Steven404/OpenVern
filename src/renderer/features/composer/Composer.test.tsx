@@ -7,6 +7,7 @@ import { useState } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../../lib/api-client';
 import { MockApiClient } from '../../lib/mock-api-client';
+import { useEditModes } from '../../stores/edit-modes';
 import { useRunsStore } from '../../stores/runs';
 import { useUiStore } from '../../stores/ui';
 import { Conversation } from '../conversation';
@@ -32,6 +33,11 @@ const textarea = () => screen.getByLabelText('Message') as HTMLTextAreaElement;
 const fileInput = () => screen.getByTestId('file-input') as HTMLInputElement;
 const type = (text: string) => fireEvent.change(textarea(), { target: { value: text } });
 const sendButton = () => screen.getByRole('button', { name: 'Send message' }) as HTMLButtonElement;
+
+/** A reply goes out only once the chat was read and its edit mode is on screen. */
+async function waitForMode(chatId: string) {
+  await waitFor(() => expect(useEditModes.getState().entries[chatId]?.status).toBe('known'));
+}
 
 async function waitForIdle(chatId: string) {
   await waitFor(() => expect(useRunsStore.getState().runs[chatId]).toBeUndefined());
@@ -66,6 +72,7 @@ describe('send keys', () => {
     const { api, chat } = await setup();
     const send = vi.spyOn(api, 'sendMessage');
     renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    await waitForMode(chat.id);
 
     fireEvent.keyDown(textarea(), { key: 'Enter' }); // empty
     expect(send).not.toHaveBeenCalled();
@@ -83,6 +90,8 @@ describe('send keys', () => {
       attachmentIds: [],
       model: chat.model,
       effort: chat.effort,
+      expectedEditMode: chat.editMode,
+      expectedProjectId: chat.projectId,
     });
     expect(textarea().value).toBe('');
     await waitForIdle(chat.id);
@@ -103,6 +112,7 @@ describe('send keys', () => {
     const { api, chat } = await setup({ delayMs: 5 });
     const send = vi.spyOn(api, 'sendMessage');
     renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    await waitForMode(chat.id);
     type('first');
     fireEvent.keyDown(textarea(), { key: 'Enter' });
     await screen.findByRole('button', { name: 'Stop' });
@@ -119,7 +129,7 @@ describe('stop', () => {
     const { api, chat } = await setup({ delayMs: 5 });
     renderWithProviders(
       <>
-        <Conversation chatId={chat.id} />
+        <Conversation chat={chat} />
         <ReplyComposer chat={chat} />
       </>,
       { api },
@@ -147,7 +157,7 @@ describe('stop during a tool run', () => {
     const { api, chat } = await setup({ delayMs: 5 });
     renderWithProviders(
       <>
-        <Conversation chatId={chat.id} />
+        <Conversation chat={chat} />
         <ReplyComposer chat={chat} />
       </>,
       { api },

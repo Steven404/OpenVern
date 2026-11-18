@@ -1,8 +1,10 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { CHAT_PROJECT_CHANGED, EDIT_MODE_CHANGED } from '@shared/api';
 import { NEW_CHAT_TITLE, REASONING_EFFORTS } from '@shared/constants';
 import type { AssistantMessage, Message, Usage, UserMessage } from '@shared/types';
 import { describe, expect, it, vi } from 'vitest';
+import { CoreError } from '../errors';
 import { createStorage } from './index';
 import { dataPaths } from './paths';
 import { cleanupTempDirs, MemorySecretStore, makeStorage, makeTempDir, recordingLogger } from './test-helpers';
@@ -1343,4 +1345,88 @@ describe('ChatsService.setChangesNote', () => {
     expect(loaded.messages.map((m) => m.id).sort()).toEqual(['a1', 'a2', 'u1', 'u2', 'u3']);
     expect(loaded.messages.find((m) => m.id === 'u2')).toMatchObject({ changesNote: 'n' });
   });
+});
+
+describe('ChatsService update: the expected mode and project are checked under the lock that commits', () => {
+  async function setup() {
+    const made = await makeStorage();
+    const a = await made.storage.projects.create({ rootPath: await makeTempDir() });
+    const b = await made.storage.projects.create({ rootPath: await makeTempDir() });
+    const chat = await made.storage.chats.create({ projectId: a.id, model: 'm' });
+    return { ...made, a: a.id, b: b.id, chat };
+  }
+  const files = async (dataDir: string, id: string) => [
+    await fs.readFile(dataPaths(dataDir).chatFile(id), 'utf8'),
+    await fs.readFile(dataPaths(dataDir).chatsIndex, 'utf8'),
+  ];
+
+  it('a mismatched expect.editMode or expect.projectId throws conflict and leaves the file and index byte-identical', async () => {
+    const { storage, dataDir, b, chat } = await setup();
+    const before = await files(dataDir, chat.id);
+    await expect(storage.chats.update(chat.id, { projectId: b }, { editMode: 'auto' })).rejects.toMatchObject({
+      code: 'conflict',
+      message: EDIT_MODE_CHANGED,
+    });
+    await expect(storage.chats.update(chat.id, { editMode: 'auto' }, { projectId: b })).rejects.toMatchObject({
+      code: 'conflict',
+      message: CHAT_PROJECT_CHANGED,
+    });
+    await expect(storage.chats.update(chat.id, { title: 'x' }, { projectId: null })).rejects.toMatchObject({
+      code: 'conflict',
+    });
+    expect(await files(dataDir, chat.id)).toEqual(before);
+  });
+
+  it('a matching expect goes through', async () => {
+    const { storage, a, b, chat } = await setup();
+    await storage.chats.update(chat.id, { editMode: 'auto' }, { projectId: a });
+    expect(await storage.chats.update(chat.id, { projectId: b }, { editMode: 'auto' })).toMatchObject({
+      projectId: b,
+      editMode: 'auto',
+    });
+  });
+
+  it('checkAutoProject runs under the lock with the project Auto lands in; throwing writes nothing', async () => {
+    const { storage, dataDir, a, b, chat } = await setup();
+    const seen: string[] = [];
+    const refuse = async (projectId: string) => {
+      seen.push(projectId);
+      throw new CoreError('conflict', 'no');
+    };
+    const before = await files(dataDir, chat.id);
+    await expect(storage.chats.update(chat.id, { editMode: 'auto' }, { checkAutoProject: refuse })).rejects.toThrow(
+      'no',
+    );
+    expect(await files(dataDir, chat.id)).toEqual(before);
+    await storage.chats.update(chat.id, { editMode: 'auto' });
+    const auto = await files(dataDir, chat.id);
+    await expect(storage.chats.update(chat.id, { projectId: b }, { checkAutoProject: refuse })).rejects.toThrow('no');
+    expect(await files(dataDir, chat.id)).toEqual(auto);
+    expect(seen).toEqual([a, b]);
+    // Nothing that leaves Auto off, stays in place or leaves the project asks.
+    const allow = async (projectId: string) => {
+      seen.push(`allow ${projectId}`);
+    };
+    await storage.chats.update(chat.id, { title: 'Renamed' }, { checkAutoProject: refuse });
+    await storage.chats.update(chat.id, { projectId: a }, { checkAutoProject: refuse });
+    await storage.chats.update(chat.id, { projectId: b, editMode: 'review' }, { checkAutoProject: refuse });
+    await storage.chats.update(chat.id, { projectId: null }, { checkAutoProject: refuse });
+    await storage.chats.update(chat.id, { editMode: 'auto' }, { checkAutoProject: refuse });
+    await storage.chats.update(chat.id, { projectId: a }, { checkAutoProject: allow });
+    expect(seen).toEqual([a, b, `allow ${a}`]);
+    expect(await storage.chats.get(chat.id)).toMatchObject({ projectId: a, editMode: 'auto' });
+  });
+
+  it.each(['auto first', 'move first'])(
+    'a racing Auto switch and a move expecting Review never end in the other project in Auto (%s)',
+    async (order) => {
+      const { storage, b, chat } = await setup();
+      const auto = () => storage.chats.update(chat.id, { editMode: 'auto' });
+      const move = () => storage.chats.update(chat.id, { projectId: b }, { editMode: 'review' });
+      const results = await Promise.allSettled(order === 'auto first' ? [auto(), move()] : [move(), auto()]);
+      expect(results.filter((r) => r.status === 'fulfilled').length).toBeGreaterThan(0);
+      const stored = await storage.chats.get(chat.id);
+      expect(stored.projectId === b && stored.editMode === 'auto').toBe(false);
+    },
+  );
 });
