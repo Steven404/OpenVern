@@ -36,6 +36,15 @@ function Goto({ to, label }: { to: string; label: string }) {
   );
 }
 
+function GoBack() {
+  const navigate = useNavigate();
+  return (
+    <button type="button" onClick={() => navigate(-1)}>
+      go back
+    </button>
+  );
+}
+
 function ChatRoute() {
   const id = useLocation().pathname.split('/').at(-1) ?? '';
   return <Conversation chatId={id} />;
@@ -155,6 +164,42 @@ describe('New chat: the edit mode chip', () => {
     fireEvent.click(screen.getByRole('button', { name: 'back' }));
     await waitFor(() => expect(screen.getByTestId('location').textContent).toBe(paths.newChat(gitA.id)));
     expect((await screen.findByTestId('edit-mode-chip')).getAttribute('data-mode')).toBe('review');
+  });
+
+  it('Back to an earlier New chat, where Auto was picked, shows Review and sends Review', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const { gitA, gitB } = await projectsOf(api);
+    const create = vi.spyOn(api, 'createChat');
+    renderWithProviders(
+      <App
+        extra={
+          <>
+            <Goto to={paths.newChat(gitB.id)} label="open B" />
+            <GoBack />
+          </>
+        }
+      />,
+      { api, route: paths.newChat(gitA.id) },
+    );
+    await ready(gitA.name);
+    await pick('auto');
+    expect(modeChip().getAttribute('data-mode')).toBe('auto');
+
+    fireEvent.click(screen.getByRole('button', { name: 'open B' }));
+    await waitFor(() => expect(projectChip().textContent).toBe(gitB.name));
+    expect(modeChip().getAttribute('data-mode')).toBe('review');
+
+    // History brings back the entry Auto was picked in: still a new open.
+    fireEvent.click(screen.getByRole('button', { name: 'go back' }));
+    await waitFor(() => expect(projectChip().textContent).toBe(gitA.name));
+    expect(screen.getByTestId('location').textContent).toBe(paths.newChat(gitA.id));
+    expect(modeChip().getAttribute('data-mode')).toBe('review');
+    await new Promise((r) => setTimeout(r, 20));
+    expect(modeChip().getAttribute('data-mode')).toBe('review');
+
+    sendText('hello');
+    await waitFor(() => expect(create).toHaveBeenCalled());
+    expect(create).toHaveBeenCalledWith({ projectId: gitA.id, model: DEFAULT_MODEL, editMode: 'review' });
   });
 
   it('resets to Review when the project changes from the chip, and the send then carries Review', async () => {

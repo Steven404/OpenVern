@@ -60,6 +60,30 @@ const api = (path, method = 'GET', body) =>
   }).then(async (r) => ({ status: r.status, body: r.status === 204 ? null : await r.json() }))`);
 
 const isIdle = `!document.querySelector('button[aria-label="Stop"]')`;
+// The conversation is busy from the moment a message is sent until its run has settled (the caches are refreshed).
+const settled = `!document.querySelector('section[aria-label="Conversation"][aria-busy="true"]')`;
+// No finite CSS transition or animation is running (the panel animates its width; spinners loop and don't count).
+const still = `document.getAnimations().every((a) => a.effect?.getTiming().iterations === Infinity)`;
+/** Polls a Node-side condition (e.g. server state) like `waitFor` polls the page. */
+async function waitUntil(fn, label, ms = 10000) {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    const value = await fn();
+    if (value) return value;
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${label}`);
+    await sleep(100); // poll interval, not a wait for readiness
+  }
+}
+/** Reloads the page and waits until the new document is up (the old one may still match any selector). */
+async function reload() {
+  await ev('window.__e2eBeforeReload = true; location.reload()');
+  // An evaluation can fail while the old document is torn down: that is "not yet", not an error.
+  await waitUntil(
+    () => ev(`!window.__e2eBeforeReload && document.readyState === 'complete'`).catch(() => false),
+    'page reloaded',
+    20000,
+  );
+}
 const chatId = () => ev(`location.hash.split('/').pop()`);
 const changes = async () => (await api(`/chats/${await chatId()}/changes`)).body;
 const chatNow = async () => (await api(`/chats/${await chatId()}`)).body;
@@ -83,10 +107,9 @@ async function send(message) {
 async function say(message, ms = 25000) {
   const before = await ev(`document.querySelectorAll('[data-testid=user-bubble]').length`);
   await send(message);
+  // The bubble comes from the run, so once it shows the conversation is busy until the run has settled.
   await waitFor(`document.querySelectorAll('[data-testid=user-bubble]').length > ${before}`, 'user bubble');
-  await sleep(300);
-  await waitFor(isIdle, 'turn finished', ms);
-  await sleep(600);
+  await waitFor(settled, 'turn settled', ms);
 }
 async function newChatIn(projectName) {
   await ev(`location.hash = '#/new'`);
@@ -101,38 +124,46 @@ async function newChatIn(projectName) {
   // The chip appears once the model is known to use tools and the project has loaded.
   await waitFor(CHIP, 'edit mode chip');
 }
-/** Opens the chip's menu and picks a mode (a real click: Radix menus ignore a bare `.click()`). */
+const dialog = `document.querySelector('[data-testid=no-git-dialog]')`;
+const noMenu = `!document.querySelector('[role=menu]')`;
+const chipReady = `!!${CHIP} && !${CHIP}.disabled && !${CHIP}.hasAttribute('aria-busy')`;
+/**
+ * Opens the chip's menu and picks a mode (a real click: Radix menus ignore a bare `.click()`). Returns once the menu
+ * has closed and either the chip shows the mode (its change saved) or the no-Git dialog asks first.
+ */
 async function pickMode(mode) {
-  await sleep(300);
+  await waitFor(`${noMenu} && ${chipReady} && ${still}`, 'edit mode chip ready');
   await click(CHIP, 'edit mode chip');
   await waitFor(`!!document.querySelector('[data-testid=edit-mode-${mode}]')`, 'edit mode menu');
   await click(`document.querySelector('[data-testid=edit-mode-${mode}]')`, `mode ${mode}`);
-  await sleep(300);
+  await waitFor(
+    `${noMenu} && (!!${dialog} || (${chipReady} && ${CHIP}.getAttribute('data-mode') === ${JSON.stringify(mode)}))`,
+    `mode ${mode} chosen`,
+  );
 }
-const dialog = `document.querySelector('[data-testid=no-git-dialog]')`;
 
 const panelOpen = () => ev(`!!document.querySelector('#right-panel')`);
 async function setPanel(open) {
   if ((await panelOpen()) === open) return;
-  await sleep(600);
+  await waitFor(`${noMenu} && ${still}`, 'page still');
   await click(`document.querySelector('button[aria-label="Toggle right panel"]')`, 'panel toggle');
   await waitFor(open ? `!!document.querySelector('#right-panel')` : `!document.querySelector('#right-panel')`, 'panel');
-  await sleep(300);
+  await waitFor(still, 'panel animation done');
 }
 const launcherRow = (label) =>
   `[...document.querySelectorAll('#right-panel ul button')].find((b) => b.querySelector('span span')?.textContent === ${JSON.stringify(label)})`;
 async function openDiff() {
   const tab = `[...document.querySelectorAll('#right-panel [role=tab]')].find((t) => t.textContent.trim() === 'Diff')`;
   await setPanel(true);
-  await sleep(600); // the panel animates its width; clicking mid-animation hits the wrong tab
+  // The panel animates its width; clicking mid-animation hits the wrong tab.
+  await waitFor(still, 'panel animation done');
   if (await ev(`!!${tab}`)) await click(tab, 'Diff tab');
   else {
     await click(`document.querySelector('button[aria-label="Open a panel"]')`, 'plus');
     await waitFor(`document.body.innerText.includes('Open a panel')`, 'launcher');
     await click(launcherRow('Diff'), 'Diff row');
   }
-  await waitFor(`!!document.querySelector('section[aria-label="Review changes"]')`, 'diff surface');
-  await sleep(300);
+  await waitFor(`!!document.querySelector('section[aria-label="Review changes"]') && ${still}`, 'diff surface');
 }
 const history = `document.querySelector('section[aria-label="History"]')`;
 const historyEntries = `[...(${history}?.querySelectorAll('[data-testid=applied-batch]') ?? [])]`;
@@ -144,8 +175,11 @@ async function undoLastCard() {
   const text = await ev(`document.querySelector('[data-testid=undo-dialog]').innerText`);
   await click(`document.querySelector('[data-testid=undo-confirm]')`, 'Undo edits');
   await waitFor(`!document.querySelector('[data-testid=undo-dialog]')`, 'dialog closed', 15000);
-  await waitFor(`${lastCard}?.getAttribute('data-undo') === 'undone'`, 'card undone', 15000);
-  await sleep(400);
+  await waitFor(
+    `${lastCard}?.getAttribute('data-undo') === 'undone' && !!${lastCard}.querySelector('[data-testid=undo-status]')`,
+    'card undone',
+    15000,
+  );
   return text;
 }
 
@@ -153,15 +187,13 @@ async function undoLastCard() {
 await page.viewport(1440, 900);
 await page.send('Page.navigate', { url: `${BASE}#/new` });
 await waitFor(`document.body.innerText.includes('What are we building')`, 'app loaded');
-await sleep(500);
 if (!(await api('/settings')).body.openRouter.configured) {
   const r = await api('/settings/openrouter-key', 'PUT', { apiKey: 'sk-or-v1-0123456789abcdefa1b2' });
   if (r.status !== 200) throw new Error(`could not set the fake key: ${r.status}`);
 }
 let project = (await api('/projects')).body.find((p) => p.rootPath.endsWith(PROJECT_NAME));
 if (!project) project = (await api('/projects', 'POST', { rootPath: PROJECT })).body;
-await ev('location.reload()');
-await sleep(1500);
+await reload();
 await waitFor(`document.querySelector('button[aria-label^="Model:"]')`, 'model picker');
 
 try {
@@ -195,7 +227,6 @@ try {
   // Keep Review changes nothing, and the dialog comes back on the next try.
   await click(`document.querySelector('[data-testid=no-git-keep-review]')`, 'Keep Review');
   await waitFor(`!${dialog}`, 'dialog closed');
-  await sleep(300);
   check('1 "Keep Review" closes the dialog and leaves the chip at Review', (await chipMode()) === 'review');
   await pickMode('auto');
   await waitFor(`!!${dialog}`, 'no-Git dialog again');
@@ -208,7 +239,8 @@ try {
   await send('Change things [fake:edit=a.txt] [fake:write=n.txt] [fake:delete=del.txt]');
   await waitFor(`location.hash.startsWith('#/chat/')`, 'project chat');
   await waitFor(`${CARDS}.length === 1 && ${isIdle}`, 'Edits applied · Auto card', 30000);
-  await sleep(600);
+  await waitFor(settled, 'first turn settled', 15000);
+  await waitUntil(async () => (await autoBatches()).length === 1, 'first auto batch stored');
   check('2 the chat was created in Auto', (await chatNow()).editMode === 'auto' && (await chipMode()) === 'auto');
   check(
     '2 a.txt has the marker exactly once',
@@ -283,21 +315,35 @@ try {
   check('4 a.txt has the marker once after the second turn', countOf(read('a.txt'), MARKER) === 1);
   check('4 n.txt exists after the second turn', existsSync(file('n.txt')));
   await click(`document.querySelector('button[aria-label="Stop"]')`, 'Stop');
-  await waitFor(byText('article button', 'Retry', true), 'Retry button after stopping', 20000);
-  await sleep(500);
+  await waitFor(`!!${byText('article button', 'Retry', true)} && ${settled}`, 'Retry button after stopping', 20000);
   check(
     '4 stopping kept the written files and the card',
     countOf(read('a.txt'), MARKER) === 1 && (await cardCount()) === 2,
   );
+  // Waits on the retry's own progress: "not busy" alone is already true before it starts, and the stopped attempt's card
+  // matches any card check. The retry adds a third batch, its card replaces the stopped attempt's, then it settles.
+  const stoppedBatchId = await lastCardAttr('data-batch-id');
+  const batchesBefore = (await autoBatches()).length;
   await click(byText('article button', 'Retry', true), 'Retry');
-  await sleep(500);
-  await waitFor(isIdle, 'retry finished', 30000);
+  const retried = await waitUntil(
+    async () => {
+      const all = await autoBatches();
+      return all.length > batchesBefore ? all.at(-1) : null;
+    },
+    'the retry wrote a new batch',
+    30000,
+  );
   await waitFor(
-    `${CARDS}.length >= 1 && ${lastCard}.getAttribute('data-undo') === 'undoable'`,
-    'card after retry',
+    `${lastCard}?.getAttribute('data-batch-id') === ${JSON.stringify(retried.id)} && ${lastCard}.getAttribute('data-batch-id') !== ${JSON.stringify(stoppedBatchId)}`,
+    "the retry's card",
     15000,
   );
-  await sleep(800);
+  // The batch was written mid-run, so the conversation is busy here until the retry has settled.
+  await waitFor(
+    `${settled} && ${isIdle} && ${lastCard}.getAttribute('data-undo') === 'undoable'`,
+    'retry settled',
+    30000,
+  );
   const afterRetry = read('a.txt');
   check(
     '4 after Retry a.txt has exactly one marker (the first attempt was undone)',
@@ -362,9 +408,8 @@ try {
 
   // ------------------------------------------------------------------------- 7 reload: still Review, History
   const idBefore = await chatId();
-  await ev('location.reload()');
+  await reload();
   await waitFor(`!!document.querySelector('[data-testid=edit-mode-chip]')`, 'chip after reload', 20000);
-  await sleep(500);
   check('7 after a reload the chat is still Review', (await chipMode()) === 'review' && (await chatId()) === idBefore);
   check('7 the server still says Review', (await chatNow()).editMode === 'review');
   check('7 the Proposed edits card is back', await ev(`!!${byText('[data-testid=changes-card]', 'Proposed edits')}`));

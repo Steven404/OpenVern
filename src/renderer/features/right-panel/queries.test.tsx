@@ -153,3 +153,62 @@ describe('Files refresh keyed on diskSeq', () => {
     ]);
   });
 });
+
+function ChatSwitcher() {
+  const [chatId, setChatId] = useState('chat-a');
+  return (
+    <>
+      <button type="button" onClick={() => setChatId('chat-b')}>
+        to B
+      </button>
+      <ChatProbe chatId={chatId} />
+    </>
+  );
+}
+function ChatProbe({ chatId }: { chatId: string }) {
+  useRefreshProjectFiles(chatId, PROJECT);
+  return null;
+}
+
+describe('Files refresh across chats', () => {
+  /** Panel open on chat A (diskSeq 100) in PROJECT; B is cached with diskSeq 2 when `bCached`. */
+  async function onChatA(bCached: boolean) {
+    const view = renderWithProviders(<ChatSwitcher />);
+    await act(async () => {
+      view.queryClient.setQueryData(queryKeys.chatChanges('chat-a'), changes(100, { applied: applied(3) }));
+      if (bCached) view.queryClient.setQueryData(queryKeys.chatChanges('chat-b'), changes(2, { applied: applied(1) }));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    const spy = vi.spyOn(view.queryClient, 'invalidateQueries');
+    spy.mockClear();
+    const keys = () => spy.mock.calls.map((c) => (c[0] as { queryKey: unknown[] }).queryKey);
+    const pushB = (next: ChatChanges) =>
+      act(async () => {
+        view.queryClient.setQueryData(queryKeys.chatChanges('chat-b'), next);
+        await new Promise((r) => setTimeout(r, 0));
+      });
+    return { ...view, spy, keys, pushB };
+  }
+
+  for (const bCached of [true, false]) {
+    it(`switching from chat A (diskSeq 100) to chat B (diskSeq 2) in the same project refreshes (B ${
+      bCached ? 'cached' : 'not cached'
+    })`, async () => {
+      const t = await onChatA(bCached);
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'to B' }));
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      if (!bCached) await t.pushB(changes(2, { applied: applied(1) }));
+      expect(t.keys()).toEqual([queryKeys.projectFiles(PROJECT), ['projectFile', PROJECT]]);
+
+      // From here B's own numbers count: a write by B refreshes, the same number again does not.
+      t.spy.mockClear();
+      await t.pushB(changes(3, { applied: applied(2) }));
+      expect(t.keys()).toEqual([queryKeys.projectFiles(PROJECT), ['projectFile', PROJECT]]);
+      t.spy.mockClear();
+      await t.pushB(changes(3, { applied: applied(2) }));
+      expect(t.spy).not.toHaveBeenCalled();
+    });
+  }
+});

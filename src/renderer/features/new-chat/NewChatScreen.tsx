@@ -1,7 +1,7 @@
 import { DRAFT_CHAT_ID } from '@shared/constants';
 import type { ChatSummary, EditMode, ReasoningEffort } from '@shared/types';
 import { useQueryClient } from '@tanstack/react-query';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router';
 import { resolveNewChatProject } from '../../app/queries';
 import { useApiClient } from '../../lib/api-context';
@@ -49,13 +49,14 @@ export function NewChatScreen() {
   // F3: a new chat starts from `lastEffort`, until the picker is used here.
   const [pickedEffort, setPickedEffort] = useState<ReasoningEffort | null | undefined>(undefined);
   const effort = pickedEffort === undefined ? (settings.data?.lastEffort ?? null) : pickedEffort;
-  // INVARIANT: the chip resets to Review on every New chat open. A pick belongs to the navigation it was made in:
-  // every navigation to this screen (a new open, "New chat here", a project change) gets a new location key, so an
-  // Auto picked (and maybe warned about) for one project or one open never carries over.
+  // INVARIANT: the chip resets to Review on every New chat open. Every navigation to this screen (a new open, "New
+  // chat here", a project change, Back and Forward) gets a new or different location key, and any change of key drops
+  // the pick, so an Auto picked (and maybe warned about) for one project or one open never carries over, not even
+  // when history brings back the entry it was picked in. A layout effect, so a dropped pick is never painted or sent.
   const { key: openKey } = useLocation();
-  const [pickedMode, setPickedMode] = useState<{ openKey: string; mode: EditMode } | null>(null);
-  const editMode: EditMode = pickedMode?.openKey === openKey ? pickedMode.mode : 'review';
-  const onEditModeChange = useCallback((mode: EditMode) => setPickedMode({ openKey, mode }), [openKey]);
+  const [editMode, setEditMode] = useState<EditMode>('review');
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `openKey` is the trigger
+  useLayoutEffect(() => setEditMode('review'), [openKey]);
   // Only a mode the chip offered is sent: it is hidden in a loose chat and for a model without tools.
   const toolsModel = modelsQuery.data?.find((m) => m.id === model)?.supportsTools === true;
   const createMode: EditMode = projectId !== null && toolsModel ? editMode : 'review';
@@ -110,7 +111,7 @@ export function NewChatScreen() {
             autoFocus
             sinkKey={DRAFT_CHAT_ID}
             editMode={editMode}
-            onEditModeChange={onEditModeChange}
+            onEditModeChange={setEditMode}
             projectSlot={<ProjectChip projects={projects} value={projectId} onChange={onProjectChange} />}
           />
         </div>

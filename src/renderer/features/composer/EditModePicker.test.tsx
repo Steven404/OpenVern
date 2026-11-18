@@ -314,3 +314,248 @@ describe('the no-Git dialog', () => {
     expect(screen.queryByTestId('no-git-dialog')).toBeNull();
   });
 });
+
+/** A promise and the function that settles it, for holding a request open while the test looks at the UI. */
+function gate() {
+  let open: () => void = () => {};
+  const promise = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { promise, open };
+}
+
+const sendButton = () => screen.getByRole('button', { name: 'Send message' }) as HTMLButtonElement;
+function typeAndEnter(text: string) {
+  fireEvent.change(screen.getByLabelText('Message'), { target: { value: text } });
+  fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' });
+}
+const tick = () => new Promise((r) => setTimeout(r, 20));
+
+describe('send is blocked while the mode is unconfirmed', () => {
+  it('blocks the button and Enter while the PATCH is unanswered, even though the server already took Auto', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const { git } = await projects(api);
+    const chat = await chatIn(api, git.id);
+    const real = api.updateChat.bind(api);
+    const response = gate();
+    vi.spyOn(api, 'updateChat').mockImplementation(async (id, patch) => {
+      const summary = await real(id, patch); // the server commits now…
+      await response.promise; // …and the answer is late
+      return summary;
+    });
+    const sendMessage = vi.spyOn(api, 'sendMessage');
+    renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    await findChip();
+    await choose('auto');
+    await waitFor(() => expect(chip().getAttribute('aria-busy')).toBe('true'));
+    expect((chip() as HTMLButtonElement).disabled).toBe(true);
+    expect(chip().getAttribute('data-mode')).toBe('review');
+    expect((await api.getChat(chat.id)).editMode).toBe('auto');
+
+    typeAndEnter('make the edits');
+    await tick();
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(sendButton().disabled).toBe(true);
+    fireEvent.submit(sendButton().closest('form') as HTMLFormElement);
+    await tick();
+    expect(sendMessage).not.toHaveBeenCalled();
+
+    response.open();
+    await waitFor(() => expect(chip().getAttribute('data-mode')).toBe('auto'));
+    expect(chip().getAttribute('aria-busy')).toBeNull();
+    expect(sendButton().disabled).toBe(false);
+    fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' });
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(useRunsStore.getState().runs[chat.id]).toBeUndefined(), { timeout: 4000 });
+  });
+
+  it('a second choice while one is in flight is not sent', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const { git } = await projects(api);
+    const chat = await chatIn(api, git.id);
+    const real = api.updateChat.bind(api);
+    const response = gate();
+    const update = vi.spyOn(api, 'updateChat').mockImplementation(async (id, patch) => {
+      await response.promise;
+      return real(id, patch);
+    });
+    renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    await findChip();
+    await choose('auto');
+    await waitFor(() => expect((chip() as HTMLButtonElement).disabled).toBe(true));
+    // The menu can't open on a disabled chip; a pick that slips through anyway is dropped.
+    fireEvent.keyDown(chip(), { key: 'Enter' });
+    await tick();
+    expect(screen.queryByTestId('edit-mode-review')).toBeNull();
+    expect(update).toHaveBeenCalledTimes(1);
+    response.open();
+    await waitFor(() => expect(chip().getAttribute('data-mode')).toBe('auto'));
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it('after a failed PATCH, keeps send blocked until a fresh read confirms the mode the server kept', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const { git } = await projects(api);
+    const chat = await chatIn(api, git.id);
+    vi.spyOn(api, 'updateChat').mockRejectedValue(new ApiError(errorInfo('internal'), 500));
+    const sendMessage = vi.spyOn(api, 'sendMessage');
+    renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    await findChip();
+    const real = api.getChat.bind(api);
+    const read = gate();
+    const getChat = vi.spyOn(api, 'getChat').mockImplementation(async (id) => {
+      await read.promise;
+      return real(id);
+    });
+    await choose('auto');
+    expect((await screen.findByRole('alert')).textContent).toContain("Couldn't change the edit mode. Try again.");
+    await waitFor(() => expect(getChat).toHaveBeenCalled());
+    expect(chip().getAttribute('aria-busy')).toBe('true');
+    typeAndEnter('make the edits');
+    await tick();
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(sendButton().disabled).toBe(true);
+
+    read.open();
+    await waitFor(() => expect(sendButton().disabled).toBe(false));
+    expect(chip().getAttribute('data-mode')).toBe('review');
+    expect(chip().getAttribute('aria-busy')).toBeNull();
+    fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' });
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(useRunsStore.getState().runs[chat.id]).toBeUndefined(), { timeout: 4000 });
+  });
+
+  it('when that read fails too, says so, keeps send blocked, and "Try again" reads again', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const { git } = await projects(api);
+    const chat = await chatIn(api, git.id);
+    vi.spyOn(api, 'updateChat').mockRejectedValue(new ApiError(errorInfo('internal'), 500));
+    const sendMessage = vi.spyOn(api, 'sendMessage');
+    renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    await findChip();
+    const getChat = vi.spyOn(api, 'getChat').mockRejectedValueOnce(new ApiError(errorInfo('network_error'), 0));
+    await choose('auto');
+    expect((await screen.findByRole('alert')).textContent).toContain(
+      "Couldn't check this chat's edit mode, so sending is paused.",
+    );
+    typeAndEnter('make the edits');
+    await tick();
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(sendButton().disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(sendButton().disabled).toBe(false));
+    expect(getChat).toHaveBeenCalledTimes(2);
+    expect(chip().getAttribute('data-mode')).toBe('review');
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+  });
+});
+
+describe('an older chat response never overwrites a confirmed mode', () => {
+  it('a read that captured Review before the switch lands after it: the chat and the chat list stay Auto', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const { git } = await projects(api);
+    const chat = await chatIn(api, git.id);
+    const { queryClient } = renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    // The list has no observer here (no sidebar), so only an explicit cancel can stop its old read.
+    queryClient.setQueryDefaults(queryKeys.chats, { queryFn: () => api.listChats() });
+    queryClient.setQueryData<ChatSummary[]>(queryKeys.chats, await api.listChats());
+    await findChip();
+
+    const old = gate();
+    const snapshot = await api.getChat(chat.id); // Review, as the server has it now
+    const listSnapshot = await api.listChats();
+    vi.spyOn(api, 'getChat').mockImplementationOnce(async () => {
+      await old.promise;
+      return snapshot;
+    });
+    vi.spyOn(api, 'listChats').mockImplementationOnce(async () => {
+      await old.promise;
+      return listSnapshot;
+    });
+    void queryClient.refetchQueries({ queryKey: queryKeys.chat(chat.id) });
+    void queryClient.refetchQueries({ queryKey: queryKeys.chats });
+    await tick();
+
+    await choose('auto');
+    await waitFor(() => expect(chip().getAttribute('data-mode')).toBe('auto'));
+    old.open();
+    await tick();
+    await tick();
+    expect(chip().getAttribute('data-mode')).toBe('auto');
+    expect(queryClient.getQueryData<Chat>(queryKeys.chat(chat.id))?.editMode).toBe('auto');
+    expect(queryClient.getQueryData<ChatSummary[]>(queryKeys.chats)?.find((c) => c.id === chat.id)?.editMode).toBe(
+      'auto',
+    );
+  });
+
+  it('a PATCH the server took but whose answer was lost: the check ignores an older read and finds Auto', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const { git } = await projects(api);
+    const chat = await chatIn(api, git.id);
+    const real = api.updateChat.bind(api);
+    vi.spyOn(api, 'updateChat').mockImplementation(async (id, patch) => {
+      await real(id, patch); // the server commits…
+      throw new ApiError(errorInfo('network_error'), 0); // …and the answer never arrives
+    });
+    const sendMessage = vi.spyOn(api, 'sendMessage');
+    const { queryClient } = renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    await findChip();
+
+    const old = gate();
+    const snapshot = await api.getChat(chat.id); // Review, from before the switch
+    vi.spyOn(api, 'getChat').mockImplementationOnce(async () => {
+      await old.promise;
+      return snapshot;
+    });
+    void queryClient.refetchQueries({ queryKey: queryKeys.chat(chat.id) });
+    await tick();
+
+    await choose('auto');
+    // The check must not reuse the old read: it finds Auto while the old read is still unanswered.
+    await waitFor(() => expect(chip().getAttribute('data-mode')).toBe('auto'));
+    old.open();
+    await tick();
+    await tick();
+    expect(chip().getAttribute('data-mode')).toBe('auto');
+    expect(queryClient.getQueryData<Chat>(queryKeys.chat(chat.id))?.editMode).toBe('auto');
+    expect(sendButton().disabled).toBe(true); // no text yet
+    typeAndEnter('go');
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(useRunsStore.getState().runs[chat.id]).toBeUndefined(), { timeout: 4000 });
+  });
+
+  it('a read that started while the PATCH was in flight lands after it: the cache stays Auto', async () => {
+    const api = new MockApiClient({ delayMs: 0 });
+    const { git } = await projects(api);
+    const chat = await chatIn(api, git.id);
+    const { queryClient } = renderWithProviders(<ReplyComposer chat={chat} />, { api });
+    await findChip();
+
+    const patch = gate();
+    const real = api.updateChat.bind(api);
+    vi.spyOn(api, 'updateChat').mockImplementation(async (id, body) => {
+      await patch.promise; // the server hasn't taken Auto yet
+      return real(id, body);
+    });
+    await choose('auto');
+    await waitFor(() => expect(chip().getAttribute('aria-busy')).toBe('true'));
+
+    const old = gate();
+    const snapshot = await api.getChat(chat.id); // still Review
+    vi.spyOn(api, 'getChat').mockImplementationOnce(async () => {
+      await old.promise;
+      return snapshot;
+    });
+    void queryClient.refetchQueries({ queryKey: queryKeys.chat(chat.id) });
+    await tick();
+
+    patch.open();
+    await waitFor(() => expect(chip().getAttribute('data-mode')).toBe('auto'));
+    old.open();
+    await tick();
+    await tick();
+    expect(chip().getAttribute('data-mode')).toBe('auto');
+    expect(queryClient.getQueryData<Chat>(queryKeys.chat(chat.id))?.editMode).toBe('auto');
+  });
+});

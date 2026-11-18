@@ -13,11 +13,13 @@ import {
   MenuSubTrigger,
   MenuTrigger,
 } from '@renderer/components/ui';
+import { NoGitDialog } from '@renderer/features/composer/NoGitDialog';
 import { useApiClient } from '@renderer/lib/api-context';
 import { queryKeys } from '@renderer/lib/query-keys';
 import { paths } from '@renderer/lib/routes';
 import { patchChatSummary, useRunsStore } from '@renderer/stores/runs';
-import type { ChatSummary } from '@shared/types';
+import { useUiStore } from '@renderer/stores/ui';
+import type { ChatSummary, EditMode, ProjectListItem } from '@shared/types';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Archive, ArchiveRestore, Folder, FolderInput, Pencil, Trash2 } from 'lucide-react';
 import { useRef, useState } from 'react';
@@ -45,9 +47,25 @@ export function ChatOptionsMenu({ chat }: { chat: ChatSummary }) {
     ]);
 
   const move = useMutation({
-    mutationFn: (projectId: string | null) => api.updateChat(chat.id, { projectId }),
+    mutationFn: (patch: { projectId: string | null; editMode?: EditMode }) => api.updateChat(chat.id, patch),
     onSettled: refresh,
   });
+
+  // INVARIANT: an Auto chat never lands in a folder without Git unwarned. Moving it there is the same step as turning
+  // Auto on there (the next turn writes to that folder without asking), so it asks the same question, once per
+  // project. Switching to Review goes in the same PATCH as the move, so the chat is never in the new folder in Auto.
+  const acknowledged = useUiStore((s) => s.autoNoGitAcknowledged);
+  const acknowledge = useUiStore((s) => s.acknowledgeAutoNoGit);
+  const [noGitTarget, setNoGitTarget] = useState<ProjectListItem | null>(null);
+  const moveTo = (projectId: string | null) => {
+    if (projectId === chat.projectId) return;
+    const target = projectId === null ? undefined : projects.data?.find((p) => p.id === projectId);
+    if (chat.editMode === 'auto' && target && !target.inGitRepo && acknowledged[target.id] !== true) {
+      setNoGitTarget(target);
+      return;
+    }
+    move.mutate({ projectId });
+  };
 
   // The server rejects archive changes while a reply is in progress, so the item waits for the run to finish.
   const streaming = useRunsStore((s) => {
@@ -94,10 +112,7 @@ export function ChatOptionsMenu({ chat }: { chat: ChatSummary }) {
             <MenuSubContent className="max-w-72">
               <MenuRadioGroup
                 value={chat.projectId ?? NO_PROJECT}
-                onValueChange={(value) => {
-                  const next = value === NO_PROJECT ? null : value;
-                  if (next !== chat.projectId) move.mutate(next);
-                }}
+                onValueChange={(value) => moveTo(value === NO_PROJECT ? null : value)}
               >
                 <MenuRadioItem value={NO_PROJECT} icon={<Folder size={15} className="text-text-faint" />}>
                   No project
@@ -138,6 +153,26 @@ export function ChatOptionsMenu({ chat }: { chat: ChatSummary }) {
         onSubmit={async (title) => {
           await api.updateChat(chat.id, { title });
           await refresh();
+        }}
+      />
+      <NoGitDialog
+        open={noGitTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setNoGitTarget(null);
+        }}
+        projectName={noGitTarget?.name ?? ''}
+        reason="move"
+        returnFocusRef={triggerRef}
+        onReview={() => {
+          if (noGitTarget) move.mutate({ projectId: noGitTarget.id, editMode: 'review' });
+          setNoGitTarget(null);
+        }}
+        onAuto={() => {
+          if (noGitTarget) {
+            acknowledge(noGitTarget.id);
+            move.mutate({ projectId: noGitTarget.id });
+          }
+          setNoGitTarget(null);
         }}
       />
       <ConfirmDialog

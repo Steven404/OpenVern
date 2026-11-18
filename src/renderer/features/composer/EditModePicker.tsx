@@ -1,12 +1,9 @@
-import { LIMITS } from '@shared/constants';
 import type { EditMode, Id } from '@shared/types';
 import { Eye, Zap } from 'lucide-react';
-import { type RefObject, useId, useRef, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import {
   Button,
   cx,
-  Dialog,
-  DialogContent,
   Menu,
   MenuContent,
   MenuRadioGroup,
@@ -16,6 +13,7 @@ import {
 } from '../../components/ui';
 import { useUiStore } from '../../stores/ui';
 import { triggerClass } from './ModelPicker';
+import { NoGitDialog } from './NoGitDialog';
 
 export interface EditModePickerProps {
   value: EditMode;
@@ -24,6 +22,8 @@ export interface EditModePickerProps {
   project: { id: Id; name: string; inGitRepo: boolean };
   /** A run is active: a change applies from the next message. */
   running?: boolean;
+  /** A change is being saved or checked: the chip is disabled until the server's mode is known. */
+  pending?: boolean;
 }
 
 const LABELS: Record<EditMode, string> = { review: 'Review', auto: 'Auto' };
@@ -41,7 +41,7 @@ const ICONS: Record<EditMode, typeof Eye> = { review: Eye, auto: Zap };
  * Turning Auto on for a project whose folder isn't in Git asks first, once per project on this device: there is no
  * history to go back to beyond the app's own per-turn Undo.
  */
-export function EditModePicker({ value, onChange, project, running = false }: EditModePickerProps) {
+export function EditModePicker({ value, onChange, project, running = false, pending = false }: EditModePickerProps) {
   const acknowledged = useUiStore((s) => s.autoNoGitAcknowledged[project.id] === true);
   const acknowledge = useUiStore((s) => s.acknowledgeAutoNoGit);
   const [warnOpen, setWarnOpen] = useState(false);
@@ -53,7 +53,7 @@ export function EditModePicker({ value, onChange, project, running = false }: Ed
   const tone = value === 'auto' ? 'text-accent-2' : undefined;
 
   const pick = (next: EditMode) => {
-    if (next === value) return;
+    if (next === value || pending) return;
     if (next === 'auto' && !project.inGitRepo && !acknowledged) {
       setWarnOpen(true);
       return;
@@ -64,12 +64,14 @@ export function EditModePicker({ value, onChange, project, running = false }: Ed
   return (
     <>
       <Menu>
-        <MenuTrigger asChild>
+        {/* Disabled on the trigger itself, so neither a pointer nor a key opens the menu while a change is pending. */}
+        <MenuTrigger asChild disabled={pending}>
           <Button
             ref={triggerRef}
             variant="ghost"
             data-testid="edit-mode-chip"
             data-mode={value}
+            aria-busy={pending || undefined}
             className={triggerClass}
             aria-label={`Edit mode: ${label}`}
             title="How the model's edits reach your files"
@@ -115,56 +117,16 @@ export function EditModePicker({ value, onChange, project, running = false }: Ed
         open={warnOpen}
         onOpenChange={setWarnOpen}
         projectName={project.name}
+        reason="turn-on"
         returnFocusRef={triggerRef}
-        onConfirm={() => {
+        // "Keep Review" changes nothing: the chat stays in Review and the warning shows again next time.
+        onReview={() => setWarnOpen(false)}
+        onAuto={() => {
           acknowledge(project.id);
           setWarnOpen(false);
           onChange('auto');
         }}
       />
     </>
-  );
-}
-
-function NoGitDialog({
-  open,
-  onOpenChange,
-  projectName,
-  returnFocusRef,
-  onConfirm,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  projectName: string;
-  returnFocusRef: RefObject<HTMLButtonElement | null>;
-  onConfirm: () => void;
-}) {
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        title="Turn on Auto for a folder without Git?"
-        description={
-          <>
-            {projectName} isn't a Git repository. In Auto, the model's edits are written to your files as it works.
-            OpenVern can undo each of the last {LIMITS.autoUndoTurns} turns in this chat, but there is no other history
-            to go back to.
-          </>
-        }
-        width={460}
-        returnFocusRef={returnFocusRef}
-        data-testid="no-git-dialog"
-        footer={
-          <>
-            {/* Cancel changes nothing: the chat stays in Review and the warning will show again next time. */}
-            <Button variant="ghost" data-testid="no-git-keep-review" onClick={() => onOpenChange(false)}>
-              Keep Review
-            </Button>
-            <Button variant="primary" data-testid="no-git-turn-on-auto" onClick={onConfirm}>
-              Turn on Auto
-            </Button>
-          </>
-        }
-      />
-    </Dialog>
   );
 }
