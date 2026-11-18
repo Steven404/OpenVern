@@ -1,7 +1,7 @@
 import { Dialog, DialogContent } from '@renderer/components/ui';
 import { LIST_RATIO_DEFAULT } from '@shared/constants';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { modalReturnFocus, readPersistedUi, STORAGE_KEYS, useUiStore } from './ui';
 
 beforeAll(() => {
@@ -13,6 +13,7 @@ beforeAll(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   cleanup();
   modalReturnFocus.current = null;
   useUiStore.setState({ newProjectOpen: false });
@@ -162,5 +163,64 @@ describe('app-level modal focus return', () => {
     const settings = screen.getByRole('dialog', { name: 'Settings' });
     await waitFor(() => expect(settings.contains(document.activeElement)).toBe(true));
     expect(document.activeElement).not.toBe(screen.getByLabelText('Message'));
+  });
+});
+
+describe('Auto: no-Git acknowledgment (per project, persisted)', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    useUiStore.setState({ autoNoGitAcknowledged: {} });
+  });
+
+  it('starts empty when nothing is stored', () => {
+    expect(readPersistedUi().autoNoGitAcknowledged).toEqual({});
+  });
+
+  it('records a project, writes the JSON id list, and survives a reload', () => {
+    useUiStore.getState().acknowledgeAutoNoGit('p1');
+    useUiStore.getState().acknowledgeAutoNoGit('p2');
+    expect(useUiStore.getState().autoNoGitAcknowledged).toEqual({ p1: true, p2: true });
+    expect(JSON.parse(window.localStorage.getItem(STORAGE_KEYS.autoNoGitAcknowledged) ?? 'null')).toEqual(['p1', 'p2']);
+    // A reload: the store state is rebuilt from storage.
+    expect(readPersistedUi().autoNoGitAcknowledged).toEqual({ p1: true, p2: true });
+  });
+
+  it('acknowledging a project twice writes nothing the second time', () => {
+    useUiStore.getState().acknowledgeAutoNoGit('p1');
+    const set = vi.spyOn(Storage.prototype, 'setItem');
+    useUiStore.getState().acknowledgeAutoNoGit('p1');
+    expect(set).not.toHaveBeenCalled();
+    expect(Object.keys(useUiStore.getState().autoNoGitAcknowledged)).toEqual(['p1']);
+  });
+
+  it('ignores a corrupt or wrongly shaped stored value', () => {
+    for (const bad of ['{not json', '{"p1":true}', '"p1"', '42', 'null']) {
+      window.localStorage.setItem(STORAGE_KEYS.autoNoGitAcknowledged, bad);
+      expect(readPersistedUi().autoNoGitAcknowledged).toEqual({});
+    }
+    window.localStorage.setItem(STORAGE_KEYS.autoNoGitAcknowledged, JSON.stringify(['p1', 7, null, 'p2']));
+    expect(readPersistedUi().autoNoGitAcknowledged).toEqual({ p1: true, p2: true });
+  });
+
+  it('survives unavailable storage: reads give an empty set, a write is kept in memory only', () => {
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new DOMException('denied', 'SecurityError');
+    });
+    const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('denied', 'SecurityError');
+    });
+    expect(() => readPersistedUi()).not.toThrow();
+    expect(readPersistedUi().autoNoGitAcknowledged).toEqual({});
+    expect(() => useUiStore.getState().acknowledgeAutoNoGit('p1')).not.toThrow();
+    expect(set).toHaveBeenCalled();
+    expect(useUiStore.getState().autoNoGitAcknowledged).toEqual({ p1: true });
+  });
+
+  it('survives a storage quota error on write', () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('full', 'QuotaExceededError');
+    });
+    expect(() => useUiStore.getState().acknowledgeAutoNoGit('p1')).not.toThrow();
+    expect(useUiStore.getState().autoNoGitAcknowledged).toEqual({ p1: true });
   });
 });

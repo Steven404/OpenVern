@@ -574,3 +574,249 @@ describe('MockApiClient effort (F3)', () => {
     expect((await api.getSettings()).lastEffort).toBeNull();
   });
 });
+
+describe('MockApiClient Auto mode', () => {
+  const MODEL = 'anthropic/claude-sonnet-5.5';
+  const sig = () => new AbortController().signal;
+
+  async function seeded() {
+    const api = new MockApiClient({ delayMs: 0 });
+    const projects = await api.listProjects();
+    const git = projects.find((p) => p.inGitRepo);
+    const noGit = projects.find((p) => !p.inGitRepo);
+    if (!git || !noGit) throw new Error('seed needs a Git and a no-Git project');
+    const autoChat = (await api.listChats()).find((c) => c.title === 'Streaming replies over SSE');
+    if (!autoChat) throw new Error('seed lost the Auto chat');
+    return { api, git, noGit, autoChat };
+  }
+
+  const editTurn = (api: MockApiClient, chatId: string, text = 'do it [mock:edit]') =>
+    collect(api.sendMessage(chatId, { text, attachmentIds: [], model: MODEL }, sig()));
+
+  async function autoChatIn(api: MockApiClient, projectId: string) {
+    const chat = await api.createChat({ projectId, model: MODEL, editMode: 'auto' });
+    return chat;
+  }
+
+  it('persists editMode on createChat (default review) and on updateChat, also while a run is active', async () => {
+    const { api, git } = await seeded();
+    const plain = await api.createChat({ projectId: git.id, model: MODEL });
+    expect(plain.editMode).toBe('review');
+    const auto = await api.createChat({ projectId: git.id, model: MODEL, editMode: 'auto' });
+    expect(auto.editMode).toBe('auto');
+    expect((await api.getChat(auto.id)).editMode).toBe('auto');
+    expect((await api.listChats()).find((c) => c.id === auto.id)?.editMode).toBe('auto');
+
+    expect((await api.updateChat(plain.id, { editMode: 'auto' })).editMode).toBe('auto');
+    expect((await api.getChat(plain.id)).editMode).toBe('auto');
+
+    const iter = api
+      .sendMessage(plain.id, { text: 'hi', attachmentIds: [], model: MODEL }, sig())
+      [Symbol.asyncIterator]();
+    await iter.next();
+    await expect(api.updateChat(plain.id, { editMode: 'review' })).resolves.toMatchObject({ editMode: 'review' });
+    while (!(await iter.next()).done);
+  });
+
+  it('seeds exactly one project outside Git', async () => {
+    const { api } = await seeded();
+    const projects = await api.listProjects();
+    expect(projects.filter((p) => !p.inGitRepo).map((p) => p.name)).toEqual(['Portfolio site']);
+  });
+
+  it('seeds "Streaming replies over SSE" in Auto with one undoable auto batch', async () => {
+    const { api, autoChat } = await seeded();
+    expect((await api.getChat(autoChat.id)).editMode).toBe('auto');
+    const changes = await api.getChatChanges(autoChat.id);
+    expect(changes.pending).toBeNull();
+    expect(changes.applied).toHaveLength(1);
+    const batch = changes.applied[0];
+    expect(batch).toMatchObject({ source: 'auto', undoable: true, conflicts: [], rejectedHunks: 0, skippedHunks: 0 });
+    expect(batch?.undo).toBeUndefined();
+    expect(batch?.written.map((f) => f.path)).toEqual(['src/server/app.ts', 'src/server/sse.ts']);
+    expect(changes.diskSeq).toBeGreaterThan(0);
+    // The project id the mock keeps for its own checks is never sent.
+    expect(batch).not.toHaveProperty('projectId');
+    const chat = await api.getChat(autoChat.id);
+    expect(chat.messages.some((m) => m.id === batch?.turnId && m.role === 'user')).toBe(true);
+  });
+
+  it('undoChatBatch restores the batch, marks it undone by the user, and bumps diskSeq', async () => {
+    const { api, autoChat } = await seeded();
+    const before = await api.getChatChanges(autoChat.id);
+    const batch = before.applied[0];
+    const res = await api.undoChatBatch(autoChat.id, batch?.id ?? '');
+    expect(res.batch.undoable).toBe(false);
+    expect(res.batch.undo).toMatchObject({
+      by: 'user',
+      restored: ['src/server/app.ts', 'src/server/sse.ts'],
+      skipped: [],
+    });
+    expect(res.changes.applied[0]?.undo?.by).toBe('user');
+    expect(res.changes.applied[0]?.undoable).toBe(false);
+    expect(res.changes.diskSeq).toBe(before.diskSeq + 1);
+    expect(await api.getChatChanges(autoChat.id)).toEqual(res.changes);
+  });
+
+  it('undoChatBatch refuses an undone batch, an unknown id and a review batch', async () => {
+    const { api, git, autoChat } = await seeded();
+    const batch = (await api.getChatChanges(autoChat.id)).applied[0];
+    await api.undoChatBatch(autoChat.id, batch?.id ?? '');
+    await expect(api.undoChatBatch(autoChat.id, batch?.id ?? '')).rejects.toMatchObject({ status: 409 });
+    await expect(api.undoChatBatch(autoChat.id, 'nope')).rejects.toMatchObject({ status: 404 });
+    await expect(api.undoChatBatch('no-chat', 'nope')).rejects.toMatchObject({ status: 404 });
+
+    const chat = await api.createChat({ projectId: git.id, model: MODEL });
+    await editTurn(api, chat.id);
+    const { pending } = await api.getChatChanges(chat.id);
+    const applied = await api.applyChatChanges(chat.id, {
+      revision: pending?.revision ?? 0,
+      decisions: Object.fromEntries(
+        (pending?.files ?? []).map((f) => [
+          f.path,
+          Object.fromEntries(f.hunks.map((h) => [h.id, 'accepted' as const])),
+        ]),
+      ),
+    });
+    expect(applied.batch).toMatchObject({ source: 'review', undoable: false });
+    await expect(api.undoChatBatch(chat.id, applied.batch.id)).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('undoChatBatch is refused with a 409 while the chat runs', async () => {
+    const { api, autoChat } = await seeded();
+    const batch = (await api.getChatChanges(autoChat.id)).applied[0];
+    const iter = api
+      .sendMessage(autoChat.id, { text: 'continue', attachmentIds: [], model: MODEL }, sig())
+      [Symbol.asyncIterator]();
+    await iter.next();
+    const err = await api.undoChatBatch(autoChat.id, batch?.id ?? '').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err).toMatchObject({ status: 409, info: { code: 'conflict' } });
+    while (!(await iter.next()).done);
+    await expect(api.undoChatBatch(autoChat.id, batch?.id ?? '')).resolves.toBeDefined();
+  });
+
+  it('an undo is refused once the chat moved to another project', async () => {
+    const { api, git, autoChat } = await seeded();
+    const other = (await api.listProjects()).find((p) => p.inGitRepo && p.id !== autoChat.projectId) ?? git;
+    await api.updateChat(autoChat.id, { projectId: other.id });
+    const batch = (await api.getChatChanges(autoChat.id)).applied[0];
+    expect(batch?.undoable).toBe(false);
+    await expect(api.undoChatBatch(autoChat.id, batch?.id ?? '')).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('an Auto turn writes straight to one auto batch: no pending proposal, auto_batch_updated per write', async () => {
+    const { api, git } = await seeded();
+    const chat = await autoChatIn(api, git.id);
+    const events = await editTurn(api, chat.id);
+    expect(events.filter((e) => e.type === 'changes_updated')).toHaveLength(0);
+    const updates = events.filter((e) => e.type === 'auto_batch_updated');
+    expect(updates).toHaveLength(3);
+    for (const [i, e] of events.entries()) {
+      if (e.type === 'auto_batch_updated') expect(events[i - 1]?.type).toBe('tool_result');
+    }
+    const changes = await api.getChatChanges(chat.id);
+    expect(changes.pending).toBeNull();
+    expect(changes.applied).toHaveLength(1);
+    expect(changes.applied[0]).toMatchObject({ source: 'auto', undoable: true });
+    expect(changes.applied[0]?.written.map((f) => f.path)).toEqual([
+      'src/core/tools/index.ts',
+      'src/core/tools/write-file.ts',
+      'src/shared/constants.ts',
+    ]);
+    expect(changes.diskSeq).toBe(3);
+    const stored = await api.getChat(chat.id);
+    const tools = stored.messages.filter((m) => m.role === 'tool');
+    expect(tools).toHaveLength(3);
+    expect(tools.every((m) => m.role === 'tool' && m.ok && m.output.includes('Written to disk'))).toBe(true);
+  });
+
+  it('a Review turn still stages a proposal and writes nothing', async () => {
+    const { api, git } = await seeded();
+    const chat = await api.createChat({ projectId: git.id, model: MODEL });
+    const events = await editTurn(api, chat.id);
+    expect(events.filter((e) => e.type === 'auto_batch_updated')).toHaveLength(0);
+    const changes = await api.getChatChanges(chat.id);
+    expect(changes.pending?.files).toHaveLength(3);
+    expect(changes.applied).toEqual([]);
+    expect(changes.diskSeq).toBe(0);
+  });
+
+  it('the mode a turn starts with holds for the whole turn, a change applies from the next one', async () => {
+    const { api, git } = await seeded();
+    const chat = await api.createChat({ projectId: git.id, model: MODEL });
+    const iter = api
+      .sendMessage(chat.id, { text: 'x [mock:edit]', attachmentIds: [], model: MODEL }, sig())
+      [Symbol.asyncIterator]();
+    await iter.next();
+    await api.updateChat(chat.id, { editMode: 'auto' });
+    while (!(await iter.next()).done);
+    expect((await api.getChatChanges(chat.id)).pending?.files).toHaveLength(3);
+    expect((await api.getChatChanges(chat.id)).applied).toEqual([]);
+  });
+
+  it('an Auto write onto a path with a pending proposal is refused, and no batch appears', async () => {
+    const { api, git } = await seeded();
+    const chat = await api.createChat({ projectId: git.id, model: MODEL });
+    await editTurn(api, chat.id);
+    await api.updateChat(chat.id, { editMode: 'auto' });
+    const events = await editTurn(api, chat.id, 'again [mock:edit]');
+    expect(events.filter((e) => e.type === 'auto_batch_updated')).toHaveLength(0);
+    const tools = (await api.getChat(chat.id)).messages.filter((m) => m.role === 'tool').slice(-3);
+    expect(tools.every((m) => m.role === 'tool' && !m.ok && m.output.startsWith('Not written:'))).toBe(true);
+    const changes = await api.getChatChanges(chat.id);
+    expect(changes.applied).toEqual([]);
+    expect(changes.pending?.files).toHaveLength(3);
+  });
+
+  it('a retry first undoes the previous attempt (by "retry") and emits auto_batch_updated before anything else', async () => {
+    const { api, git } = await seeded();
+    const chat = await autoChatIn(api, git.id);
+    await editTurn(api, chat.id);
+    const first = (await api.getChatChanges(chat.id)).applied[0];
+    const seqBefore = (await api.getChatChanges(chat.id)).diskSeq;
+    const events = await collect(api.retry(chat.id, { model: MODEL }, sig()));
+    expect(events[0]).toMatchObject({ type: 'auto_batch_updated', batchId: first?.id });
+    const changes = await api.getChatChanges(chat.id);
+    const undone = changes.applied.find((b) => b.id === first?.id);
+    expect(undone).toMatchObject({ undoable: false });
+    expect(undone?.undo).toMatchObject({ by: 'retry', skipped: [] });
+    expect(undone?.undo?.restored).toHaveLength(3);
+    expect(changes.diskSeq).toBeGreaterThan(seqBefore);
+    // The next retry has nothing left to undo.
+    const again = await collect(api.retry(chat.id, { model: MODEL }, sig()));
+    expect(again.some((e) => e.type === 'auto_batch_updated')).toBe(false);
+  });
+
+  it('keeps undo for the newest autoUndoTurns auto batches only', async () => {
+    const { api, git } = await seeded();
+    const chat = await autoChatIn(api, git.id);
+    for (let i = 0; i < LIMITS.autoUndoTurns + 1; i++) await editTurn(api, chat.id, `t${i} [mock:edit]`);
+    const { applied } = await api.getChatChanges(chat.id);
+    expect(applied).toHaveLength(LIMITS.autoUndoTurns + 1);
+    expect(applied[0]?.undoable).toBe(false);
+    expect(applied.slice(1).every((b) => b.undoable)).toBe(true);
+    await expect(api.undoChatBatch(chat.id, applied[0]?.id ?? '')).rejects.toMatchObject({ status: 409 });
+    await expect(api.undoChatBatch(chat.id, applied[1]?.id ?? '')).resolves.toBeDefined();
+  });
+
+  it('keeps the newest 100 batches while diskSeq keeps counting past them', async () => {
+    const { api, git } = await seeded();
+    const chat = await autoChatIn(api, git.id);
+    for (let i = 0; i < 101; i++) await editTurn(api, chat.id, `t${i} [mock:edit]`);
+    const { applied, diskSeq } = await api.getChatChanges(chat.id);
+    expect(applied).toHaveLength(100);
+    expect(diskSeq).toBe(101 * 3);
+    // The Files refresh keys on this: the list length no longer moves, the counter does.
+    await editTurn(api, chat.id, 'one more [mock:edit]');
+    const after = await api.getChatChanges(chat.id);
+    expect(after.applied).toHaveLength(100);
+    expect(after.diskSeq).toBe(102 * 3);
+  });
+
+  it('deleting a chat drops its batches and counter', async () => {
+    const { api, autoChat } = await seeded();
+    await api.deleteChat(autoChat.id);
+    await expect(api.getChatChanges(autoChat.id)).rejects.toMatchObject({ status: 404 });
+  });
+});

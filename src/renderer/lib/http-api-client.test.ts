@@ -230,4 +230,60 @@ describe('HttpApiClient', () => {
       expect(del.init?.method).toBe('DELETE');
     });
   });
+  describe('Auto mode calls', () => {
+    const call = async (fn: (api: HttpApiClient) => Promise<unknown>, body: unknown = {}) => {
+      const fetchMock = vi.fn(async (_u: string | URL | Request, _i?: RequestInit) => json(body));
+      const result = await fn(new HttpApiClient('/api', fetchMock as typeof fetch));
+      const [url, init] = fetchMock.mock.calls[0] ?? [];
+      return { url, init, result, calls: fetchMock.mock.calls.length };
+    };
+
+    it('createChat POSTs the mode with the project and model', async () => {
+      const r = await call((a) => a.createChat({ projectId: 'p1', model: 'm', editMode: 'auto' }));
+      expect(r.url).toBe('/api/chats');
+      expect(r.init?.method).toBe('POST');
+      expect(JSON.parse(r.init?.body as string)).toEqual({ projectId: 'p1', model: 'm', editMode: 'auto' });
+      expect(new Headers(r.init?.headers).get('Content-Type')).toBe('application/json');
+    });
+
+    it('createChat without a mode sends none, so the server default (review) applies', async () => {
+      const r = await call((a) => a.createChat({ projectId: null, model: 'm' }));
+      expect(JSON.parse(r.init?.body as string)).toEqual({ projectId: null, model: 'm' });
+    });
+
+    it('updateChat PATCHes the edit mode alone', async () => {
+      const r = await call((a) => a.updateChat('c 1', { editMode: 'auto' }));
+      expect(r.url).toBe('/api/chats/c%201');
+      expect(r.init?.method).toBe('PATCH');
+      expect(r.init?.body).toBe('{"editMode":"auto"}');
+    });
+
+    it('undoChatBatch POSTs an empty JSON body to the encoded batch URL and returns the response', async () => {
+      const res = { batch: { id: 'b 1' }, changes: { pending: null, applied: [], diskSeq: 3 } };
+      const r = await call((a) => a.undoChatBatch('c 1', 'b/1'), res);
+      expect(r.url).toBe('/api/chats/c%201/changes/batches/b%2F1/undo');
+      expect(r.init?.method).toBe('POST');
+      expect(r.init?.body).toBe('{}');
+      expect(new Headers(r.init?.headers).get('Content-Type')).toBe('application/json');
+      expect(new Headers(r.init?.headers).get('X-OpenVern-Client')).toBe('1');
+      expect(r.result).toEqual(res);
+    });
+
+    it('undoChatBatch rejects with the server error (a 409 while the chat runs)', async () => {
+      const api = new HttpApiClient('/api', (async () =>
+        json(
+          {
+            error: {
+              code: 'conflict',
+              message: 'Wait for the response to finish before undoing edits.',
+              retryable: false,
+            },
+          },
+          409,
+        )) as typeof fetch);
+      const err = await api.undoChatBatch('c1', 'b1').catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ApiError);
+      expect(err).toMatchObject({ status: 409, info: { code: 'conflict' } });
+    });
+  });
 });
