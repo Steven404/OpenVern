@@ -83,15 +83,30 @@ describe('FakeProvider test markers', () => {
     expect(Date.now() - t0).toBeGreaterThanOrEqual(330);
   });
 
-  it.each(['write', 'delete'])('[fake:%s] reads its target, then changes it in the same step', async (marker) => {
+  it.each(['write', 'delete'])('[fake:%s] reads its target, then changes it in the next step', async (marker) => {
     const p = createFakeProvider({ delayMs: 0 });
     const tool = { name: `${marker}_file`, description: '', parameters: { type: 'object' } };
-    const events = await run(p, userReq(`[fake:${marker}=src/example.txt]`, { tools: [readFile, tool] }));
-    const calls = events.flatMap((e) =>
+    const user = userReq(`[fake:${marker}=src/example.txt]`, { tools: [readFile, tool] });
+    const first = await run(p, user);
+    const reads = first.flatMap((e) => (e.type === 'tool_call' ? [e.call] : []));
+    // The read is alone in step 1: Auto counts a read only from the next model step.
+    expect(reads.map((c) => ({ name: c.name, args: JSON.parse(c.argsJson) }))).toEqual([
+      { name: 'read_file', args: { path: 'src/example.txt' } },
+    ]);
+    expect(first.at(-1)).toEqual({ type: 'finish', reason: 'tool_calls' });
+
+    const second = await run(p, {
+      ...user,
+      messages: [
+        ...user.messages,
+        { role: 'assistant', text: '', toolCalls: reads },
+        ...reads.map((c) => ({ role: 'tool' as const, toolCallId: c.id, content: '1 | old' })),
+      ],
+    });
+    const calls = second.flatMap((e) =>
       e.type === 'tool_call' ? [{ name: e.call.name, args: JSON.parse(e.call.argsJson) }] : [],
     );
     expect(calls).toEqual([
-      { name: 'read_file', args: { path: 'src/example.txt' } },
       {
         name: `${marker}_file`,
         args:
@@ -100,7 +115,7 @@ describe('FakeProvider test markers', () => {
             : { path: 'src/example.txt' },
       },
     ]);
-    expect(events.at(-1)).toEqual({ type: 'finish', reason: 'tool_calls' });
+    expect(second.at(-1)).toEqual({ type: 'finish', reason: 'tool_calls' });
   });
 
   it('[fake:read=<path>] makes the first tool call read that path', async () => {

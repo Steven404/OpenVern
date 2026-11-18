@@ -350,7 +350,7 @@ describe('Diff panel: Auto', () => {
     const p = await waitFor(() => panel());
     expect(
       await within(p).findByText(
-        'Nothing is waiting for review. In Auto, edits are written as the model works; undo a turn below.',
+        'Nothing is waiting for review. In Auto, edits are written as the model works; undo edits in History.',
       ),
     ).toBeTruthy();
     expect(within(p).queryByText('No edits are waiting for review.')).toBeNull();

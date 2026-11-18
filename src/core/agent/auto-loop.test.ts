@@ -9,6 +9,7 @@ import type { FakeScript, FakeStep } from '../providers/fake';
 import { getProjectTools } from '../tools';
 import type { ToolChanges } from '../tools/types';
 import {
+  autoStaleText,
   autoUnreadText,
   autoUnsavedText,
   editPromptLines,
@@ -408,6 +409,123 @@ describe('Auto agent loop with real files', () => {
     expect(replayed).toMatchObject({ role: 'tool', content: INTERRUPTED_OUTPUT });
     expect(results(next)).toMatchObject([{ ok: false, output: autoUnreadText('a.txt') }]);
     expect(await s.read('a.txt')).toBe('original\n');
+  });
+
+  describe('a read authorizes writes only from the next model step', () => {
+    /** Turn 1 reads a.txt; then the user changes it; turn 2 runs `same` (read plus a change, in one response). */
+    async function readThenUserEdit(same: [string, object][]) {
+      await setup((_, i) => (i === 0 ? calls(['read_file', { path: 'a.txt' }]) : i === 2 ? calls(...same) : reply));
+      await h.run();
+      await s.seed('a.txt', 'user edit\n');
+      return results(await h.run({ newUserMessage: { text: 'go on', attachmentIds: [] } }));
+    }
+
+    it('a write in the same response as a read is refused as stale when the user changed the file since an earlier read', async () => {
+      const out = await readThenUserEdit([
+        ['read_file', { path: 'a.txt' }],
+        ['write_file', { path: 'a.txt', content: 'overwrite\n' }],
+      ]);
+      expect(out).toMatchObject([
+        { name: 'read_file', ok: true },
+        { ok: false, output: autoStaleText('a.txt') },
+      ]);
+      expect(await s.read('a.txt')).toBe('user edit\n');
+    });
+
+    it('a delete in the same response as a read is refused as stale when the user changed the file since an earlier read', async () => {
+      const out = await readThenUserEdit([
+        ['read_file', { path: 'a.txt' }],
+        ['delete_file', { path: 'a.txt' }],
+      ]);
+      expect(out).toMatchObject([
+        { name: 'read_file', ok: true },
+        { ok: false, output: autoStaleText('a.txt') },
+      ]);
+      expect(await s.read('a.txt')).toBe('user edit\n');
+    });
+
+    it('an edit in the same response as a read is still refused when the earlier read is stale', async () => {
+      const out = await readThenUserEdit([
+        ['read_file', { path: 'a.txt' }],
+        ['edit_file', { path: 'a.txt', old_string: 'user edit', new_string: 'model edit' }],
+      ]);
+      expect(out).toMatchObject([
+        { name: 'read_file', ok: true },
+        { ok: false, output: autoStaleText('a.txt') },
+      ]);
+      expect(await s.read('a.txt')).toBe('user edit\n');
+    });
+
+    it('a read and a write in the same response with no earlier read: the write is refused as unread', async () => {
+      await setup((_, i) =>
+        i === 0
+          ? calls(['read_file', { path: 'a.txt' }], ['write_file', { path: 'a.txt', content: 'overwrite\n' }])
+          : reply,
+      );
+      const out = results(await h.run());
+      expect(out).toMatchObject([
+        { name: 'read_file', ok: true },
+        { ok: false, output: autoUnreadText('a.txt') },
+      ]);
+      expect(await s.read('a.txt')).toBe('original\n');
+    });
+
+    it('a read in step 1 lets a write in step 2 of the same turn through', async () => {
+      await setup((_, i) =>
+        i === 0
+          ? calls(['read_file', { path: 'a.txt' }])
+          : i === 1
+            ? calls(['write_file', { path: 'a.txt', content: 'overwrite\n' }])
+            : reply,
+      );
+      expect(results(await h.run())).toMatchObject([{ ok: true }, { name: 'write_file', ok: true }]);
+      expect(await s.read('a.txt')).toBe('overwrite\n');
+    });
+
+    it('a write after a read in the same step leaves its own bytes as seen, so the next step can write again', async () => {
+      await setup((_, i) =>
+        i === 0
+          ? calls(['read_file', { path: 'a.txt' }])
+          : i === 1
+            ? calls(['read_file', { path: 'a.txt' }], ['write_file', { path: 'a.txt', content: 'second\n' }])
+            : i === 2
+              ? calls(['write_file', { path: 'a.txt', content: 'third\n' }])
+              : reply,
+      );
+      expect(results(await h.run()).map((r) => r.ok)).toEqual([true, true, true, true]);
+      expect(await s.read('a.txt')).toBe('third\n');
+    });
+
+    it('when a step’s second read can’t be saved, its first read still lets a later turn write', async () => {
+      await s.seed('b.txt', 'bee\n');
+      await setup((_, i) =>
+        i === 0
+          ? calls(['read_file', { path: 'a.txt' }], ['read_file', { path: 'b.txt' }])
+          : i === 1
+            ? calls(
+                ['write_file', { path: 'a.txt', content: 'overwrite\n' }],
+                ['write_file', { path: 'b.txt', content: 'overwrite\n' }],
+              )
+            : reply,
+      );
+      const append = h.chats.appendMessage.bind(h.chats);
+      let failing = true;
+      vi.spyOn(h.chats, 'appendMessage').mockImplementation(async (chatId, message) => {
+        if (failing && message.role === 'tool' && message.toolCallId === 'call-1') {
+          throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+        }
+        return append(chatId, message);
+      });
+      const first = await h.run();
+      expect(first.some((e) => e.type === 'error')).toBe(true);
+      expect(h.messages().filter((m) => m.role === 'tool')).toMatchObject([{ toolCallId: 'call-0', ok: true }]);
+
+      failing = false;
+      const next = await h.run({ newUserMessage: { text: 'go on', attachmentIds: [] } });
+      expect(results(next)).toMatchObject([{ ok: true }, { ok: false, output: autoUnreadText('b.txt') }]);
+      expect(await s.read('a.txt')).toBe('overwrite\n');
+      expect(await s.read('b.txt')).toBe('bee\n');
+    });
   });
 });
 
