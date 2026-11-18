@@ -17,6 +17,7 @@ import {
   retryUndoNote,
   retryUndoNotice,
 } from './edit-mode';
+import { INTERRUPTED_OUTPUT } from './history';
 import { createHarness, type Harness, PROJECT } from './test-helpers';
 
 const reply: FakeStep[] = [
@@ -376,6 +377,35 @@ describe('Auto agent loop with real files', () => {
     const stopped = await h.run({ signal: controller.signal });
     expect(results(stopped)).toMatchObject([{ ok: false, summary: 'Interrupted' }]);
     const next = await h.run({ newUserMessage: { text: 'go on', attachmentIds: [] } });
+    expect(results(next)).toMatchObject([{ ok: false, output: autoUnreadText('a.txt') }]);
+    expect(await s.read('a.txt')).toBe('original\n');
+  });
+
+  it('a read whose result couldn’t be saved to the chat does not let a later turn overwrite the file', async () => {
+    await setup((_, i) =>
+      i === 0
+        ? calls(['read_file', { path: 'a.txt' }])
+        : i === 1
+          ? calls(['write_file', { path: 'a.txt', content: 'overwrite\n' }])
+          : reply,
+    );
+    const append = h.chats.appendMessage.bind(h.chats);
+    let failing = true;
+    vi.spyOn(h.chats, 'appendMessage').mockImplementation(async (chatId, message) => {
+      if (failing && message.role === 'tool' && message.name === 'read_file') {
+        throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+      }
+      return append(chatId, message);
+    });
+    const first = await h.run();
+    expect(first.some((e) => e.type === 'error')).toBe(true);
+    expect(h.messages().filter((m) => m.role === 'tool')).toEqual([]);
+
+    failing = false;
+    const next = await h.run({ newUserMessage: { text: 'go on', attachmentIds: [] } });
+    // The model is told the read was interrupted, so it must not count as seen.
+    const replayed = h.provider.calls[1]?.messages.find((m) => m.role === 'tool');
+    expect(replayed).toMatchObject({ role: 'tool', content: INTERRUPTED_OUTPUT });
     expect(results(next)).toMatchObject([{ ok: false, output: autoUnreadText('a.txt') }]);
     expect(await s.read('a.txt')).toBe('original\n');
   });

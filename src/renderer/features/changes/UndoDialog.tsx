@@ -200,8 +200,8 @@ function UndoDialog({
   return (
     <Dialog open={open} onOpenChange={change}>
       <DialogContent
-        title="Undo this turn's edits?"
-        description={`OpenVern puts ${paths.length === 1 ? 'this file' : `these ${plural(paths.length, 'file')}`} back as ${paths.length === 1 ? 'it was' : 'they were'} before this turn:`}
+        title="Undo these edits?"
+        description={`OpenVern puts ${paths.length === 1 ? 'this file' : `these ${plural(paths.length, 'file')}`} back as ${paths.length === 1 ? 'it was' : 'they were'} before these edits:`}
         width={480}
         returnFocusRef={returnFocusRef}
         data-testid="undo-dialog"
@@ -230,7 +230,7 @@ function UndoDialog({
             </li>
           ))}
         </ul>
-        <p className="m-0 text-sm text-text-muted">A file that changed after the turn is left as it is.</p>
+        <p className="m-0 text-sm text-text-muted">A file that changed after these edits is left as it is.</p>
         {error && (
           <p role="alert" data-testid="undo-error" className="m-0 text-sm text-danger">
             {error}

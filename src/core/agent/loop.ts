@@ -150,7 +150,7 @@ export function toChatSummary(chat: ChatSummary | Chat): ChatSummary {
 /**
  * Wraps a `ToolChanges` to notice what a tool call did: staged something (the loop then emits `changes_updated`) or
  * wrote to disk (`auto_batch_updated`, and the result is kept even after Stop). Reads are held until the loop knows
- * the result reached the model (`commitReads`).
+ * the result reached the model: kept, and appended to the chat (`commitReads`).
  */
 function trackChanges(inner: ToolChanges): TrackedChanges {
   let staged: { summary: ChangeSummary | null } | undefined;
@@ -194,7 +194,7 @@ interface TrackedChanges extends ToolChanges {
   lastStage(): { summary: ChangeSummary | null } | undefined;
   /** The current tool call changed a project file (Auto). */
   lastWrite(): { batchId: Id } | undefined;
-  /** Records the current tool call's reads: its result is kept, so the model sees what it read. */
+  /** Records the current tool call's reads: its result is kept and in the chat, so the model sees what it read. */
   commitReads(): void;
 }
 
@@ -598,7 +598,7 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
       const entries: { name: string; args: string; ok: boolean; output: string }[] = [];
       for (const call of toolCalls) {
         stepChanges?.reset();
-        const toolMessage = await runTool(call, messageId, tools, toolContext, emit, stepChanges);
+        const { message: toolMessage, kept } = await runTool(call, messageId, tools, toolContext, emit, stepChanges);
         const written = stepChanges?.lastWrite();
         try {
           await chats.appendMessage(chatId, toolMessage);
@@ -606,12 +606,18 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
           if (!written) throw err;
           // STOP NEVER HIDES A WRITE, a failed transcript save included: the client still gets the write's real
           // result and the batch update, the result is held in memory (`recordHeld` appends it before the next turn
-          // replays the history), and the run ends with the storage error.
+          // replays the history), and the run ends with the storage error. Its reads are not recorded (the rule
+          // below): a held result is not in the chat yet and may never get there (a retry that truncates its attempt
+          // drops it; a restart loses it, and the call is then replayed as "Interrupted").
           unrecorded.set(chatId, [...(unrecorded.get(chatId) ?? []), toolMessage]);
           await emit({ type: 'tool_result', message: toolMessage });
           await emit({ type: 'auto_batch_updated', batchId: written.batchId });
           throw err;
         }
+        // A READ IS RECORDED ONLY WHEN ITS CONTENT REACHED THE MODEL: only now, with the kept result in the chat,
+        // do the call's reads count as seen. A result that failed to save is replayed as "Interrupted" (it throws
+        // above), so its reads must not let a later write pass the stale-read guard.
+        if (kept) stepChanges?.commitReads();
         await emit({ type: 'tool_result', message: toolMessage });
         const staged = stepChanges?.lastStage();
         if (staged) await emit({ type: 'changes_updated', messageId, changes: staged.summary });
@@ -690,7 +696,10 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
     await emit({ type: 'assistant_end', message: assistant });
   }
 
-  /** Runs one tool call (emitting `tool_call` first). Never throws. */
+  /**
+   * Runs one tool call (emitting `tool_call` first). Never throws. `kept` is true when the message carries the tool's
+   * own result; the caller records the call's reads only once that result is in the chat.
+   */
   async function runTool(
     call: ToolCall,
     messageId: Id,
@@ -698,12 +707,13 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
     ctx: ChatToolContext,
     emit: Emit,
     changes?: TrackedChanges,
-  ): Promise<ToolMessage> {
+  ): Promise<{ message: ToolMessage; kept: boolean }> {
     const { signal } = ctx;
     const knownSecrets = ctx.knownSecrets ?? [];
     await emit({ type: 'tool_call', messageId, toolCall: call });
     const started = now().getTime();
 
+    let kept = false;
     const execute = async (): Promise<{ ok: boolean; output: string; summary: string }> => {
       if (signal.aborted) return interrupted();
       const tool = tools.find((t) => t.spec.name === call.name);
@@ -734,10 +744,12 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
         // Stop arrived meanwhile, so the stored history (and the model, on the next turn) says what reached the disk.
         // Any other result that arrives after a stop is replaced, so what is stored never depends on a race.
         // A READ IS RECORDED ONLY WHEN ITS CONTENT REACHED THE MODEL (invariant): the reads are committed only with a
-        // result that is kept. A read replaced by "Interrupted" must not count as seen, or a later overwrite based on
-        // older content would pass the stale-read guard and undo the user's edit.
+        // result that is kept (`kept`), and only after that result was appended to the chat (the caller). A read
+        // replaced by "Interrupted", or whose result couldn't be saved (the model is then told "Interrupted"), must
+        // not count as seen, or a later overwrite based on older content would pass the stale-read guard and undo
+        // the user's edit.
         if (changes?.lastWrite() || !signal.aborted) {
-          changes?.commitReads();
+          kept = true;
           return result;
         }
         return interrupted();
@@ -755,7 +767,7 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
       output: output.count > 0 ? `${output.text}\n${redactionNote(output.count)}` : output.text,
       summary: redactSecrets(raw.summary, { known: knownSecrets }).text,
     };
-    return {
+    const message: ToolMessage = {
       id: crypto.randomUUID(),
       role: 'tool',
       createdAt: now().toISOString(),
@@ -766,6 +778,7 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
       summary: result.summary,
       durationMs: Math.max(0, now().getTime() - started),
     };
+    return { message, kept };
   }
 
   /** Trailing `chat_updated` events (S4.10). Never throws. */
