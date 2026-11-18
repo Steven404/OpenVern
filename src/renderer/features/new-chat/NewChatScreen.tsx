@@ -1,8 +1,8 @@
 import { DRAFT_CHAT_ID } from '@shared/constants';
-import type { ChatSummary, ReasoningEffort } from '@shared/types';
+import type { ChatSummary, EditMode, ReasoningEffort } from '@shared/types';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router';
+import { useLocation, useNavigate, useSearchParams } from 'react-router';
 import { resolveNewChatProject } from '../../app/queries';
 import { useApiClient } from '../../lib/api-context';
 import { queryKeys } from '../../lib/query-keys';
@@ -49,6 +49,16 @@ export function NewChatScreen() {
   // F3: a new chat starts from `lastEffort`, until the picker is used here.
   const [pickedEffort, setPickedEffort] = useState<ReasoningEffort | null | undefined>(undefined);
   const effort = pickedEffort === undefined ? (settings.data?.lastEffort ?? null) : pickedEffort;
+  // INVARIANT: the chip resets to Review on every New chat open. A pick belongs to the navigation it was made in:
+  // every navigation to this screen (a new open, "New chat here", a project change) gets a new location key, so an
+  // Auto picked (and maybe warned about) for one project or one open never carries over.
+  const { key: openKey } = useLocation();
+  const [pickedMode, setPickedMode] = useState<{ openKey: string; mode: EditMode } | null>(null);
+  const editMode: EditMode = pickedMode?.openKey === openKey ? pickedMode.mode : 'review';
+  const onEditModeChange = useCallback((mode: EditMode) => setPickedMode({ openKey, mode }), [openKey]);
+  // Only a mode the chip offered is sent: it is hidden in a loose chat and for a model without tools.
+  const toolsModel = modelsQuery.data?.find((m) => m.id === model)?.supportsTools === true;
+  const createMode: EditMode = projectId !== null && toolsModel ? editMode : 'review';
 
   const onProjectChange = useCallback(
     (id: string | null) => {
@@ -59,7 +69,7 @@ export function NewChatScreen() {
 
   const onSend = useCallback(
     async ({ text, attachments }: ComposerSendInput) => {
-      const chat = await api.createChat({ projectId, model });
+      const chat = await api.createChat({ projectId, model, editMode: createMode });
       const { messages: _messages, ...summary } = chat;
       queryClient.setQueryData(queryKeys.chat(chat.id), chat);
       queryClient.setQueryData<ChatSummary[]>(queryKeys.chats, (old) =>
@@ -76,7 +86,7 @@ export function NewChatScreen() {
       navigate(paths.chat(chat.id));
       void send(deps, chat.id, { text, attachments, model, effort });
     },
-    [api, projectId, model, effort, queryClient, navigate, send, deps],
+    [api, projectId, model, createMode, effort, queryClient, navigate, send, deps],
   );
 
   return (
@@ -99,6 +109,8 @@ export function NewChatScreen() {
             onSend={onSend}
             autoFocus
             sinkKey={DRAFT_CHAT_ID}
+            editMode={editMode}
+            onEditModeChange={onEditModeChange}
             projectSlot={<ProjectChip projects={projects} value={projectId} onChange={onProjectChange} />}
           />
         </div>

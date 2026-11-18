@@ -127,8 +127,17 @@ export function useChatPanelState(chatId: Id): ChatPanelState {
 }
 
 /**
+ * Params of the Diff surface. `path` alone: open that pending proposal's file. With `batchId`: scroll the History to
+ * that written batch and open `path` in it (the Edits applied cards' file rows).
+ */
+export interface DiffSurfaceParams {
+  path?: string;
+  batchId?: Id;
+}
+
+/**
  * Opens the right panel on a surface for a chat (also opens the panel itself). The way other features reach it,
- * e.g. the "Proposed edits" card: `openPanelSurface(chatId, 'diff', { path: 'src/a.ts' })`.
+ * e.g. the "Proposed edits" card: `openPanelSurface(chatId, 'diff', { path: 'src/a.ts' })` (see `DiffSurfaceParams`).
  */
 export function openPanelSurface(chatId: Id, id: SurfaceId, params?: unknown): void {
   usePanelStore.getState().openSurface(chatId, id, params);

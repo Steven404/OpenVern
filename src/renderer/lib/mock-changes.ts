@@ -132,6 +132,30 @@ export function sampleProposal(): FileChange[] {
   return [writeFile, index, constants];
 }
 
+/** What the seeded Auto turn wrote: one edited file and one new file, sorted by path. */
+export function sampleAutoBatch(): FileChange[] {
+  const sse = makeFileChange('src/server/sse.ts', 'create', [
+    makeHunk(0, 1, '', [
+      "+import type { AgentEvent } from '@shared/events';",
+      '+',
+      '+/** One `data:` line per event; the stream ends with `done`. */',
+      '+export function toSSE(event: AgentEvent): string {',
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: sample source text for the diff
+      '+  return `data: ${JSON.stringify(event)}\\n\\n`;',
+      '+}',
+    ]),
+  ]);
+  const app = makeFileChange('src/server/app.ts', 'modify', [
+    makeHunk(12, 12, 'export function createApp', [
+      "   app.route('/api', api);",
+      "-  app.get('/api/stream', (c) => c.text('not yet'));",
+      "+  app.get('/api/stream', (c) => streamEvents(c));",
+      '   return app;',
+    ]),
+  ]);
+  return [app, sse];
+}
+
 const SAMPLE_FILE_PATHS = [
   'README.md',
   'package.json',

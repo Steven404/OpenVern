@@ -134,7 +134,7 @@ describe('NewChatScreen', () => {
     fireEvent.keyDown(textarea(), { key: 'Enter' });
 
     await waitFor(() => expect(screen.getByTestId('location').textContent).toMatch(/^\/chat\/.+/));
-    expect(create).toHaveBeenCalledWith({ projectId: project?.id, model: DEFAULT_MODEL });
+    expect(create).toHaveBeenCalledWith({ projectId: project?.id, model: DEFAULT_MODEL, editMode: 'review' });
     const chatId = screen.getByTestId('location').textContent?.replace('/chat/', '') ?? '';
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0]?.[0]).toBe(chatId);

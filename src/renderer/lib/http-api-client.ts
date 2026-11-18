@@ -1,4 +1,10 @@
-import { API_PREFIX, type ApplyChangesBody, type ApplyChangesResponse, type HealthResponse } from '@shared/api';
+import {
+  API_PREFIX,
+  type ApplyChangesBody,
+  type ApplyChangesResponse,
+  type HealthResponse,
+  type UndoBatchResponse,
+} from '@shared/api';
 import { CLIENT_HEADER, CLIENT_HEADER_VALUE } from '@shared/constants';
 import { errorInfo, isApiErrorBody } from '@shared/errors';
 import type { AgentEvent } from '@shared/events';
@@ -9,6 +15,7 @@ import type {
   Chat,
   ChatChanges,
   ChatSummary,
+  EditMode,
   HomeFileListing,
   Id,
   ModelInfo,
@@ -108,13 +115,13 @@ export class HttpApiClient implements ApiClient {
   listChats() {
     return this.json<ChatSummary[]>('GET', '/chats');
   }
-  createChat(input: { projectId: Id | null; model: string }) {
+  createChat(input: { projectId: Id | null; model: string; editMode?: EditMode }) {
     return this.json<Chat>('POST', '/chats', input);
   }
   getChat(id: Id) {
     return this.json<Chat>('GET', `/chats/${enc(id)}`);
   }
-  updateChat(id: Id, patch: { title?: string; projectId?: Id | null; archived?: boolean }) {
+  updateChat(id: Id, patch: { title?: string; projectId?: Id | null; archived?: boolean; editMode?: EditMode }) {
     return this.json<ChatSummary>('PATCH', `/chats/${enc(id)}`, patch);
   }
   deleteChat(id: Id) {
@@ -188,6 +195,10 @@ export class HttpApiClient implements ApiClient {
   }
   discardChatChanges(chatId: Id) {
     return this.json<ChatChanges>('DELETE', `/chats/${enc(chatId)}/changes`);
+  }
+  undoChatBatch(chatId: Id, batchId: Id) {
+    // The route takes no fields; an empty object keeps the request JSON like the other POSTs.
+    return this.json<UndoBatchResponse>('POST', `/chats/${enc(chatId)}/changes/batches/${enc(batchId)}/undo`, {});
   }
   async answerTerminalRead(chatId: Id, requestId: Id, answer: TerminalReadAnswer) {
     await this.send('POST', `/chats/${enc(chatId)}/terminal-reads/${enc(requestId)}`, answer);

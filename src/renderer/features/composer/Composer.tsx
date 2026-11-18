@@ -1,6 +1,6 @@
 import { IMAGE_ACCEPT, TEXT_ACCEPT } from '@shared/constants';
-import type { AttachmentRef, Id, ReasoningEffort } from '@shared/types';
-import { useQueryClient } from '@tanstack/react-query';
+import type { AttachmentRef, Chat, EditMode, Id, ReasoningEffort } from '@shared/types';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowUp, Square } from 'lucide-react';
 import {
   type ChangeEvent,
@@ -17,14 +17,16 @@ import { Button } from '../../components/ui';
 import { ApiError } from '../../lib/api-client';
 import { useApiClient } from '../../lib/api-context';
 import { queryKeys } from '../../lib/query-keys';
+import { patchChatSummary } from '../../stores/runs';
 import { useUiStore } from '../../stores/ui';
 import { useTerminalUiStore } from '../terminal/terminal-store';
 import { AttachMenu } from './AttachMenu';
 import { ComposerAttachmentChips } from './AttachmentChips';
 import { IMAGE_UNSUPPORTED_MESSAGE, registerAttachmentSink, useDraftAttachments } from './attachments';
+import { EditModePicker } from './EditModePicker';
 import { EffortPicker } from './EffortPicker';
 import { ModelPicker } from './ModelPicker';
-import { useModels, useSettings } from './queries';
+import { useModels, useProjects, useSettings } from './queries';
 import { registerTextSink } from './text-sink';
 
 export type ComposerVariant = 'reply' | 'new';
@@ -56,11 +58,18 @@ export interface ComposerProps {
   autoFocus?: boolean;
   /** Lets other features add uploaded files here through `addAttachmentRef(sinkKey, ref)` (reply: the chat id). */
   sinkKey?: string;
+  /**
+   * `new` variant: the edit mode the chat will be created with, and its setter. The reply variant reads and changes
+   * the chat's own mode instead.
+   */
+  editMode?: EditMode;
+  onEditModeChange?: (mode: EditMode) => void;
 }
 
 const HINT = 'Enter to send · Shift + Enter for a new line';
 const TOOLS_NOTICE = "This model can't use tools, so it won't read your project files.";
 const NO_KEY_NOTICE = 'Add your OpenRouter API key to start chatting.';
+const EDIT_MODE_ERROR = "Couldn't change the edit mode. Try again.";
 /** The draft keeps a usable height even when the window is short and the terminal dock takes most of it. */
 const COMPOSER_MIN_MAX_HEIGHT = 96;
 
@@ -84,6 +93,8 @@ export function Composer({
   projectSlot,
   autoFocus,
   sinkKey,
+  editMode: draftEditMode,
+  onEditModeChange,
 }: ComposerProps) {
   const api = useApiClient();
   const queryClient = useQueryClient();
@@ -105,6 +116,36 @@ export function Composer({
   const showEffortPicker = efforts.length > 0;
   const effectiveEffort = effort !== null && efforts.includes(effort) ? effort : null;
   const accept = supportsImages ? `${TEXT_ACCEPT},${IMAGE_ACCEPT}` : TEXT_ACCEPT;
+
+  // Edit mode. A reply composer's `sinkKey` is its chat id (see `sinkKey`), so it reads the chat's stored mode from the
+  // chat query the conversation already holds, and changes it with a PATCH. The New chat composer gets it from props.
+  const chatId = variant === 'reply' ? sinkKey : undefined;
+  const chatEditMode = useQuery({
+    queryKey: queryKeys.chat(chatId ?? ''),
+    queryFn: () => api.getChat(chatId ?? ''),
+    enabled: chatId !== undefined,
+    select: (chat: Chat) => chat.editMode,
+  }).data;
+  const [modeError, setModeError] = useState<string | null>(null);
+  const setChatEditMode = useMutation({
+    mutationFn: (mode: EditMode) => api.updateChat(chatId ?? '', { editMode: mode }),
+    onMutate: () => setModeError(null),
+    onSuccess: (summary) => patchChatSummary(queryClient, summary),
+    onError: () => {
+      setModeError(EDIT_MODE_ERROR);
+      if (chatId) void queryClient.invalidateQueries({ queryKey: queryKeys.chat(chatId) });
+    },
+  });
+  const editMode = chatId !== undefined ? chatEditMode : draftEditMode;
+  const changeEditMode = (mode: EditMode) => {
+    if (chatId !== undefined) setChatEditMode.mutate(mode);
+    else onEditModeChange?.(mode);
+  };
+  const project = useProjects().data?.find((p) => p.id === projectId);
+  // Offered in a project chat, with a key, for a model known to use tools. Hidden otherwise; a stored Auto is kept
+  // (the server still runs it) and shows again with a tools model.
+  const showEditModePicker =
+    projectId !== null && !noKey && info?.supportsTools === true && project !== undefined && editMode !== undefined;
 
   const [text, setText] = useState('');
   const [imageNotice, setImageNotice] = useState<string | null>(null);
@@ -223,7 +264,7 @@ export function Composer({
       : null;
 
   const showToolsNotice = projectId !== null && !supportsTools && !noKey;
-  const hasNotices = imageNotice !== null || sendError !== null || noKey || showToolsNotice;
+  const hasNotices = imageNotice !== null || sendError !== null || modeError !== null || noKey || showToolsNotice;
 
   return (
     <div className="flex flex-col" data-variant={variant}>
@@ -269,6 +310,9 @@ export function Composer({
           />
           {projectSlot}
           <span className="flex-1" />
+          {showEditModePicker && (
+            <EditModePicker value={editMode} onChange={changeEditMode} project={project} running={running || busy} />
+          )}
           {showEffortPicker && !noKey && (
             <EffortPicker
               value={effectiveEffort}
@@ -319,6 +363,11 @@ export function Composer({
           {sendError && (
             <p role="alert" className="m-0 text-danger">
               {sendError}
+            </p>
+          )}
+          {modeError && (
+            <p role="alert" className="m-0 text-danger">
+              {modeError}
             </p>
           )}
           {noKey && (

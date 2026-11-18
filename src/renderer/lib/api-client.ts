@@ -1,6 +1,6 @@
 // The renderer's only way to talk to the backend (plan §4.9).
 
-import type { ApplyChangesBody, ApplyChangesResponse, HealthResponse } from '@shared/api';
+import type { ApplyChangesBody, ApplyChangesResponse, HealthResponse, UndoBatchResponse } from '@shared/api';
 import type { ApiErrorInfo } from '@shared/errors';
 import type { AgentEvent } from '@shared/events';
 import type { TerminalBridge, TerminalReadAnswer } from '@shared/terminal';
@@ -9,6 +9,7 @@ import type {
   Chat,
   ChatChanges,
   ChatSummary,
+  EditMode,
   HomeFileListing,
   Id,
   ModelInfo,
@@ -33,9 +34,14 @@ export interface ApiClient {
   renameProject(id: Id, name: string): Promise<Project>;
   deleteProject(id: Id): Promise<void>;
   listChats(): Promise<ChatSummary[]>;
-  createChat(input: { projectId: Id | null; model: string }): Promise<Chat>;
+  /** `editMode` omitted = 'review'. */
+  createChat(input: { projectId: Id | null; model: string; editMode?: EditMode }): Promise<Chat>;
   getChat(id: Id): Promise<Chat>;
-  updateChat(id: Id, patch: { title?: string; projectId?: Id | null; archived?: boolean }): Promise<ChatSummary>;
+  /** `editMode` is accepted while a run is active; the agent picks it up from the next turn. */
+  updateChat(
+    id: Id,
+    patch: { title?: string; projectId?: Id | null; archived?: boolean; editMode?: EditMode },
+  ): Promise<ChatSummary>;
   deleteChat(id: Id): Promise<void>;
   /** `terminal`: this client answers terminal reads (set when the bridge has a terminal), so `read_terminal` is offered. */
   sendMessage(
@@ -66,6 +72,8 @@ export interface ApiClient {
   getChatChanges(chatId: Id): Promise<ChatChanges>;
   applyChatChanges(chatId: Id, body: ApplyChangesBody): Promise<ApplyChangesResponse>;
   discardChatChanges(chatId: Id): Promise<ChatChanges>;
+  /** The Undo button of an auto batch. Rejects with a 409 while the chat runs or when the batch can't be undone. */
+  undoChatBatch(chatId: Id, batchId: Id): Promise<UndoBatchResponse>;
   // Terminal (terminal plan §4.2)
   /** Answers a `terminal_read_request`. Rejects with a 404 `ApiError` when the request is unknown or already answered. */
   answerTerminalRead(chatId: Id, requestId: Id, answer: TerminalReadAnswer): Promise<void>;

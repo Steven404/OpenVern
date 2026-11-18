@@ -1,7 +1,8 @@
 # OpenVern
 
-Desktop app to chat with LLMs about your projects. The model can read a project and propose edits
-through tool calls, and you review every change as a diff before anything is written to disk.
+Desktop app to chat with LLMs about your projects. The model can read a project and change it through tool calls.
+In Review mode you review every change as a diff before anything is written to disk; in Auto mode the edits are
+written as the model works, and you can undo each turn.
 
 OpenVern talks to [OpenRouter](https://openrouter.ai), so you need an
 [OpenRouter API key](https://openrouter.ai/keys). Chats, projects and settings are stored in local files, and there is
@@ -23,6 +24,12 @@ no telemetry.
 - **Proposed edits with review.** The model can propose creating, editing and deleting files. Nothing touches your
   disk until you apply. Review each file as a unified or split diff, accept or reject each hunk, then apply the
   accepted ones.
+- **Auto mode with Undo.** Switch a project chat from Review to Auto with the chip next to the model picker. In Auto
+  the model's edits, new files and deletes are written as it works, inside the same sandbox, and each turn shows an
+  "Edits applied · Auto" card with an Undo button. Undo puts back the files that are still as the turn left them and
+  names the ones you changed since. New chats start in Review, a mode change applies from your next message, and
+  turning Auto on for a folder that isn't a Git repository asks first. The Diff panel lists every turn's edits in its
+  History.
 - **Sandboxed file access.** Tools are limited to the project folder and skip `.env` files, keys and `.git`. A file
   you changed on disk after a proposal is skipped, never merged.
 - **Files panel.** A read-only tree of the project with a filter, a file viewer and an Attach button.
@@ -32,7 +39,8 @@ no telemetry.
 - **API key in the OS keyring.** The installed app encrypts the key with the macOS Keychain, or with KWallet/libsecret
   on Linux.
 
-You can run commands in the terminal, but the model cannot. Applied edits can't be undone from the app (use git).
+You can run commands in the terminal, but the model cannot. Edits you apply in Review can't be undone from the app
+(use git); Auto turns can be undone, the last 20 per chat.
 
 ## Limits
 
