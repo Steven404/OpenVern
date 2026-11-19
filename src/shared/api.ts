@@ -100,6 +100,18 @@ export const RETRY_OTHER_PROJECT =
   "This turn's edits were written in another project, so retrying it here can't undo them. Move the chat back to that project to retry it, or send a new message.";
 /** The 409 `conflict` message of a request that needs the chat's project when the chat has none (or it was removed). */
 export const CHAT_HAS_NO_PROJECT = 'This chat has no project to write to.';
+/**
+ * The 409 `conflict` message of a move (`PATCH /chats/:id` with `projectId`) while a reply is running or starting in
+ * the chat. A chat's project never changes during a turn, so the turn's writes stay in one project and one batch.
+ * Nothing changes.
+ */
+export const MOVE_WHILE_RUNNING = 'Stop the reply before moving this chat.';
+/**
+ * The 409 `conflict` message of `DELETE /projects/:id` while a reply is running or starting in any chat of the
+ * project: removing it would move that chat to "Chats" mid-turn. Nothing changes (no chat is detached, no proposal is
+ * discarded).
+ */
+export const REMOVE_WHILE_RUNNING = "Stop the replies in this project's chats before removing it.";
 
 /** `PUT /settings/openrouter-key` */
 export const setOpenRouterKeyBody = z.object({ apiKey: z.string().trim().min(1) });

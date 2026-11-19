@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { CHAT_PROJECT_CHANGED, EDIT_MODE_CHANGED, PROJECT_NOT_IN_GIT } from '@shared/api';
+import { CHAT_PROJECT_CHANGED, EDIT_MODE_CHANGED, MOVE_WHILE_RUNNING, PROJECT_NOT_IN_GIT } from '@shared/api';
 import type { AppliedBatch, Chat, EditMode } from '@shared/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { editPromptLines, editToolDescriptions } from '../core/agent/edit-mode';
@@ -352,7 +352,7 @@ describe('expectedEditMode: a turn or a move never relies on a mode the client n
     expect(await h.core.chats.get(chat.id)).toMatchObject({ projectId: other, editMode: 'auto' });
   });
 
-  it('send: a move landing after the check, before the agent reads the chat, does not move the turn', async () => {
+  it('send: a move while the turn is starting (after the check, before the agent reads the chat) is refused', async () => {
     await h.core.chats.update(chat.id, { editMode: 'auto' });
     const other = (await h.core.projects.create({ rootPath: h.homeDir })).id;
     const original = h.core.chats.get.bind(h.core.chats);
@@ -366,13 +366,15 @@ describe('expectedEditMode: a turn or a move never relies on a mode the client n
     });
     const started = send({ text: '[fake:write=pinned.txt]', expectedEditMode: 'auto' });
     await hold.entered;
-    expect((await patch({ projectId: other, expectedEditMode: 'auto', expectedInGitRepo: false })).status).toBe(200);
+    const moved = await patch({ projectId: other, expectedEditMode: 'auto', expectedInGitRepo: false });
+    expect(moved.status).toBe(409);
+    expect(await moved.json()).toMatchObject({ error: { code: 'conflict', message: MOVE_WHILE_RUNNING } });
     hold.open();
     await collectEvents(await started);
-    // The turn ran in the project that was checked with its mode, not the one the chat moved to.
+    // The turn ran in the project that was checked with its mode; the chat never left it.
     expect(existsSync(path.join(h.projectDir, 'pinned.txt'))).toBe(true);
     expect(existsSync(path.join(h.homeDir, 'pinned.txt'))).toBe(false);
-    expect((await original(chat.id)).projectId).toBe(other);
+    expect((await original(chat.id)).projectId).toBe(chat.projectId);
   });
 
   it.each(['send', 'retry'] as const)(

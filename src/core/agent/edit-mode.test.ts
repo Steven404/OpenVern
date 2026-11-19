@@ -70,6 +70,46 @@ describe('edit wording contracts', () => {
       ),
     ]).toMatchSnapshot();
   });
+  it('writes each conflict line exactly as v0.3 did, also for a path holding a line break', () => {
+    // v0.3's formatter, verbatim: "path (reason)" rewritten by a regex that can't match across a line terminator.
+    const v03Text = {
+      changed_on_disk: 'changed on disk before apply',
+      deleted_on_disk: 'deleted on disk before apply',
+      exists_on_disk: 'already exists on disk',
+      blocked: 'blocked, the path is not writable',
+    } as const;
+    const v03Line = (c: string) => `- Not written, ${c.replace(/^(.*) \((.*)\)$/, '$2: $1')}`;
+    const note = (path: string, reason: keyof typeof v03Text) =>
+      w.reviewNote(
+        { written: [], rejected: [], discarded: [], skipped: [], conflicts: [{ path, reason }], tooLarge: [] },
+        0,
+      );
+    expect(note('alpha\nbeta.txt', 'changed_on_disk')).toBe(
+      [
+        '[OpenVern] Since your last reply the user reviewed your proposed edits:',
+        '- Not written, alpha\nbeta.txt (changed on disk before apply)',
+        'Nothing else is pending.',
+      ].join('\n'),
+    );
+    const paths = [
+      'alpha\nbeta.txt',
+      'a\rb',
+      'a\u2028b',
+      'a\u2029b',
+      'trailing\n',
+      '\nlead',
+      'a (b).txt',
+      'x (y)',
+      'plain.ts',
+      'dir/with space (1)/f.ts',
+      '$1 $2 $&.txt',
+    ];
+    for (const path of paths) {
+      for (const reason of Object.keys(v03Text) as (keyof typeof v03Text)[]) {
+        expect(note(path, reason).split('\n').slice(1, -1).join('\n')).toBe(v03Line(`${path} (${v03Text[reason]})`));
+      }
+    }
+  });
   it.each(['changed_since', 'blocked', 'unavailable'] as const)('pins retry note and notice for %s', (reason) => {
     const undo = { restored: ['a.ts'], skipped: [{ path: 'c.ts', reason }] };
     expect([

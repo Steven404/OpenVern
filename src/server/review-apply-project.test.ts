@@ -4,7 +4,7 @@
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { APPLY_PROJECT_CHANGED, PROPOSALS_OTHER_PROJECT } from '@shared/api';
+import { APPLY_PROJECT_CHANGED, CHAT_PROJECT_CHANGED, MOVE_WHILE_RUNNING, PROPOSALS_OTHER_PROJECT } from '@shared/api';
 import { CLIENT_HEADER, CLIENT_HEADER_VALUE } from '@shared/constants';
 import type { ChatChanges, HunkDecision } from '@shared/types';
 import type { Hono } from 'hono';
@@ -105,21 +105,24 @@ async function applyBody(extra: { expectedProjectId?: string | null } = {}) {
 }
 const apply = (body: unknown) => call(`/api/chats/${chatId}/changes/apply`, { method: 'POST', json: body });
 
-async function expectConflict(res: Response, message: string) {
+async function expectConflict(res: Response | undefined, message: string) {
+  if (!res) throw new Error('Expected a response');
   expect(res.status).toBe(409);
   expect(await res.json()).toMatchObject({ error: { code: 'conflict', message } });
 }
 
 describe('Review Apply and the project the proposals were made for', () => {
-  it('a turn pinned to A stages after the chat moved to B: Apply is a 409 and neither folder is written', async () => {
+  it('a turn pinned to A stages after a project change to B below the routes: Apply is a 409, nothing written', async () => {
     const hold = gate();
     scriptStage(hold);
     const consumed = collectEvents(await send());
     await hold.entered;
     try {
-      // The pending set is empty, so the move is allowed while the turn runs.
+      // The route refuses a move while the turn runs. Defence in depth: the project change is made below the routes
+      // (as a move commits), and the proposals' binding still keeps them out of B.
       const moved = await call(`/api/chats/${chatId}`, { method: 'PATCH', json: { projectId: projectB } });
-      expect(moved.status).toBe(200);
+      await expectConflict(moved, MOVE_WHILE_RUNNING);
+      await core.changes.changeProject(chatId, () => core.chats.update(chatId, { projectId: projectB }));
     } finally {
       hold.open();
       await consumed;
@@ -214,43 +217,34 @@ function afterApplyRead(between: () => Promise<void>) {
 }
 
 describe('a move or a detach can never land between Apply’s project check and its writes', () => {
-  it('a move that started before the stage commits after Apply read the project: refused, Apply writes into A', async () => {
-    const turnHold = gate();
-    scriptStage(turnHold);
-    const consumed = collectEvents(await send());
-    await turnHold.entered;
+  it('a move held at its commit keeps a turn from starting, so nothing can be staged before it lands', async () => {
+    scriptStage();
     // The move starts while nothing is pending, and is held right before it commits.
     const moveHold = holdProjectChange();
     const moving = call(`/api/chats/${chatId}`, { method: 'PATCH', json: { projectId: projectB } });
     await moveHold.entered;
-    turnHold.open();
-    await consumed;
-    const body = await applyBody();
-    let moved: Response | undefined;
-    afterApplyRead(async () => {
+    let sent: Response | undefined;
+    try {
+      // A turn can't start meanwhile, so it can't stage anything the move's pending check would miss.
+      sent = await send();
+    } finally {
       moveHold.open();
-      moved = await moving;
-    });
-
-    const res = await apply({ ...body, expectedProjectId: projectA });
-    // The move checks for pending proposals when it commits, so it is refused; the chat stays in A, where Apply wrote.
-    expect(moved?.status).toBe(409);
-    expect(res.status).toBe(200);
-    expect((await core.chats.get(chatId)).projectId).toBe(projectA);
-    expect(await readFile(path.join(dirA, 'new.txt'), 'utf8')).toBe('hi\n');
-    expect(await readdir(dirB)).toEqual([]);
+    }
+    await expectConflict(sent, CHAT_PROJECT_CHANGED);
+    expect((await moving).status).toBe(200);
+    expect((await core.chats.get(chatId)).projectId).toBe(projectB);
+    expect((await core.chats.get(chatId)).messages).toEqual([]);
+    expect((await core.changes.get(chatId)).pending).toBeNull();
+    expect(provider.stream).not.toHaveBeenCalled();
   });
 
-  it('a project removal that started before the stage detaches after Apply read the project: Apply is a 409', async () => {
-    const turnHold = gate();
-    scriptStage(turnHold);
-    const consumed = collectEvents(await send());
-    await turnHold.entered;
+  it('a project removal held at its detach commits after Apply read the project: Apply is a 409', async () => {
+    // The turn has staged and ended: a removal can't start while it runs.
+    scriptStage();
+    await collectEvents(await send());
     const removeHold = holdProjectChange();
     const removing = call(`/api/projects/${projectA}`, { method: 'DELETE' });
     await removeHold.entered;
-    turnHold.open();
-    await consumed;
     const body = await applyBody();
     let removed: Response | undefined;
     afterApplyRead(async () => {
@@ -305,25 +299,20 @@ describe('a move or a detach can never land between Apply’s project check and 
     expect(left[0]?.projectId).toBeNull();
   });
 
-  it('a stage racing a move: the move commits only if nothing was pending when it committed', async () => {
+  it('a move while a Review turn runs is refused, so what the turn stages stays with the project it was made for', async () => {
     const turnHold = gate();
     scriptStage(turnHold);
     const consumed = collectEvents(await send());
     await turnHold.entered;
-    const moveHold = holdProjectChange();
-    const moving = call(`/api/chats/${chatId}`, { method: 'PATCH', json: { projectId: projectB } });
-    await moveHold.entered;
-    // The turn, pinned to A, stages while the move is on its way.
-    turnHold.open();
-    await consumed;
+    let moved: Response | undefined;
+    try {
+      moved = await call(`/api/chats/${chatId}`, { method: 'PATCH', json: { projectId: projectB } });
+    } finally {
+      turnHold.open();
+      await consumed;
+    }
+    await expectConflict(moved, MOVE_WHILE_RUNNING);
     expect((await core.changes.get(chatId)).pending?.files.map((f) => f.path)).toEqual(['new.txt']);
-    moveHold.open();
-    const moved = await moving;
-
-    expect(moved.status).toBe(409);
-    expect(await moved.json()).toMatchObject({
-      error: { code: 'conflict', message: 'Apply or discard the proposed edits first.' },
-    });
     // The proposals stay with the project they were made for, which is still the chat's.
     expect((await core.chats.get(chatId)).projectId).toBe(projectA);
     const res = await apply({ ...(await applyBody()), expectedProjectId: projectA });

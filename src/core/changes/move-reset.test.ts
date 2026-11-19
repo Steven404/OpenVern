@@ -13,7 +13,7 @@ import { ensureDataDir } from '../storage/paths';
 import { cleanupTempDirs, makeTempDir } from '../storage/test-helpers';
 import { createReadFileTool } from '../tools/read-file';
 import type { EditToolName } from '../tools/types';
-import type { WriteHookInfo } from './auto-test-helpers';
+import { tempVolumeIgnoresCase, type WriteHookInfo } from './auto-test-helpers';
 import { sha256 } from './blobs';
 import { createChangesService } from './index';
 
@@ -99,6 +99,7 @@ async function setup() {
     exists,
     put,
     noteRead,
+    abs,
     moveTo,
     undo,
     storeFile,
@@ -411,5 +412,54 @@ describe('the final bytes, CRLF line endings included, must fit the write limit'
       message: writtenTooLargeText('review', 'crlf.txt', size),
     });
     expect(await s.stored()).toEqual(before);
+  });
+});
+
+// SPELLINGS OF ONE FILE ARE UNDONE TOGETHER OR NOT AT ALL, across all the batches a Retry undoes: a turn split by a
+// project change (refused by the routes while a turn runs; made below them here) can hold one file under one spelling
+// in its older batch and under another in its newer one.
+describe('a Retry over batches that hold two spellings of one file', () => {
+  it('skips both spellings (blocked) in every batch, so the user’s file survives', async (ctx) => {
+    ctx.skip(
+      !tempVolumeIgnoresCase(),
+      'needs a case-insensitive temp volume, where overlap.txt and OVERLAP.txt are one file',
+    );
+    const s = await setup();
+    const R1 = 'first write\n';
+    await s.put('A', 'overlap.txt', R1);
+    // The turn's open batch is closed by a project change and back; the turn, pinned to A, writes on.
+    await s.moveTo('B');
+    await s.moveTo('A');
+    await fs.rename(s.abs('A', 'overlap.txt'), s.abs('A', 'OVERLAP.txt'));
+    await s.noteRead('A', 'OVERLAP.txt');
+    await s.put('A', 'OVERLAP.txt', 'second write\n');
+    expect((await s.svc.get(CHAT)).applied.map((b) => b.written.map((f) => f.path))).toEqual([
+      ['overlap.txt'],
+      ['OVERLAP.txt'],
+    ]);
+    // The user renames it back and puts back the first write's bytes, which the older batch's entry would match.
+    await fs.rename(s.abs('A', 'OVERLAP.txt'), s.abs('A', 'overlap.txt'));
+    await fs.writeFile(s.abs('A', 'overlap.txt'), R1);
+
+    const res = await s.svc.prepareRetry({
+      chatId: CHAT,
+      projectId: 'A',
+      projectRoot: s.roots.A,
+      turnId: 'u',
+      mode: 'auto',
+    });
+    expect(res?.undo).toMatchObject({
+      restored: [],
+      skipped: [
+        { path: 'OVERLAP.txt', reason: 'blocked' },
+        { path: 'overlap.txt', reason: 'blocked' },
+      ],
+    });
+    expect(await s.read('A', 'overlap.txt')).toBe(R1);
+    const undos = (await s.svc.get(CHAT)).applied.map((b) => b.undo);
+    expect(undos).toEqual([
+      expect.objectContaining({ restored: [], skipped: [{ path: 'overlap.txt', reason: 'blocked' }] }),
+      expect.objectContaining({ restored: [], skipped: [{ path: 'OVERLAP.txt', reason: 'blocked' }] }),
+    ]);
   });
 });

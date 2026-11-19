@@ -5,7 +5,7 @@
 import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { RETRY_OTHER_PROJECT, type UndoBatchResponse } from '@shared/api';
+import { MOVE_WHILE_RUNNING, RETRY_OTHER_PROJECT, type UndoBatchResponse } from '@shared/api';
 import { CLIENT_HEADER, CLIENT_HEADER_VALUE } from '@shared/constants';
 import type { AgentEvent } from '@shared/events';
 import type { ChatChanges } from '@shared/types';
@@ -233,10 +233,19 @@ describe('Undo rechecks the chat’s project under the store lock', () => {
   });
 });
 
-describe('a retry of a turn split by a move', () => {
-  it('undoes the turn’s batches newest first, so a file the pinned turn wrote twice in A goes back to missing', async () => {
-    const R1 = 'first attempt\n';
-    const R2 = 'second write, after the move\n';
+// Defence in depth: the routes refuse a move while a turn runs, so a turn is never split by one. These tests make the
+// project change below the routes (`changeProject` + `chats.update`, as a move commits) to check that the turn's
+// pinned project, the move reset and the retry's newest-first undo still keep such a split safe.
+describe('a retry of a turn split by a project change made below the routes', () => {
+  const R1 = 'first attempt\n';
+  const R2 = 'second write, after the move\n';
+
+  /**
+   * An Auto turn in A creates overlap.txt (R1); while the turn runs, the route refuses to move the chat, and the
+   * project change is then made directly; the turn, still pinned to A, reads and rewrites it (R2) into a second
+   * batch. Ends with the chat moved back to A.
+   */
+  async function turnSplitByMove(): Promise<{ chatId: string; file: string }> {
     const created = await call('/api/chats', {
       method: 'POST',
       json: { projectId: projectA, model: MODEL, editMode: 'auto', expectedInGitRepo: false },
@@ -274,7 +283,11 @@ describe('a retry of a turn split by a move', () => {
     ).then(collectEvents);
     await hold.entered;
     try {
-      expect((await move(chatId, projectA, projectB)).status).toBe(200);
+      const refused = await move(chatId, projectA, projectB);
+      expect(refused.status).toBe(409);
+      expect(await refused.json()).toMatchObject({ error: { code: 'conflict', message: MOVE_WHILE_RUNNING } });
+      expect((await core.chats.get(chatId)).projectId).toBe(projectA);
+      await core.changes.changeProject(chatId, () => core.chats.update(chatId, { projectId: projectB }));
     } finally {
       hold.open();
     }
@@ -282,13 +295,17 @@ describe('a retry of a turn split by a move', () => {
     const file = path.join(dirA, 'overlap.txt');
     expect(await readFile(file, 'utf8')).toBe(R2);
     expect(await exists(path.join(dirB, 'overlap.txt'))).toBe(false);
-    // The move split the turn: two batches in A, both holding overlap.txt.
+    // The project change split the turn: two batches in A, both holding overlap.txt.
     expect((await getChanges(chatId)).applied.map((b) => b.written.map((f) => f.path))).toEqual([
       ['overlap.txt'],
       ['overlap.txt'],
     ]);
-
     expect((await move(chatId, projectB, projectA)).status).toBe(200);
+    return { chatId, file };
+  }
+
+  it('undoes the turn’s batches newest first, so a file the pinned turn wrote twice in A goes back to missing', async () => {
+    const { chatId, file } = await turnSplitByMove();
     const events = await collectEvents(await retry(chatId, projectA));
     expect(types(events)).not.toContain('error');
     // Undone in full: the file the turn created is gone, not left with the first write's bytes.
@@ -300,5 +317,35 @@ describe('a retry of a turn split by a move', () => {
     ]);
     const notice = events.find((e) => e.type === 'assistant_end');
     expect(notice).toMatchObject({ message: { notice: "Undid the previous attempt's edits (1 file)." } });
+  });
+
+  it('leaves a file the user put back to the first write’s bytes: the newer batch’s skip holds for the older one', async () => {
+    const { chatId, file } = await turnSplitByMove();
+    // Back in A, the user restores the first version by hand: the newer batch (R2) no longer matches, the older one
+    // (R1) would.
+    await writeFile(file, R1);
+    const events = await collectEvents(await retry(chatId, projectA));
+    expect(types(events)).not.toContain('error');
+    // The user's bytes survive: no batch touched the file.
+    expect(await readFile(file, 'utf8')).toBe(R1);
+    const applied = (await getChanges(chatId)).applied;
+    expect(applied.map((b) => b.undo)).toEqual([
+      expect.objectContaining({
+        by: 'retry',
+        restored: [],
+        skipped: [{ path: 'overlap.txt', reason: 'changed_since' }],
+      }),
+      expect.objectContaining({
+        by: 'retry',
+        restored: [],
+        skipped: [{ path: 'overlap.txt', reason: 'changed_since' }],
+      }),
+    ]);
+    const notice = events.find((e) => e.type === 'assistant_end');
+    expect(notice).toMatchObject({
+      message: {
+        notice: "Couldn't undo the previous attempt's edits. overlap.txt changed since and was left as it is.",
+      },
+    });
   });
 });

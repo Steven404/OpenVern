@@ -3,6 +3,7 @@
 
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
+import { MOVE_WHILE_RUNNING } from '@shared/api';
 import type { Chat, ChatSummary, PendingChanges, Project } from '@shared/types';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FakeScript } from '../core/providers/fake';
@@ -216,10 +217,11 @@ describe('PATCH /api/chats/:id while a project chat is running', () => {
     expect((await h.core.chats.get(chat.id)).messages).toEqual([]); // the rejected send persisted nothing
   });
 
-  it('a move without `archived` while running still works and keeps the flag', async () => {
+  it('a move without `archived` while running is refused and changes nothing', async () => {
     const project = await newProject();
     const chat = await newChat(project.id);
     await patch(chat.id, { archived: true });
+    const before = await stored(chat.id);
     h.core.agent = {
       runTurn: async () => {},
       isRunning: () => true,
@@ -227,9 +229,12 @@ describe('PATCH /api/chats/:id while a project chat is running', () => {
     } satisfies AgentService;
 
     const moved = await patch(chat.id, { projectId: null });
-    expect(moved.status).toBe(200);
-    expect(await json<ChatSummary>(moved)).toMatchObject({ projectId: null, archived: true });
-    expect(await stored(chat.id)).toMatchObject({ projectId: null, archived: true });
+    expect(moved.status).toBe(409);
+    expect(await json<{ error: { code: string; message: string } }>(moved)).toMatchObject({
+      error: { code: 'conflict', message: MOVE_WHILE_RUNNING },
+    });
+    expect(await stored(chat.id)).toEqual(before);
+    expect(before).toMatchObject({ projectId: project.id, archived: true });
   });
 });
 

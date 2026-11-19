@@ -4,6 +4,7 @@
 import { openMenu, renderApp, resetUi, seededClient } from '@renderer/app/test-utils';
 import { ApiError } from '@renderer/lib/api-client';
 import { queryKeys } from '@renderer/lib/query-keys';
+import { REMOVE_WHILE_RUNNING } from '@shared/api';
 import { errorInfo } from '@shared/errors';
 import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -82,5 +83,27 @@ describe('removing a project', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.allChatChanges }));
     expect(queryKeys.allChatChanges).toEqual(['chatChanges']);
+  });
+
+  it('refused while a reply runs in one of its chats: the dialog shows why, nothing is removed, the list is read again', async () => {
+    const { client, project, chat } = await seededClient();
+    // A run this window doesn't know about (another window's), so only the server can refuse.
+    const run = client
+      .sendMessage(chat.id, { text: 'go', attachmentIds: [], model: chat.model }, new AbortController().signal)
+      [Symbol.asyncIterator]();
+    await run.next(); // the run is registered once the first event is out
+    const view = renderApp({ client });
+    const invalidate = vi.spyOn(view.queryClient, 'invalidateQueries');
+    const dialog = await openRemoveDialog(project.name);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }));
+
+    const alert = await within(dialog).findByRole('alert');
+    expect(alert.textContent).toBe(REMOVE_WHILE_RUNNING);
+    expect(screen.getByRole('dialog', { name: 'Remove project?' })).toBe(dialog);
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.projects }));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.chats });
+    expect((await client.listProjects()).map((p) => p.id)).toContain(project.id);
+    expect((await client.getChat(chat.id)).projectId).toBe(project.id);
+    await run.return?.(undefined);
   });
 });

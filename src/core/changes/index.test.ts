@@ -536,6 +536,41 @@ describe('review: too-large proposals', () => {
     const res = await s.apply(before?.revision ?? 0, await s.allOf('accepted'));
     expect(res.batch.written.map((f) => f.path)).toEqual(['big.txt', 'other.txt']);
   });
+  it('a partial apply whose text would exceed the write limit (CRLF included) is a too_large conflict, not written', async () => {
+    const s = await setup();
+    // Two distant hunks: the first shrinks a long line, the second grows a short one. The whole proposal is within the
+    // limit; accepting only the second keeps the long line and adds the grown one, which is not.
+    const long = 140_000;
+    const keep = Array.from({ length: 10 }, (_, i) => `keep ${i}`);
+    const old = ['A'.repeat(long), ...keep, 'b', ''].join('\r\n');
+    await s.write('a.txt', 'one\n');
+    await s.write('big.txt', old);
+    await s.tools().stage('a.txt', 'two\n');
+    // The model sends LF; the proposal keeps the file's CRLF.
+    const staged = await s.tools().stage('big.txt', ['a', ...keep, 'B'.repeat(long), ''].join('\n'));
+    expect(staged.file?.hunks).toHaveLength(2);
+    const p = await s.pending();
+    const [shrink, grow] = p?.files.find((f) => f.path === 'big.txt')?.hunks ?? [];
+    const decisions = await s.allOf('accepted');
+    decisions['big.txt'] = { [shrink?.id ?? '']: 'rejected', [grow?.id ?? '']: 'accepted' };
+    const res = await s.apply(p?.revision ?? 0, decisions);
+    // The earlier file is written and recorded; the oversized one is a conflict and left as it was.
+    expect(res.batch.written.map((f) => f.path)).toEqual(['a.txt']);
+    expect(res.batch.conflicts).toEqual([{ path: 'big.txt', reason: 'too_large' }]);
+    expect(await s.read('a.txt')).toBe('two\n');
+    expect(await s.read('big.txt')).toBe(old);
+    expect(res.changes.applied).toHaveLength(1);
+    expect(res.changes.pending).toBeNull();
+    expect(res.changes.diskSeq).toBe(1);
+    expect(await s.svc.takeNote(CHAT, REVIEW)).toBe(
+      [
+        '[OpenVern] Since your last reply the user reviewed your proposed edits:',
+        '- Written: a.txt (1 of 1)',
+        '- Not written, too large to apply: big.txt',
+        'Nothing else is pending.',
+      ].join('\n'),
+    );
+  });
 });
 
 describe('review: legacy too-large pending files', () => {
@@ -584,7 +619,7 @@ describe('review: legacy too-large pending files', () => {
     expect(await s.svc.takeNote(CHAT, REVIEW)).toBe(
       [
         '[OpenVern] Since your last reply the user reviewed your proposed edits:',
-        '- Not written, too large to review: big.txt',
+        '- Not written, too large to apply: big.txt',
         'Nothing else is pending.',
       ].join('\n'),
     );
@@ -609,7 +644,7 @@ describe('review: legacy too-large pending files', () => {
         '[OpenVern] Since your last reply the user reviewed your proposed edits:',
         '- Written: ok.txt (1 of 1)',
         '- Not written, changed on disk before apply: conf.txt',
-        '- Not written, too large to review: big.txt',
+        '- Not written, too large to apply: big.txt',
         'Nothing else is pending.',
       ].join('\n'),
     );

@@ -168,6 +168,9 @@ export function createProjectsService(opts: ProjectsServiceOptions): ProjectsSer
     async remove(id) {
       await find(id);
       // Re-home chats first: a crash in between leaves a harmless orphan project, never dangling chats.
+      // This detach is a project change without the change-store lock or the Auto reset. It must never move a chat
+      // whose turn is running: `DELETE /projects/:id` checks that no chat of the project is running or starting and
+      // keeps turns from starting in its chats until this returns, so a turn's writes stay in one project.
       await opts.chats.detachProject(id);
       await mutate((projects) => projects.filter((p) => p.id !== id));
     },

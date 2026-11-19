@@ -57,6 +57,12 @@ export function ProjectMenu({ project, onMenuOpenChange }: ProjectMenuProps) {
         queryClient.invalidateQueries({ queryKey: queryKeys.allChatChanges }),
       ]);
     },
+    // A refusal (a reply running in one of its chats, 409) changed nothing; its message shows in the dialog below.
+    // The list and the chats are read again, so the sidebar shows what the server has now.
+    onError: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.projects });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.chats });
+    },
   });
 
   // Shown inline; the dialog stays open so the user can retry (a retry clears it, a success closes the dialog).
