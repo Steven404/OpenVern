@@ -387,7 +387,7 @@ export interface ReviewNoteInput {
   /** Files with no decision at all. */
   skipped: NoteFile[];
   conflicts: { path: string; reason: ApplyConflictReason }[];
-  /** Legacy proposals too large to review, which apply refused to write. */
+  /** Files apply refused as too large: legacy proposals too large to review, or a partial apply over the write limit. */
   tooLarge: string[];
 }
 
@@ -408,6 +408,16 @@ const notDone: Record<ChangeKind, string> = {
 const writtenText = (f: NoteFile): string => `${f.path} (${f.accepted} of ${f.total}${f.total > 1 ? ' changes' : ''})`;
 const notDoneText = (f: { path: string; kind: ChangeKind }): string => `${f.path} (${notDone[f.kind]})`;
 
+/**
+ * A conflict line, byte for byte as v0.3 wrote it. v0.3 turned "path (reason)" into "reason: path" with a regex whose
+ * `.` stops at a line terminator, so for a path holding one (\n, \r, U+2028, U+2029) it didn't match and the line
+ * kept "path (reason)". The reasons hold neither a line terminator nor " (", so this is the only case it missed.
+ */
+const conflictLine = (c: { path: string; reason: ApplyConflictReason }): string =>
+  /[\n\r\u2028\u2029]/.test(c.path)
+    ? `- Not written, ${c.path} (${CONFLICT_TEXT[c.reason]})`
+    : `- Not written, ${CONFLICT_TEXT[c.reason]}: ${c.path}`;
+
 /** The note's review block. `stillPending` = files still waiting for review. */
 export function reviewNote(input: ReviewNoteInput, stillPending: number): string {
   const lines = [CHANGES_NOTE_INTRO];
@@ -415,7 +425,7 @@ export function reviewNote(input: ReviewNoteInput, stillPending: number): string
   if (input.rejected.length) lines.push(`- Rejected: ${input.rejected.map(notDoneText).join(', ')}`);
   if (input.discarded.length) lines.push(`- Discarded: ${input.discarded.map(notDoneText).join(', ')}`);
   if (input.skipped.length) lines.push(`- Left out, not decided: ${input.skipped.map(notDoneText).join(', ')}`);
-  for (const c of input.conflicts) lines.push(`- Not written, ${CONFLICT_TEXT[c.reason]}: ${c.path}`);
+  for (const c of input.conflicts) lines.push(conflictLine(c));
   for (const path of input.tooLarge) lines.push(`- Not written, too large to review: ${path}`);
   lines.push(
     stillPending > 0

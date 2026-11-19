@@ -1107,7 +1107,8 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
   /**
    * Undoes one batch in place (it must still have its undo data). Under the chat's store lock only (`mutateFiles`,
    * whose `diskChanged` is called for each restored file; nothing here throws). `project.real` is the project's real
-   * root, pinned once by the caller for the whole undo (see PINNED ROOT).
+   * root, pinned once by the caller for the whole undo (see PINNED ROOT). A path in `held` was skipped by a later batch
+   * of the same undo: it is never touched and is reported as skipped for that reason.
    */
   async function undoInStore(
     chatId: Id,
@@ -1116,12 +1117,13 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
     batch: StoredBatch,
     by: BatchUndo['by'],
     diskChanged: () => void,
+    held?: ReadonlyMap<string, UndoSkipReason>,
   ): Promise<BatchUndo> {
     const blobs = blobsFor(chatId);
     const restored: string[] = [];
     const skipped: BatchUndo['skipped'] = [];
     for (const e of [...(batch.undoData ?? [])].sort(byPath)) {
-      const reason = await undoFile(chatId, project, e, blobs);
+      const reason = held?.get(e.path) ?? (await undoFile(chatId, project, e, blobs));
       if (reason) skipped.push({ path: e.path, reason });
       else {
         diskChanged();
@@ -1245,9 +1247,12 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
           try {
             const check = await checkConflict(input.projectRoot, rec, change.kind, pin);
             if ('reason' in check) return check.reason;
+            const text = change.kind === 'delete' ? null : applyHunks(rec.baseContent, rec.content, accepted);
+            // The write limit holds for the bytes this apply would write, CRLF included. Staging checked the whole
+            // proposal; accepting only some hunks (keeping base lines another hunk removed) can make the file larger.
+            if (text !== null && Buffer.byteLength(text) > LIMITS.writeFileMaxBytes) return 'too_large';
             rejectedHunks += rejected;
             skippedHunks += undecided;
-            const text = change.kind === 'delete' ? null : applyHunks(rec.baseContent, rec.content, accepted);
             if (text !== null) await fs.mkdir(path.dirname(check.abs), { recursive: true });
             await deps.beforeWrite?.({ op: 'apply', chatId: input.chatId, path: rec.path });
             // The same check again as `replaceChecked`'s last step, after the folder creation and the hook: re-resolve
@@ -1271,6 +1276,7 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
         });
         if (outcome !== null) {
           conflicts.push({ path: rec.path, reason: outcome });
+          if (outcome === 'too_large') tooLarge.push(rec.path);
           continue;
         }
         diskChanged();
@@ -1497,6 +1503,10 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
         // left, which only holds once every later write of that file has been undone, so the batches are undone in the
         // reverse of the order they were opened in (`applied` is in that order). Oldest first would skip the first
         // write as `changed_since` and then restore its bytes from the second one's original.
+        // A SKIP HOLDS FOR OLDER BATCHES (invariant): once a later batch skips a path, no older batch touches it. The
+        // later write is what the skip protects (the user changed the file after it, perhaps back to the bytes an
+        // older write left), so an older batch whose entry happens to match must not delete or overwrite it. Paths a
+        // later batch restored go on to the older batches as usual.
         const batches = store.applied
           .filter(
             (b) =>
@@ -1509,20 +1519,22 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
           .reverse();
         const project = { root: projectRoot, real: batches.length > 0 ? await pinRoot(projectRoot) : null };
         const undos: BatchUndo[] = [];
-        for (const batch of batches) undos.push(await undoInStore(chatId, project, store, batch, 'retry', diskChanged));
+        // Each path's first skip, newest batch first: carried into every older batch and kept as the reported reason.
+        const held = new Map<string, UndoSkipReason>();
+        for (const batch of batches) {
+          const undo = await undoInStore(chatId, project, store, batch, 'retry', diskChanged, held);
+          for (const s of undo.skipped) if (!held.has(s.path)) held.set(s.path, s.reason);
+          undos.push(undo);
+        }
         const last = undos.at(-1);
         const oldest = batches.at(-1);
         let result: { batchId: Id; undo: BatchUndo } | null = null;
         if (last && oldest) {
           // One report per path: a file any batch had to skip is reported as skipped (the reason of the newest batch
           // that skipped it), so the model reads it again; the others are restored.
-          const skipped = new Map<string, BatchUndo['skipped'][number]>();
-          for (const u of undos) for (const s of u.skipped) if (!skipped.has(s.path)) skipped.set(s.path, s);
-          const restored = new Set(undos.flatMap((u) => u.restored).filter((p) => !skipped.has(p)));
-          result = {
-            batchId: oldest.id,
-            undo: { ...last, restored: [...restored].sort(), skipped: [...skipped.values()].sort(byPath) },
-          };
+          const skipped = [...held].map(([path, reason]) => ({ path, reason })).sort(byPath);
+          const restored = new Set(undos.flatMap((u) => u.restored).filter((p) => !held.has(p)));
+          result = { batchId: oldest.id, undo: { ...last, restored: [...restored].sort(), skipped } };
         }
         // The retry starts over: the model must read again before overwriting anything, in every project.
         seen.delete(chatId);

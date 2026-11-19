@@ -41,6 +41,7 @@ import type {
   ReasoningEffort,
   ToolCall,
   ToolMessage,
+  UndoSkipReason,
   Usage,
   UserMessage,
 } from '@shared/types';
@@ -851,9 +852,22 @@ export class MockApiClient implements ApiClient {
     return batch.id;
   }
 
-  /** The mock has no disk to differ from what the turn wrote, so every file is restored. */
-  private restore(chatId: Id, batch: MockBatch, by: BatchUndo['by']): BatchUndo {
-    const undo: BatchUndo = { at: now(), by, restored: batch.written.map((f) => f.path).sort(), skipped: [] };
+  /**
+   * The mock has no disk to differ from what the turn wrote, so every file is restored, except a path in `held`: like
+   * the server, a path a later batch of the same retry skipped is never touched by an older one and keeps that reason.
+   */
+  private restore(
+    chatId: Id,
+    batch: MockBatch,
+    by: BatchUndo['by'],
+    held: ReadonlyMap<string, UndoSkipReason> = new Map(),
+  ): BatchUndo {
+    const undo: BatchUndo = { at: now(), by, restored: [], skipped: [] };
+    for (const p of batch.written.map((f) => f.path).sort()) {
+      const reason = held.get(p);
+      if (reason) undo.skipped.push({ path: p, reason });
+      else undo.restored.push(p);
+    }
     batch.undo = undo;
     if (undo.restored.length > 0) this.bumpDisk(chatId);
     return undo;
@@ -878,21 +892,32 @@ export class MockApiClient implements ApiClient {
 
   /**
    * Before a retry: undo every auto batch of the turn written into the turn's project that isn't undone yet, newest
-   * first like the server (a move can split a turn into batches that hold the same file). Each path is reported once.
+   * first like the server (a move can split a turn into batches that hold the same file). A path a newer batch skipped
+   * is held for the older ones. Each path is reported once: skipped (the newest reason) if any batch skipped it.
    */
   private undoTurn(chatId: Id, turnId: Id, projectId: Id | null): { batchId: Id; undo: BatchUndo } | null {
     const batches = (this.applied.get(chatId) ?? [])
       .filter((b) => b.source === 'auto' && b.turnId === turnId && !b.undo && b.projectId === (projectId ?? undefined))
       .reverse();
+    const held = new Map<string, UndoSkipReason>();
+    const restored = new Set<string>();
     let result: { batchId: Id; undo: BatchUndo } | null = null;
     for (const batch of batches) {
-      const undo = this.restore(chatId, batch, 'retry');
-      result = {
-        batchId: batch.id,
-        undo: result ? { ...undo, restored: [...new Set([...result.undo.restored, ...undo.restored])].sort() } : undo,
-      };
+      const undo = this.restore(chatId, batch, 'retry', held);
+      for (const s of undo.skipped) if (!held.has(s.path)) held.set(s.path, s.reason);
+      for (const p of undo.restored) restored.add(p);
+      result = { batchId: batch.id, undo };
     }
-    return result;
+    if (!result) return null;
+    const skipped = [...held].map(([path, reason]) => ({ path, reason }));
+    return {
+      batchId: result.batchId,
+      undo: {
+        ...result.undo,
+        restored: [...restored].filter((p) => !held.has(p)).sort(),
+        skipped: skipped.sort((a, b) => a.path.localeCompare(b.path)),
+      },
+    };
   }
 
   private chatChanges(chatId: Id): ChatChanges {
