@@ -243,13 +243,15 @@ export const TOOL_CALL_IDS_ERROR =
   'The model sent tool calls without an ID of their own, so none of them ran. Try again, or pick another model.';
 
 /**
- * Whether every call of one model response has an ID of its own: not empty, not shared with another call of the
- * response, and not used by any call or result earlier in the chat (`used`).
+ * Whether every call of one model response has an ID of its own: a string, not empty, not shared with another call of
+ * the response, and not used by any call or result earlier in the chat (`used`). A provider may hand over an ID that
+ * isn't a string despite the type, and that must take this refusal too, not throw.
  */
 function callIdsUsable(calls: readonly ToolCall[], used: ReadonlySet<string>): boolean {
   const ids = new Set<string>();
   for (const call of calls) {
-    if (call.id.trim() === '' || ids.has(call.id) || used.has(call.id)) return false;
+    const id: unknown = call.id;
+    if (typeof id !== 'string' || id.trim() === '' || ids.has(id) || used.has(id)) return false;
     ids.add(call.id);
   }
   return true;
@@ -628,6 +630,10 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
       if (!failure && !callIdsUsable(toolCalls, usedCallIds)) {
         failure = { status: 'error', error: errorInfo('provider_error', TOOL_CALL_IDS_ERROR) };
       }
+      // PROVIDER METADATA IS KEPT ONLY WITH THE TOOL CALLS IT CAME WITH: reasoning details may refer to the response's
+      // calls, and a failed response is stored without them, so its metadata is dropped too. Otherwise the next request
+      // to the same model would replay reasoning about calls that are no longer in the chat.
+      const keptMeta = failure && toolCalls.length > 0 ? undefined : providerMeta;
 
       const assistant: AssistantMessage = {
         id: messageId,
@@ -639,7 +645,7 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
         status: failure ? failure.status : 'complete',
         ...(failure?.status === 'error' ? { error: failure.error } : {}),
         ...(usage ? { usage } : {}),
-        ...(providerMeta !== undefined ? { providerMeta } : {}),
+        ...(keptMeta !== undefined ? { providerMeta: keptMeta } : {}),
         ...(step === 0 && firstNotice !== undefined ? { notice: firstNotice } : {}),
       };
       await chats.appendMessage(chatId, assistant);

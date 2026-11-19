@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { APP_NAME } from '@shared/constants';
 import { ERROR_DEFAULTS } from '@shared/errors';
 import { describe, expect, it, vi } from 'vitest';
-import { createOpenRouterProvider, mapModels } from './openrouter';
+import { AMBIGUOUS_TOOL_CALLS_MESSAGE, createOpenRouterProvider, mapModels } from './openrouter';
 import { type Provider, ProviderError, type ProviderEvent, type ProviderRequest } from './types';
 
 // A value that differs from the real constant, so the attribution test fails if the name is hard-coded.
@@ -266,6 +266,106 @@ describe('stream parsing', () => {
     const events = await collect(make(() => sseResponse(sse)).provider);
     expect(events).toEqual([
       { type: 'tool_call', call: { id: 'c1', name: 'list_files', argsJson: '{}' } },
+      { type: 'finish', reason: 'tool_calls' },
+    ]);
+  });
+
+  describe('tool-call deltas without an index', () => {
+    /** One SSE body: each delta's `tool_calls` in its own chunk, then a `tool_calls` finish. */
+    const sse = (...chunks: unknown[][]) =>
+      [
+        ...chunks.map(
+          (tool_calls) =>
+            `data: ${JSON.stringify({ choices: [{ index: 0, delta: { tool_calls }, finish_reason: null }] })}`,
+        ),
+        'data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}',
+        'data: [DONE]',
+        '',
+      ].join('\n\n');
+    const fn = (name: string, args: string) => ({ type: 'function', function: { name, arguments: args } });
+
+    /** The stream must fail with a retryable provider error before emitting any tool call. */
+    async function expectRefused(body: string) {
+      const { provider } = make(() => sseResponse(body));
+      const seen: ProviderEvent[] = [];
+      const err = await caught(
+        (async () => {
+          for await (const e of provider.stream(REQ, new AbortController().signal)) seen.push(e);
+        })(),
+      );
+      expect(seen.filter((e) => e.type === 'tool_call')).toEqual([]);
+      expect(err).toMatchObject({ code: 'provider_error', retryable: true, message: AMBIGUOUS_TOOL_CALLS_MESSAGE });
+    }
+
+    it('argument chunks with no name, and the same or no ID, continue one call', async () => {
+      const events = await collect(
+        make(() =>
+          sseResponse(
+            sse(
+              [{ id: 'c1', ...fn('read_file', '{"pa') }],
+              [{ function: { arguments: 'th": ' } }],
+              [{ id: 'c1', function: { arguments: '"a.txt"}' } }],
+            ),
+          ),
+        ).provider,
+      );
+      expect(events).toEqual([
+        { type: 'tool_call', call: { id: 'c1', name: 'read_file', argsJson: '{"path": "a.txt"}' } },
+        { type: 'finish', reason: 'tool_calls' },
+      ]);
+    });
+
+    it('a call with a new ID starts its own call', async () => {
+      const events = await collect(
+        make(() =>
+          sseResponse(
+            sse([
+              { id: 'c1', ...fn('read_file', '{"path":"a"}') },
+              { id: 'c2', ...fn('read_file', '{}') },
+            ]),
+          ),
+        ).provider,
+      );
+      expect(events.filter((e) => e.type === 'tool_call')).toEqual([
+        { type: 'tool_call', call: { id: 'c1', name: 'read_file', argsJson: '{"path":"a"}' } },
+        { type: 'tool_call', call: { id: 'c2', name: 'read_file', argsJson: '{}' } },
+      ]);
+    });
+
+    it('a call that repeats the previous call’s ID with a new name fails the response', async () => {
+      await expectRefused(
+        sse([
+          { id: 'c1', ...fn('read_file', '{"path":"a.txt"}') },
+          { id: 'c1', ...fn('write_file', '{"path":"b"}') },
+        ]),
+      );
+    });
+
+    it('a call with no ID and a new name fails the response', async () => {
+      await expectRefused(
+        sse([{ id: 'c1', ...fn('read_file', '{"path":"a.txt"}') }, fn('write_file', '{"path":"b"}')]),
+      );
+    });
+
+    it('a call with no ID that repeats the name fails the response', async () => {
+      await expectRefused(sse([{ id: 'c1', ...fn('read_file', '{"path":"a"}') }], [fn('read_file', '{"path":"b"}')]));
+    });
+
+    it('nameless arguments after complete ones start afresh and fail the response', async () => {
+      await expectRefused(sse([{ id: 'c1', ...fn('read_file', '{"path":"a"}') }], [{ function: { arguments: '{}' } }]));
+    });
+  });
+
+  it('a tool-call ID that is not a string is ignored, leaving the call with an empty ID', async () => {
+    const sse = [
+      'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":7,"type":"function","function":{"name":"read_file","arguments":"{}"}}]},"finish_reason":null}]}',
+      'data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}',
+      'data: [DONE]',
+      '',
+    ].join('\n\n');
+    const events = await collect(make(() => sseResponse(sse)).provider);
+    expect(events).toEqual([
+      { type: 'tool_call', call: { id: '', name: 'read_file', argsJson: '{}' } },
       { type: 'finish', reason: 'tool_calls' },
     ]);
   });

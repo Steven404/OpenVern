@@ -6,7 +6,9 @@ import type { AgentEvent } from '@shared/events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { type AutoSetup, setupAuto } from '../changes/auto-test-helpers';
 import { sha256 } from '../changes/blobs';
-import type { FakeScript, FakeStep } from '../providers/fake';
+import type { FakeProvider, FakeScript, FakeStep } from '../providers/fake';
+import { AMBIGUOUS_TOOL_CALLS_MESSAGE, createOpenRouterProvider } from '../providers/openrouter';
+import type { ProviderRequest } from '../providers/types';
 import { getProjectTools } from '../tools';
 import type { GetProjectTools } from '../tools/types';
 import type { TurnChanges } from '../types';
@@ -671,6 +673,139 @@ describe('Auto agent loop with real files', () => {
       const next = results(await h.run({ newUserMessage: { text: 'go on', attachmentIds: [] } }));
       expect(next).toMatchObject([{ ok: false, output: autoUnreadText('b.txt') }]);
       expect(await s.read('b.txt')).toBe('bee\n');
+    });
+
+    it('a call whose ID is not a string: no call of the response runs, and the turn ends with the usual error', async () => {
+      await refusedThenOverwrite([
+        { type: 'tool_call', call: { id: 7 as unknown as string, name: 'read_file', argsJson: '{"path":"a.txt"}' } },
+        { type: 'tool_call', call: { id: 'w', name: 'write_file', argsJson: '{"path":"new.txt","content":"new"}' } },
+        { type: 'finish', reason: 'tool_calls' },
+      ]);
+      expect(h.messages().filter((m) => m.role === 'assistant')[0]).toMatchObject({ status: 'error', toolCalls: [] });
+    });
+  });
+
+  describe('OpenRouter wire: tool calls the parser can’t tell apart run none of the response', () => {
+    const DONE =
+      'data: {"choices":[{"index":0,"delta":{"content":"Done"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n';
+    /** One SSE body: each delta in its own chunk, then a `tool_calls` finish. */
+    const sse = (...deltas: object[]) =>
+      [
+        ...deltas.map((delta) => `data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason: null }] })}`),
+        `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })}`,
+        'data: [DONE]',
+        '',
+      ].join('\n\n');
+    const fn = (name: string, args: object | string) => ({
+      type: 'function',
+      function: { name, arguments: typeof args === 'string' ? args : JSON.stringify(args) },
+    });
+    let bodies: { messages: Record<string, unknown>[] }[];
+    /** The real OpenRouter provider in the Auto loop, answering request n with `responses[n]` (then "Done"). */
+    async function wire(...responses: string[]) {
+      bodies = [];
+      const inner = createOpenRouterProvider({
+        getApiKey: async () => 'sk-or-v1-test',
+        fetch: (async (_url: unknown, init?: RequestInit) => {
+          bodies.push(JSON.parse(String(init?.body)));
+          return new Response(responses[bodies.length - 1] ?? DONE, {
+            status: 200,
+            headers: { 'Content-Type': 'text/event-stream' },
+          });
+        }) as typeof fetch,
+      });
+      const calls: ProviderRequest[] = [];
+      const provider: FakeProvider = {
+        id: inner.id,
+        calls,
+        listModels: (signal) => inner.listModels(signal),
+        validateKey: (key, signal) => inner.validateKey(key, signal),
+        stream: (req, signal) => {
+          calls.push(req);
+          return inner.stream(req, signal);
+        },
+      };
+      h = await createHarness({ script: () => [], provider, changes: s.svc, projectRoot: s.root, getProjectTools });
+      await h.chats.update(h.chatId, { title: 'Test', editMode: 'auto' });
+    }
+    async function expectNoneRan(events: AgentEvent[]) {
+      expect(events.filter((e) => e.type === 'tool_call' || e.type === 'tool_result')).toEqual([]);
+      expect(events.filter((e) => e.type === 'error')).toMatchObject([
+        { error: { code: 'provider_error', message: AMBIGUOUS_TOOL_CALLS_MESSAGE, retryable: true } },
+      ]);
+      expect(h.messages().filter((m) => m.role === 'tool')).toEqual([]);
+      expect(h.messages().at(-1)).toMatchObject({ role: 'assistant', status: 'error', toolCalls: [] });
+      expect(bodies).toHaveLength(1);
+      expect(await s.exists('new.txt')).toBe(false);
+      expect(await s.exists('sibling.txt')).toBe(false);
+      expect(await s.read('a.txt')).toBe('original\n');
+    }
+
+    it('an indexless call that repeats the previous call’s ID with a new name: nothing runs, nothing is written', async () => {
+      await wire(
+        sse({
+          tool_calls: [
+            { id: 'c1', ...fn('read_file', { path: 'a.txt' }) },
+            { id: 'c1', ...fn('write_file', { path: 'new.txt', content: 'new' }) },
+            { id: 'c2', ...fn('write_file', { path: 'sibling.txt', content: 'sib' }) },
+          ],
+        }),
+      );
+      await expectNoneRan(await h.run());
+    });
+
+    it('an indexless call with no ID and a new name: nothing runs, nothing is written', async () => {
+      await wire(
+        sse({
+          tool_calls: [
+            { id: 'c1', ...fn('read_file', { path: 'a.txt' }) },
+            fn('write_file', { path: 'new.txt', content: 'new' }),
+            { id: 'c2', ...fn('write_file', { path: 'sibling.txt', content: 'sib' }) },
+          ],
+        }),
+      );
+      await expectNoneRan(await h.run());
+    });
+
+    it('indexless argument chunks for one call still assemble it, and it runs', async () => {
+      await wire(
+        sse(
+          { tool_calls: [{ id: 'c1', ...fn('write_file', '{"path":"new.txt",') }] },
+          { tool_calls: [{ function: { arguments: '"content":' } }] },
+          { tool_calls: [{ id: 'c1', function: { arguments: '"new"}' } }] },
+        ),
+      );
+      expect(results(await h.run())).toMatchObject([{ name: 'write_file', ok: true }]);
+      expect(await s.read('new.txt')).toBe('new');
+    });
+
+    it('a refused response keeps no reasoning details, so the next request carries none', async () => {
+      await wire(
+        sse(
+          {
+            content: 'Let me look.',
+            reasoning_details: [{ type: 'reasoning.text', text: 'Read, then write.', index: 0 }],
+          },
+          {
+            tool_calls: [
+              { index: 0, id: 'dup', ...fn('read_file', { path: 'a.txt' }) },
+              { index: 1, id: 'dup', ...fn('write_file', { path: 'new.txt', content: 'new' }) },
+            ],
+          },
+        ),
+      );
+      const first = await h.run();
+      expect(first.filter((e) => e.type === 'error')).toMatchObject([{ error: { message: TOOL_CALL_IDS_ERROR } }]);
+      const refused = h.messages().at(-1);
+      expect(refused).toMatchObject({ role: 'assistant', status: 'error', text: 'Let me look.', toolCalls: [] });
+      expect(refused).not.toHaveProperty('providerMeta');
+
+      await h.run({ newUserMessage: { text: 'go on', attachmentIds: [] } });
+      expect(bodies).toHaveLength(2);
+      const replayed = bodies[1]?.messages.filter((m) => m.role === 'assistant') ?? [];
+      expect(replayed).toMatchObject([{ content: 'Let me look.' }]);
+      for (const m of replayed) expect(m).not.toHaveProperty('reasoning_details');
+      expect(await s.exists('new.txt')).toBe(false);
     });
   });
 });
