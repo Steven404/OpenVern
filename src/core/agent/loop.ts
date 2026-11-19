@@ -362,8 +362,9 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
     // retry undo and restore, and the write path. The HTTP routes do that read themselves, under the turn's start
     // claim, check the mode against the one the client showed, and pass both in as `input.editMode` and
     // `input.projectId`; the turn must use those very values, because a PATCH can land between their read and this
-    // one (a PATCH takes no run claim). A mode change would run the turn in a mode the user wasn't shown, and a move
-    // would run the checked mode in a project it wasn't checked for. Only a caller that passes neither (tests, direct
+    // one (a mode PATCH takes no run claim). A mode change would run the turn in a mode the user wasn't shown. A move
+    // can't land there (the routes refuse a move while a turn starts or runs), but using the passed project keeps the
+    // turn in the project it was checked for even if one did. Only a caller that passes neither (tests, direct
     // use) gets this read. A PATCH during the run is stored but applies from the next turn; reading the mode again
     // mid-run could tell the model its edits are proposals while they are written to disk, or the other way round.
     const editMode: EditMode = input.editMode ?? chat.editMode;
@@ -416,7 +417,7 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
       //    do in the project they were written to. While they are still undoable in another project that still
       //    exists, the retry is refused before anything is stored, undone, noted or truncated. The run claim keeps
       //    this answer valid until step 1: no other run, Undo, Apply or retention can change the turn's batches
-      //    meanwhile, and a move only closes batches, which leaves them as undoable as before. A removed project's
+      //    meanwhile, and no move can land (the routes refuse one while a turn starts or runs). A removed project's
       //    writes can't be undone from the app any more, so they never block.
       // 1. Undo: the files the previous attempt wrote (Auto) go back to how the turn found them, whatever mode this
       //    retry runs in. Nothing else has changed yet, so if the undo throws, the history still holds the previous

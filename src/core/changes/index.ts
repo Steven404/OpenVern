@@ -1498,8 +1498,9 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
         store.lastMode = mode;
         // Batches past retention or written into another project can't be undone; they are left as they are. A batch
         // closed by a move is undone like any other of the turn in this project.
-        // NEWEST FIRST (invariant): a move splits a turn's writes into several batches, and two of them can hold the
-        // same file (the pinned turn wrote it again after the move). Each batch's entry expects the bytes its own write
+        // NEWEST FIRST (invariant): were a turn's writes ever split into several batches (a move closes the open batch;
+        // the routes refuse a move while a turn runs, so this is defence in depth), two of them could hold the same
+        // file. Each batch's entry expects the bytes its own write
         // left, which only holds once every later write of that file has been undone, so the batches are undone in the
         // reverse of the order they were opened in (`applied` is in that order). Oldest first would skip the first
         // write as `changed_since` and then restore its bytes from the second one's original.
