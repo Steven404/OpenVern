@@ -6,6 +6,7 @@ import {
   CHAT_PROJECT_CHANGED,
   createChatBody,
   EDIT_MODE_CHANGED,
+  MOVE_WHILE_RUNNING,
   PROJECT_NOT_IN_GIT,
   ROUTES,
   retryBody,
@@ -33,23 +34,93 @@ async function waitForIdle(core: Core, chatId: Id, timeoutMs = 5000): Promise<vo
   while (core.agent.isRunning(chatId) && Date.now() < deadline) await sleep(10);
 }
 
+/**
+ * The run claims of one core, shared by the chat and project routes. Every check and claim here is synchronous, so a
+ * check and the claim it guards can't be split by another request.
+ *
+ * NO PROJECT CHANGE DURING A TURN (invariant): a chat's project never changes while a turn runs or is starting in it,
+ * so a turn's writes stay in one project and one batch. A move holds `moving` from its check through its commit, and
+ * a project removal holds `removing` from its check through `projects.remove`; a turn start is refused while either
+ * covers its chat (`claimTurn`, then `checkNotRemoving` on the chat read under that claim). Each side checks the
+ * other's claim before taking its own, so of a turn start and a move or removal racing, exactly one goes ahead.
+ */
+export interface RunClaims {
+  /** Chats whose turn is being set up (validated, stream not yet started), or that hold the idle claim. */
+  readonly starting: Set<Id>;
+  /** True while a turn of the chat is starting or running (the idle claim of Apply, Undo or archive isn't a turn). */
+  turnActive(chatId: Id): boolean;
+  /** Takes a turn's start claim, or throws `conflict`. Returns a once-only release function. */
+  claimTurn(chatId: Id): () => void;
+  /** Refuses a turn whose chat (read under the start claim) is in a project being removed: it is about to move. */
+  checkNotRemoving(projectId: Id | null): void;
+  /** Holds off turn starts in the chat while its move commits. Throws `MOVE_WHILE_RUNNING` while a turn is active. */
+  holdMove(chatId: Id): () => void;
+  /** Holds off turn starts in the project's chats while it is removed (the caller checks its chats right after). */
+  holdRemoval(projectId: Id): () => void;
+}
+
+const claimsByCore = new WeakMap<Core, RunClaims>();
+
+/** Counts holders per key, so overlapping holds on one chat or project each release only their own. */
+function holdIn(map: Map<Id, number>, key: Id): () => void {
+  map.set(key, (map.get(key) ?? 0) + 1);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const n = (map.get(key) ?? 1) - 1;
+    if (n > 0) map.set(key, n);
+    else map.delete(key);
+  };
+}
+
+export function runClaims(core: Core): RunClaims {
+  const existing = claimsByCore.get(core);
+  if (existing) return existing;
+  const starting = new Set<Id>();
+  /** The chats in `starting` whose claim is a turn start. */
+  const turns = new Set<Id>();
+  const moving = new Map<Id, number>();
+  const removing = new Map<Id, number>();
+  // `core.agent` is read at each call (tests swap it), never captured.
+  const claims: RunClaims = {
+    starting,
+    turnActive: (chatId) => turns.has(chatId) || core.agent.isRunning(chatId),
+    claimTurn(chatId) {
+      if (starting.has(chatId) || core.agent.isRunning(chatId))
+        throw new CoreError('conflict', 'A response is already being generated for this chat.');
+      // The chat is changing project right now: once the move commits, the client must look at it again.
+      if (moving.has(chatId)) throw new CoreError('conflict', CHAT_PROJECT_CHANGED);
+      starting.add(chatId);
+      turns.add(chatId);
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        starting.delete(chatId);
+        turns.delete(chatId);
+      };
+    },
+    checkNotRemoving(projectId) {
+      if (projectId !== null && removing.has(projectId)) throw new CoreError('conflict', CHAT_PROJECT_CHANGED);
+    },
+    holdMove(chatId) {
+      if (claims.turnActive(chatId)) throw new CoreError('conflict', MOVE_WHILE_RUNNING);
+      return holdIn(moving, chatId);
+    },
+    holdRemoval: (projectId) => holdIn(removing, projectId),
+  };
+  claimsByCore.set(core, claims);
+  return claims;
+}
+
 export function chatRoutes(core: Core): Hono {
   const r = new Hono();
-  /** Chats whose run is being set up (validated, stream not yet started). Closes the check-then-run race. */
-  const starting = new Set<Id>();
+  const claims = runClaims(core);
+  const { starting } = claims;
 
-  /** Synchronous check-and-claim. Returns a once-only release function. */
-  const claim = (chatId: Id): (() => void) => {
-    if (starting.has(chatId) || core.agent.isRunning(chatId))
-      throw new CoreError('conflict', 'A response is already being generated for this chat.');
-    starting.add(chatId);
-    let released = false;
-    return () => {
-      if (released) return;
-      released = true;
-      starting.delete(chatId);
-    };
-  };
+  /** Synchronous check-and-claim of a turn start. Returns a once-only release function. */
+  const claim = (chatId: Id): (() => void) => claims.claimTurn(chatId);
 
   /**
    * Apply, discard and archive changes need the chat idle; the claim also keeps a new turn from starting while
@@ -114,7 +185,9 @@ export function chatRoutes(core: Core): Hono {
 
   /**
    * Rename, move, archive, or change the edit mode. `editMode` takes no run claim and is accepted while a run is
-   * active: the agent reads the mode once at turn start, so a change applies from the next turn.
+   * active: the agent reads the mode once at turn start, so a change applies from the next turn. A move (any PATCH
+   * with `projectId`) is refused while a turn runs or is starting (`MOVE_WHILE_RUNNING`), and no turn can start until
+   * it has committed or failed (`holdMove`; see NO PROJECT CHANGE DURING A TURN).
    *
    * MODE GUARD (invariant): `expectedEditMode` and `expectedProjectId` are compared by `chats.update`, under the
    * storage lock that commits the change, so a mode PATCH or a move landing between a check here and the write can't
@@ -135,46 +208,58 @@ export function chatRoutes(core: Core): Hono {
     if (expectedProjectId !== undefined) expect.projectId = expectedProjectId;
     if (patch.projectId !== undefined || patch.archived !== undefined) {
       await core.chats.get(id); // 404 before any claim
-      /**
-       * Commits the patch; `beforeCommit` runs right before the write, after the pending check. A move is refused
-       * while proposals are pending, and commits under the chat's change-store lock (`changeProject`) with that check,
-       * read fresh there: a stage can't slip in between the check and the write, and the move can't land between
-       * Apply's project check and its writes. Once the project changed, `changeProject` resets the chat's
-       * per-project Auto state under that same lock.
-       */
-      const commit = (beforeCommit?: () => void) => {
-        const { projectId } = patch;
-        if (projectId === undefined) {
-          beforeCommit?.();
-          return core.chats.update(id, patch, expect);
+      // A move is refused while a turn of the chat runs or is starting, and from here until it has committed or failed
+      // no turn can start (NO PROJECT CHANGE DURING A TURN). Checked and taken synchronously, so a turn start can't
+      // slip in between. It is not the idle claim: Apply, Undo and archive may still run, and the move waits for
+      // them on the change-store lock as before.
+      const releaseMove = patch.projectId !== undefined ? claims.holdMove(id) : () => {};
+      try {
+        /**
+         * Commits the patch; `beforeCommit` runs right before the write, after the pending check. A move is refused
+         * while proposals are pending, and commits under the chat's change-store lock (`changeProject`) with that
+         * check, read fresh there: a stage can't slip in between the check and the write, and the move can't land
+         * between Apply's project check and its writes. Once the project changed, `changeProject` resets the chat's
+         * per-project Auto state under that same lock.
+         */
+        const commit = (beforeCommit?: () => void) => {
+          const { projectId } = patch;
+          if (projectId === undefined) {
+            beforeCommit?.();
+            return core.chats.update(id, patch, expect);
+          }
+          // LOCK ORDER: the chat's change-store lock (`changeProject`), then the chat storage lock (`chats.update`),
+          // then the chat file's lock (inside it).
+          // A project change never happens while a turn runs (`holdMove` above), so a turn's writes stay in one batch
+          // per project; the reset in `changeProject` and the turn's pinned project remain as defence in depth.
+          return core.changes.changeProject(id, async ({ pending }) => {
+            if (pending && (await core.chats.get(id)).projectId !== projectId)
+              throw new CoreError('conflict', 'Apply or discard the proposed edits first.');
+            beforeCommit?.();
+            return core.chats.update(id, patch, expect);
+          });
+        };
+        // Only `archived` changes the flag (a move keeps it). Archive changes need the chat idle: hold the run
+        // claim across the commit so a turn can't start between the check and the write.
+        if (patch.archived !== undefined) {
+          const busy = () =>
+            new CoreError('conflict', 'Wait for the response to finish before archiving or unarchiving this chat.');
+          if (starting.has(id)) throw busy();
+          starting.add(id);
+          try {
+            await core.chats.get(id); // fresh read under the claim: 404 if the chat went meanwhile
+            return c.json(
+              await commit(() => {
+                if (core.agent.isRunning(id)) throw busy();
+              }),
+            );
+          } finally {
+            starting.delete(id);
+          }
         }
-        // LOCK ORDER: the chat's change-store lock (`changeProject`), then the chat storage lock (`chats.update`).
-        return core.changes.changeProject(id, async ({ pending }) => {
-          if (pending && (await core.chats.get(id)).projectId !== projectId)
-            throw new CoreError('conflict', 'Apply or discard the proposed edits first.');
-          beforeCommit?.();
-          return core.chats.update(id, patch, expect);
-        });
-      };
-      // Only `archived` changes the flag (a move keeps it). Archive changes need the chat idle: hold the run
-      // claim across the commit so a turn can't start between the check and the write.
-      if (patch.archived !== undefined) {
-        const busy = () =>
-          new CoreError('conflict', 'Wait for the response to finish before archiving or unarchiving this chat.');
-        if (starting.has(id)) throw busy();
-        starting.add(id);
-        try {
-          await core.chats.get(id); // fresh read under the claim: 404 if the chat went meanwhile
-          return c.json(
-            await commit(() => {
-              if (core.agent.isRunning(id)) throw busy();
-            }),
-          );
-        } finally {
-          starting.delete(id);
-        }
+        return c.json(await commit());
+      } finally {
+        releaseMove();
       }
-      return c.json(await commit());
     }
     return c.json(await core.chats.update(id, patch, expect));
   });
@@ -194,13 +279,15 @@ export function chatRoutes(core: Core): Hono {
 
   // CHECKED MODE IS THE TURN'S MODE (invariant), for both routes that start a turn: the chat is read once, under the
   // start claim; the mode the client showed (`expectedEditMode`, omitted = 'review') is checked against that read,
-  // and the turn is handed that same mode, and the project from the same read, to run in. A PATCH takes no claim and
-  // can land at any time, so a check here followed by a second read in the agent could start a turn in a mode the
-  // user wasn't shown, or run the checked mode in the project a move just put the chat in. A mismatch is refused
+  // and the turn is handed that same mode, and the project from the same read, to run in. A mode PATCH takes no claim
+  // and can land at any time, so a check here followed by a second read in the agent could start a turn in a mode the
+  // user wasn't shown. A mismatch is refused
   // (409) before anything is stored or started. The project the client showed (`expectedProjectId`) is checked
   // against the same read, so a chat moved from another window can't run in a project the sender never saw. A retry
   // whose turn wrote into another project that still exists is refused by the agent itself (a stream error, nothing
-  // stored), right before its undo, where the run claim keeps that check valid.
+  // stored), right before its undo, where the run claim keeps that check valid. A turn doesn't start while its chat
+  // is moving or its project is being removed (`CHAT_PROJECT_CHANGED`), and while it is starting or running neither
+  // can begin (NO PROJECT CHANGE DURING A TURN), so the project read here stays the chat's project for the whole turn.
   r.post(ROUTES.chatMessages, async (c) => {
     const chatId = c.req.param('id');
     const body = await readJson(c, sendMessageBody);
@@ -209,6 +296,7 @@ export function chatRoutes(core: Core): Hono {
     let projectId: Id | null;
     try {
       const chat = await core.chats.get(chatId);
+      claims.checkNotRemoving(chat.projectId);
       editMode = checkEditMode(chat.editMode, body.expectedEditMode);
       projectId = checkProject(chat.projectId, body.expectedProjectId);
       if (body.attachmentIds.length > LIMITS.attachmentsPerMessage)
@@ -247,6 +335,7 @@ export function chatRoutes(core: Core): Hono {
       const chat = await core.chats.get(chatId);
       if (!chat.messages.some((m) => m.role === 'user'))
         throw new CoreError('invalid_request', 'There is no message to retry in this chat.');
+      claims.checkNotRemoving(chat.projectId);
       editMode = checkEditMode(chat.editMode, body.expectedEditMode);
       projectId = checkProject(chat.projectId, body.expectedProjectId);
     } catch (err) {

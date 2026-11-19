@@ -2,8 +2,10 @@ import {
   APPLY_PROJECT_CHANGED,
   CHAT_PROJECT_CHANGED,
   EDIT_MODE_CHANGED,
+  MOVE_WHILE_RUNNING,
   PROJECT_NOT_IN_GIT,
   PROPOSALS_OTHER_PROJECT,
+  REMOVE_WHILE_RUNNING,
   RETRY_OTHER_PROJECT,
 } from '@shared/api';
 import { LIMITS, NEW_CHAT_TITLE } from '@shared/constants';
@@ -11,6 +13,25 @@ import type { AgentEvent } from '@shared/events';
 import { describe, expect, it } from 'vitest';
 import { ApiError, isChatProjectChanged, isEditModeChanged, isProjectNotInGit } from './api-client';
 import { MockApiClient } from './mock-api-client';
+
+/**
+ * A project change made below the API, as the server's tests make one below its routes (the chat's project set and its
+ * open batches closed, as a move commits). The API refuses a move while a turn runs; this checks that the turn's pinned
+ * project and the move reset still keep such a change safe (defence in depth).
+ */
+function changeProjectBelowApi(api: MockApiClient, chatId: string, projectId: string | null): void {
+  const inner = api as unknown as {
+    chats: { id: string; projectId: string | null }[];
+    closeBatches(chatId: string): void;
+  };
+  const chat = inner.chats.find((c) => c.id === chatId);
+  if (!chat) throw new Error('unknown chat');
+  if (chat.projectId !== projectId) inner.closeBatches(chatId);
+  chat.projectId = projectId;
+}
+
+const refusedAs = async (p: Promise<unknown>, message: string) =>
+  expect(await p.catch((e: unknown) => e)).toMatchObject({ status: 409, info: { code: 'conflict', message } });
 
 async function collect(it: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
   const out: AgentEvent[] = [];
@@ -136,9 +157,11 @@ describe('MockApiClient', () => {
     const looseBefore = await api.getChat(loose.id);
     await conflict(api.updateChat(loose.id, { title: 'Renamed', archived: true }));
     await conflict(api.updateChat(archivedChat.id, { archived: false }));
-    await conflict(
-      api.updateChat(archivedChat.id, { title: 'Moved', projectId: project?.id ?? null, archived: false }),
-    );
+    // A move with `archived` is refused as a move, like the server: the chat's project never changes during a turn.
+    const moveErr = await api
+      .updateChat(archivedChat.id, { title: 'Moved', projectId: project?.id ?? null, archived: false })
+      .catch((e: unknown) => e);
+    expect(moveErr).toMatchObject({ status: 409, info: { code: 'conflict', message: MOVE_WHILE_RUNNING } });
     const archivedNow = await api.getChat(archivedChat.id);
     expect(archivedNow).toMatchObject({ archived: true, projectId: null, title: archivedChat.title });
     expect((await api.getChat(loose.id)).archived).toBe(false);
@@ -175,7 +198,7 @@ describe('MockApiClient', () => {
     expect((await api.getChat(chat.id)).archived).toBe(false);
   });
 
-  it('a project chat: archiving during a run conflicts, a plain move is allowed and keeps the flag', async () => {
+  it('a project chat: archiving and moving during a run conflict, and change nothing', async () => {
     const api = new MockApiClient({ delayMs: 0, seed: false });
     const first = await api.createProject({ rootPath: '/tmp/first', name: 'First' });
     const second = await api.createProject({ rootPath: '/tmp/second', name: 'Second' });
@@ -196,11 +219,13 @@ describe('MockApiClient', () => {
     });
     expect(await api.getChat(chat.id)).toMatchObject({ projectId: first.id, archived: false });
 
-    const moved = await api.updateChat(chat.id, { projectId: second.id });
-    expect(moved).toMatchObject({ projectId: second.id, archived: false });
-    expect((await api.getChat(chat.id)).projectId).toBe(second.id);
+    const moveErr = await api.updateChat(chat.id, { projectId: second.id }).catch((e: unknown) => e);
+    expect(moveErr).toBeInstanceOf(ApiError);
+    expect(moveErr).toMatchObject({ status: 409, info: { code: 'conflict', message: MOVE_WHILE_RUNNING } });
+    expect(await api.getChat(chat.id)).toMatchObject({ projectId: first.id, archived: false });
 
     await run.return?.(undefined);
+    expect((await api.updateChat(chat.id, { projectId: second.id })).projectId).toBe(second.id);
     expect((await api.updateChat(chat.id, { archived: true })).archived).toBe(true);
   });
 
@@ -466,7 +491,8 @@ describe('MockApiClient', () => {
       const [project, other] = await api.listProjects();
       if (!project || !other) throw new Error('seed missing');
       const chat = await api.createChat({ projectId: project.id, model: 'anthropic/claude-sonnet-5.5' });
-      // The turn starts in `project`; the chat moves to `other` before it stages anything.
+      // The turn starts in `project`; a move is refused while it runs, so the project change is made below the API
+      // before it stages anything (defence in depth).
       const iter = api
         .sendMessage(
           chat.id,
@@ -476,7 +502,8 @@ describe('MockApiClient', () => {
         [Symbol.asyncIterator]();
       await iter.next();
       expect((await api.getChatChanges(chat.id)).pending).toBeNull();
-      await api.updateChat(chat.id, { projectId: other.id });
+      await refusedAs(api.updateChat(chat.id, { projectId: other.id }), MOVE_WHILE_RUNNING);
+      changeProjectBelowApi(api, chat.id, other.id);
       while (!(await iter.next()).done) {
         // drain: stages the proposals for `project`
       }
@@ -1052,13 +1079,14 @@ describe('MockApiClient: a project change resets Auto state, like the server', (
     return { api, a, b, chat, move, send, retry };
   }
 
-  it('a move closes the open batch; the in-flight turn keeps writing into its pinned project, in a new batch', async () => {
+  it('a move during the turn is refused; a project change below the API closes the batch, the turn writes on in A', async () => {
     const { api, a, b, chat, move, send } = await twoGitProjects();
     let moved = false;
     for await (const e of send()) {
       if (e.type === 'auto_batch_updated' && !moved) {
         moved = true;
-        await move(a.id, b.id);
+        await refusedAs(move(a.id, b.id), MOVE_WHILE_RUNNING);
+        changeProjectBelowApi(api, chat.id, b.id);
       }
     }
     const inB = await api.getChatChanges(chat.id);
@@ -1088,11 +1116,13 @@ describe('MockApiClient: a project change resets Auto state, like the server', (
     for await (const e of send()) {
       if (e.type === 'auto_batch_updated' && !moved) {
         moved = true;
-        await move(a.id, b.id);
+        // Refused by the API while the turn runs; made below it to split the turn (defence in depth).
+        await refusedAs(move(a.id, b.id), MOVE_WHILE_RUNNING);
+        changeProjectBelowApi(api, chat.id, b.id);
       }
     }
     await move(b.id, a.id);
-    // Both batches of the turn are in A (one closed by the move): a retry in A undoes them all.
+    // Both batches of the turn are in A (one closed by the project change): a retry in A undoes them all.
     const events = await retry(a.id);
     expect(events.some((e) => e.type === 'error')).toBe(false);
     const applied = (await api.getChatChanges(chat.id)).applied;
@@ -1109,13 +1139,17 @@ describe('MockApiClient: a project change resets Auto state, like the server', (
     expect((await api.getChatChanges(chat.id)).applied.find((x) => x.id === latest?.id)).not.toHaveProperty('undo');
   });
 
-  it('a move to no project right after the user message keeps the pinned turn’s tools: it still writes in A', async () => {
+  it('a project change to none right after the user message keeps the pinned turn’s tools: it still writes in A', async () => {
     const { api, a, chat, send } = await twoGitProjects();
     const events: AgentEvent[] = [];
     for await (const e of send()) {
       events.push(e);
       if (e.type === 'user_message') {
-        await api.updateChat(chat.id, { projectId: null, expectedEditMode: 'auto', expectedProjectId: a.id });
+        await refusedAs(
+          api.updateChat(chat.id, { projectId: null, expectedEditMode: 'auto', expectedProjectId: a.id }),
+          MOVE_WHILE_RUNNING,
+        );
+        changeProjectBelowApi(api, chat.id, null);
       }
     }
     expect((await api.getChat(chat.id)).projectId).toBeNull();
@@ -1123,6 +1157,27 @@ describe('MockApiClient: a project change resets Auto state, like the server', (
     expect(events.some((e) => e.type === 'auto_batch_updated')).toBe(true);
     const applied = (await api.getChatChanges(chat.id)).applied;
     expect(applied.flatMap((x) => x.written.map((f) => f.path))).toHaveLength(3);
+  });
+
+  it('a move or a project removal during a run is refused and changes nothing, like the server', async () => {
+    const { api, a, b, chat, move, send } = await twoGitProjects();
+    const run = send()[Symbol.asyncIterator]();
+    await run.next(); // the run is registered once the first event is out
+    await refusedAs(move(a.id, b.id), MOVE_WHILE_RUNNING);
+    await refusedAs(api.deleteProject(a.id), REMOVE_WHILE_RUNNING);
+    expect((await api.getChat(chat.id)).projectId).toBe(a.id);
+    expect((await api.listProjects()).map((p) => p.id)).toContain(a.id);
+    // A project with no running chat can still be removed meanwhile.
+    const idle = await api.createChat({ projectId: b.id, model: MODEL });
+    await api.deleteProject(b.id);
+    expect((await api.getChat(idle.id)).projectId).toBeNull();
+    while (!(await run.next()).done) {
+      // drain: the turn ends
+    }
+    // One turn, one batch: nothing split it.
+    expect((await api.getChatChanges(chat.id)).applied).toHaveLength(1);
+    await api.deleteProject(a.id);
+    expect((await api.getChat(chat.id)).projectId).toBeNull();
   });
 
   it('removing a project discards its chats’ pending proposals', async () => {

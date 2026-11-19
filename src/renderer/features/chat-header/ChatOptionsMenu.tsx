@@ -27,7 +27,7 @@ import { useUiStore } from '@renderer/stores/ui';
 import type { ChatSummary, EditMode, Id, ProjectListItem } from '@shared/types';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Archive, ArchiveRestore, Folder, FolderInput, Pencil, Trash2 } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { RenameDialog } from './RenameDialog';
 
@@ -138,7 +138,11 @@ function ChatOptionsMenuInner({ chat }: { chat: ChatSummary }) {
     });
   };
 
-  // The server rejects archive changes while a reply is in progress, so the item waits for the run to finish.
+  // The server rejects moves and archive changes while a reply is in progress (a chat's project never changes during
+  // a turn), so both items wait for the run to finish, with a faint line saying why. A run this window doesn't know
+  // about (another window's) is refused by the server; the move error dialog shows its message and the chat is read
+  // again.
+  const busyHintId = useId();
   const streaming = useRunsStore((s) => {
     const st = s.runs[chat.id]?.status;
     return st === 'running' || st === 'settling';
@@ -180,7 +184,11 @@ function ChatOptionsMenuInner({ chat }: { chat: ChatSummary }) {
             Rename
           </MenuItem>
           <MenuSub>
-            <MenuSubTrigger icon={<FolderInput size={15} />} disabled={shown.status !== 'known'}>
+            <MenuSubTrigger
+              icon={<FolderInput size={15} />}
+              disabled={shown.status !== 'known' || streaming}
+              aria-describedby={streaming ? busyHintId : undefined}
+            >
               Move to project
             </MenuSubTrigger>
             <MenuSubContent className="max-w-72">
@@ -206,10 +214,16 @@ function ChatOptionsMenuInner({ chat }: { chat: ChatSummary }) {
           <MenuItem
             icon={chat.archived ? <ArchiveRestore size={15} /> : <Archive size={15} />}
             disabled={streaming || archive.isPending}
+            aria-describedby={streaming ? busyHintId : undefined}
             onSelect={() => archive.mutate(!chat.archived)}
           >
             {chat.archived ? 'Unarchive' : 'Archive'}
           </MenuItem>
+          {streaming ? (
+            <p id={busyHintId} className="m-0 px-2.5 py-1 text-[11.5px] leading-snug text-text-faint">
+              Stop the reply to move or archive this chat.
+            </p>
+          ) : null}
           <MenuSeparator />
           <MenuItem danger icon={<Trash2 size={15} />} onSelect={() => setDeleteOpen(true)}>
             Delete

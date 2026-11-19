@@ -4,8 +4,9 @@ import { ApiError } from '@renderer/lib/api-client';
 import { MockApiClient } from '@renderer/lib/mock-api-client';
 import { queryKeys } from '@renderer/lib/query-keys';
 import { useEditModes } from '@renderer/stores/edit-modes';
+import { createRun, useRunsStore } from '@renderer/stores/runs';
 import { useUiStore } from '@renderer/stores/ui';
-import { CHAT_PROJECT_CHANGED, EDIT_MODE_CHANGED, PROJECT_NOT_IN_GIT } from '@shared/api';
+import { CHAT_PROJECT_CHANGED, EDIT_MODE_CHANGED, MOVE_WHILE_RUNNING, PROJECT_NOT_IN_GIT } from '@shared/api';
 import { errorInfo } from '@shared/errors';
 import type { Chat, EditMode, ProjectListItem } from '@shared/types';
 import { QueryClient } from '@tanstack/react-query';
@@ -56,6 +57,10 @@ describe('moving an Auto chat to a project without Git', () => {
     expect(dialog.getAttribute('data-reason')).toBe('move');
     expect(within(dialog).getByText('Move this Auto chat to a folder without Git?')).toBeTruthy();
     expect(dialog.textContent).toContain(`${noGit.name} isn't a Git repository`);
+    // Undo reaches the last 20 Auto batches only while they are still in the chat's history.
+    expect(dialog.textContent).toContain(
+      "OpenVern can undo up to the last 20 sets of edits still in this chat's history, but there is no other history to go back to.",
+    );
     expect(within(dialog).getByRole('button', { name: 'Switch to Review' })).toBeTruthy();
     expect(within(dialog).getByRole('button', { name: 'Keep Auto' })).toBeTruthy();
     await tick();
@@ -248,6 +253,43 @@ describe('a move never relies on a mode the server no longer has', () => {
   });
 });
 
+describe('a chat’s project never changes while a reply runs', () => {
+  afterEach(() => useRunsStore.setState({ runs: {} }));
+
+  it('Move is disabled while the chat’s run is active, with a line saying why; it comes back when the run ends', async () => {
+    const { header, chat, update } = await renderChat('review');
+    useRunsStore.setState({ runs: { [chat.id]: createRun(1) } });
+    openMenu(within(header).getByRole('button', { name: 'Chat options' }));
+    const sub = await screen.findByRole('menuitem', { name: 'Move to project' });
+    expect(sub.getAttribute('aria-disabled')).toBe('true');
+    const hint = screen.getByText('Stop the reply to move or archive this chat.');
+    expect(sub.getAttribute('aria-describedby')).toBe(hint.id);
+    sub.focus();
+    fireEvent.keyDown(sub, { key: 'ArrowRight' });
+    await tick();
+    expect(screen.queryByRole('menuitemradio')).toBeNull();
+    expect(update).not.toHaveBeenCalled();
+    fireEvent.keyDown(sub, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+
+    useRunsStore.setState({ runs: {} });
+    openMenu(within(header).getByRole('button', { name: 'Chat options' }));
+    const again = await screen.findByRole('menuitem', { name: 'Move to project' });
+    expect(again.getAttribute('aria-disabled')).toBeNull();
+    expect(screen.queryByText('Stop the reply to move or archive this chat.')).toBeNull();
+  });
+
+  it('a move the server refuses because a reply runs elsewhere shows its message and reads the chat again', async () => {
+    const { header, git, client, chat, queryClient } = await renderChat('review');
+    vi.spyOn(client, 'updateChat').mockRejectedValue(new ApiError(errorInfo('conflict', MOVE_WHILE_RUNNING), 409));
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    await moveTo(header, git);
+    const dialog = await screen.findByTestId('move-error-dialog');
+    expect(dialog.textContent).toContain(MOVE_WHILE_RUNNING);
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.chat(chat.id) }));
+  });
+});
+
 describe('a folder that left Git since the projects list was read', () => {
   it('moving an Auto chat there ("in Git" on screen) is refused, and the next try asks first', async () => {
     const { header, git, update, client, chat, project } = await renderChat('auto');
@@ -368,6 +410,9 @@ describe('moving a chat whose Auto is not on screen', () => {
       expect(dialog.getAttribute('data-reason')).toBe('move-hidden');
       expect(within(dialog).getByText('Keep this chat in Auto?')).toBeTruthy();
       expect(dialog.textContent).toContain(`This chat is in Auto. After the move to ${git.name}`);
+      expect(dialog.textContent).toContain(
+        "OpenVern can undo up to the last 20 sets of edits still in this chat's history.",
+      );
       expect(dialog.textContent).not.toContain('Git repository');
       await tick();
       expect(update).not.toHaveBeenCalled();

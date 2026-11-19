@@ -2,8 +2,8 @@
 
 Desktop app to chat with LLMs about your projects. The model can read a project and change it through tool calls.
 In Review mode you review every change as a diff before anything is written to disk; in Auto mode the edits are
-written as the model works, and you can undo recent edits (the last 20 sets in each chat, usually one per turn, while
-they are in the chat's 100-entry history; a file you changed since is left as it is).
+written as the model works, and you can undo recent edits (the last 20 sets in each chat, one per turn that changed
+something, while they are in the chat's 100-entry history; a file you changed since is left as it is).
 
 OpenVern talks to [OpenRouter](https://openrouter.ai), so you need an
 [OpenRouter API key](https://openrouter.ai/keys). Chats, projects and settings are stored in local files, and there is
@@ -26,8 +26,9 @@ no telemetry.
   disk until you apply. Review each file as a unified or split diff, accept or reject each hunk, then apply the
   accepted ones.
 - **Auto mode with Undo.** Switch a project chat from Review to Auto with the chip next to the model picker. In Auto
-  the model's edits, new files and deletes are written as it works, inside the same sandbox, and a turn whose
-  edits leave a net change shows an "Edits applied · Auto" card (a second one if the chat moves to another project during the turn).
+  the model's edits, new files and deletes are written as it works, inside the same sandbox, into one batch per turn
+  (a chat can't be moved, or its project removed, while a reply runs). Each batch the chat keeps that leaves a net
+  change shows an "Edits applied · Auto" card.
   Undo is offered for the chat's last 20 cards while it is in the project they were written to and they are among
   the chat's last 100 batches (Review and Auto together): it puts back the files
   that are still as the turn left them and names the ones you changed since. New chats start in Review, a mode change applies from your next message, and turning Auto on for a

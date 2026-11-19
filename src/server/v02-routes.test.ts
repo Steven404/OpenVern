@@ -3,6 +3,7 @@
 
 import { mkdir, realpath, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { MOVE_WHILE_RUNNING } from '@shared/api';
 import { LIMITS } from '@shared/constants';
 import type { AgentEvent } from '@shared/events';
 import type {
@@ -318,17 +319,21 @@ describe('change set lifecycle', () => {
 
     await expectWait(await patch(loose.id, { archived: true }));
     await expectWait(await patch(archivedChat.id, { archived: false }));
-    await expectWait(await patch(archivedChat.id, { projectId: p.id, archived: false }));
+    // A move is refused while the chat runs, also with `archived`: the chat's project never changes during a turn.
+    const expectMoveRefused = async (res: Response) => {
+      expect(res.status).toBe(409);
+      const body = (await res.json()) as { error: { code: string; message: string } };
+      expect(body.error).toMatchObject({ code: 'conflict', message: MOVE_WHILE_RUNNING });
+    };
+    await expectMoveRefused(await patch(archivedChat.id, { projectId: p.id, archived: false }));
+    await expectMoveRefused(await patch(archivedChat.id, { projectId: p.id }));
     expect(await stored(loose.id)).toEqual(looseBefore);
     expect(await stored(archivedChat.id)).toEqual(archivedBefore);
 
-    // Other patches are not blocked by a running chat; a move keeps the flag.
+    // Other patches are not blocked by a running chat.
     const renamed = await patch(loose.id, { title: 'Renamed while running' });
     expect(renamed.status).toBe(200);
     expect((await json<Chat>(renamed)).title).toBe('Renamed while running');
-    const moved = await patch(archivedChat.id, { projectId: p.id });
-    expect(moved.status).toBe(200);
-    expect(await json<Chat>(moved)).toMatchObject({ projectId: p.id, archived: true });
   });
 
   it('keeps an archive that lands after a move has read the chat', async () => {

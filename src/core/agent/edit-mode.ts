@@ -396,7 +396,8 @@ const CONFLICT_TEXT: Record<ApplyConflictReason, string> = {
   deleted_on_disk: 'deleted on disk before apply',
   exists_on_disk: 'already exists on disk',
   blocked: 'blocked, the path is not writable',
-  too_large: 'too large to review',
+  // Never in a review note's conflict lines (apply keeps `too_large` out of the event's conflicts; see `tooLarge`).
+  too_large: 'too large to apply',
 };
 
 const notDone: Record<ChangeKind, string> = {
@@ -426,7 +427,9 @@ export function reviewNote(input: ReviewNoteInput, stillPending: number): string
   if (input.discarded.length) lines.push(`- Discarded: ${input.discarded.map(notDoneText).join(', ')}`);
   if (input.skipped.length) lines.push(`- Left out, not decided: ${input.skipped.map(notDoneText).join(', ')}`);
   for (const c of input.conflicts) lines.push(conflictLine(c));
-  for (const path of input.tooLarge) lines.push(`- Not written, too large to review: ${path}`);
+  // v0.3 had no too-large line (it skipped such a file silently), so this line has no v0.3 bytes to match. The wording
+  // covers both causes: a legacy proposal too large to review, and a partial apply over the write limit.
+  for (const path of input.tooLarge) lines.push(`- Not written, too large to apply: ${path}`);
   lines.push(
     stillPending > 0
       ? `${stillPending} proposed file${stillPending === 1 ? ' is' : 's are'} still awaiting review. Your reads show your proposed versions.`

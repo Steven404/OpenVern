@@ -16,6 +16,7 @@ import {
   allRejected,
   appliedLabel,
   buildDecisions,
+  CONFLICT_LABEL,
   fileState,
   footerHint,
   pairLines,
@@ -108,6 +109,41 @@ describe('diff helpers', () => {
         undoable: false,
       }),
     ).toBe('Wrote 4 changes to 3 files · 1 rejected');
+  });
+
+  it('names why files weren’t written only when they share one reason; mixed reasons stay neutral', () => {
+    const batch = (conflicts: AppliedBatch['conflicts']): AppliedBatch => ({
+      id: 'b',
+      appliedAt: '2026-01-01T00:00:00.000Z',
+      messageId: 'm1',
+      written: [],
+      rejectedHunks: 0,
+      skippedHunks: 0,
+      conflicts,
+      source: 'review',
+      undoable: false,
+    });
+    expect(
+      appliedLabel(
+        batch([
+          { path: 'a.ts', reason: 'changed_on_disk' },
+          { path: 'b.ts', reason: 'changed_on_disk' },
+        ]),
+      ),
+    ).toBe('Wrote 0 changes to 0 files · 2 not written (changed on disk)');
+    // A partial Apply over the write limit: the user reviewed it, so it isn't "too large to review".
+    expect(appliedLabel(batch([{ path: 'big.txt', reason: 'too_large' }]))).toBe(
+      'Wrote 0 changes to 0 files · 1 not written (too large to apply)',
+    );
+    expect(
+      appliedLabel(
+        batch([
+          { path: 'a.ts', reason: 'changed_on_disk' },
+          { path: 'big.txt', reason: 'too_large' },
+        ]),
+      ),
+    ).toBe('Wrote 0 changes to 0 files · 2 not written');
+    expect(CONFLICT_LABEL.too_large).toBe('Too large to apply');
   });
 });
 

@@ -13,7 +13,10 @@ export type ChangeEvent =
       /** Files with no decision at all. */
       skipped: NoteFile[];
       conflicts: { path: string; reason: ApplyConflictReason }[];
-      /** Legacy proposals too large to review, left unwritten. Missing in events recorded before it existed. */
+      /**
+       * Files apply left unwritten as too large: legacy proposals too large to review, and files of a partial apply
+       * whose text would exceed the write limit. Missing in events recorded before it existed.
+       */
       tooLarge?: string[];
     }
   | { type: 'discarded'; files: { path: string; kind: ChangeKind }[] };

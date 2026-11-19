@@ -5,7 +5,7 @@
 import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { RETRY_OTHER_PROJECT, type UndoBatchResponse } from '@shared/api';
+import { MOVE_WHILE_RUNNING, RETRY_OTHER_PROJECT, type UndoBatchResponse } from '@shared/api';
 import { CLIENT_HEADER, CLIENT_HEADER_VALUE } from '@shared/constants';
 import type { AgentEvent } from '@shared/events';
 import type { ChatChanges } from '@shared/types';
@@ -233,13 +233,17 @@ describe('Undo rechecks the chat’s project under the store lock', () => {
   });
 });
 
-describe('a retry of a turn split by a move', () => {
+// Defence in depth: the routes refuse a move while a turn runs, so a turn is never split by one. These tests make the
+// project change below the routes (`changeProject` + `chats.update`, as a move commits) to check that the turn's
+// pinned project, the move reset and the retry's newest-first undo still keep such a split safe.
+describe('a retry of a turn split by a project change made below the routes', () => {
   const R1 = 'first attempt\n';
   const R2 = 'second write, after the move\n';
 
   /**
-   * An Auto turn in A creates overlap.txt (R1); the chat moves to B while the turn runs; the turn, still pinned to A,
-   * reads and rewrites it (R2) into a second batch. Ends with the chat moved back to A.
+   * An Auto turn in A creates overlap.txt (R1); while the turn runs, the route refuses to move the chat, and the
+   * project change is then made directly; the turn, still pinned to A, reads and rewrites it (R2) into a second
+   * batch. Ends with the chat moved back to A.
    */
   async function turnSplitByMove(): Promise<{ chatId: string; file: string }> {
     const created = await call('/api/chats', {
@@ -279,7 +283,11 @@ describe('a retry of a turn split by a move', () => {
     ).then(collectEvents);
     await hold.entered;
     try {
-      expect((await move(chatId, projectA, projectB)).status).toBe(200);
+      const refused = await move(chatId, projectA, projectB);
+      expect(refused.status).toBe(409);
+      expect(await refused.json()).toMatchObject({ error: { code: 'conflict', message: MOVE_WHILE_RUNNING } });
+      expect((await core.chats.get(chatId)).projectId).toBe(projectA);
+      await core.changes.changeProject(chatId, () => core.chats.update(chatId, { projectId: projectB }));
     } finally {
       hold.open();
     }
@@ -287,7 +295,7 @@ describe('a retry of a turn split by a move', () => {
     const file = path.join(dirA, 'overlap.txt');
     expect(await readFile(file, 'utf8')).toBe(R2);
     expect(await exists(path.join(dirB, 'overlap.txt'))).toBe(false);
-    // The move split the turn: two batches in A, both holding overlap.txt.
+    // The project change split the turn: two batches in A, both holding overlap.txt.
     expect((await getChanges(chatId)).applied.map((b) => b.written.map((f) => f.path))).toEqual([
       ['overlap.txt'],
       ['overlap.txt'],

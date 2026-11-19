@@ -146,20 +146,28 @@ export function buildDecisions(files: FileChange[], decisions: Decisions): Decis
   return out;
 }
 
+/**
+ * "Wrote 3 changes to 2 files · 1 rejected · 2 not written (changed on disk)". The reason is named only when every
+ * file left unwritten shares it; mixed reasons read just "N not written" (each row names its own).
+ */
 export function appliedLabel(b: AppliedBatch): string {
   const changes = b.written.reduce((n, f) => n + f.hunks.length, 0);
   const base = `Wrote ${plural(changes, 'change')} to ${plural(b.written.length, 'file')}`;
   const rejected = b.rejectedHunks > 0 ? ` · ${b.rejectedHunks} rejected` : '';
-  const skipped = b.conflicts.length > 0 ? ` · ${b.conflicts.length} not written (changed on disk)` : '';
+  const reasons = new Set(b.conflicts.map((c) => c.reason));
+  const [only] = reasons;
+  const why = reasons.size === 1 && only ? ` (${CONFLICT_LABEL[only].toLowerCase()})` : '';
+  const skipped = b.conflicts.length > 0 ? ` · ${b.conflicts.length} not written${why}` : '';
   return `${base}${rejected}${skipped}`;
 }
 
+/** `too_large`: a legacy proposal too large to review, or a partial Apply whose text is over the write limit. */
 export const CONFLICT_LABEL: Record<AppliedBatch['conflicts'][number]['reason'], string> = {
   changed_on_disk: 'Changed on disk',
   deleted_on_disk: 'Deleted on disk',
   exists_on_disk: 'Already exists on disk',
   blocked: 'Blocked',
-  too_large: 'Too large to review',
+  too_large: 'Too large to apply',
 };
 
 /** Where an auto batch stands for Undo: offered, already undone (by the user or a retry), or past keeping. */

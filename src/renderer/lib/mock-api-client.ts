@@ -7,8 +7,10 @@ import {
   type ApplyChangesResponse,
   CHAT_PROJECT_CHANGED,
   EDIT_MODE_CHANGED,
+  MOVE_WHILE_RUNNING,
   PROJECT_NOT_IN_GIT,
   PROPOSALS_OTHER_PROJECT,
+  REMOVE_WHILE_RUNNING,
   RETRY_OTHER_PROJECT,
   type UndoBatchResponse,
 } from '@shared/api';
@@ -251,6 +253,9 @@ export class MockApiClient implements ApiClient {
     return clone(p);
   }
   async deleteProject(id: Id) {
+    // Like the server: refused while a reply runs in any chat of the project, before anything changes.
+    if (this.chats.some((c) => c.projectId === id && this.running.has(c.id)))
+      fail('conflict', 409, REMOVE_WHILE_RUNNING);
     this.projects = this.projects.filter((p) => p.id !== id);
     // Like the server: each chat of the project loses its pending proposals, its Auto state is reset, and it is
     // detached.
@@ -323,6 +328,8 @@ export class MockApiClient implements ApiClient {
   ) {
     // Same rules as `PATCH /chats/:id`. Everything is validated before anything is mutated.
     const c = this.chat(id);
+    // A move is refused while a reply runs in the chat, before any other check, like the server.
+    if (patch.projectId !== undefined && this.running.has(id)) fail('conflict', 409, MOVE_WHILE_RUNNING);
     // A move that names no mode expects Review; any other PATCH that names none is unchecked.
     const expected = patch.expectedEditMode ?? (patch.projectId !== undefined ? 'review' : undefined);
     if (expected !== undefined && expected !== c.editMode) fail('conflict', 409, EDIT_MODE_CHANGED);
@@ -421,7 +428,8 @@ export class MockApiClient implements ApiClient {
 
     this.running.add(chatId);
     // The turn uses the mode it checked above for the whole run: a mode change during the run applies from the next
-    // turn. Its project is pinned here too, like the server's: proposals are bound to it even if the chat moves.
+    // turn. Its project is pinned here too, like the server's (a move is refused while the turn runs; the pin stays as
+    // defence in depth): proposals are bound to it.
     const turnProjectId = chat.projectId;
     let turnId: Id;
     let retryNotice: string | undefined;
@@ -892,8 +900,10 @@ export class MockApiClient implements ApiClient {
 
   /**
    * Before a retry: undo every auto batch of the turn written into the turn's project that isn't undone yet, newest
-   * first like the server (a move can split a turn into batches that hold the same file). A path a newer batch skipped
-   * is held for the older ones. Each path is reported once: skipped (the newest reason) if any batch skipped it.
+   * first like the server. A move is refused while a turn runs, so a turn writes into one batch per project; the
+   * newest-first order and the held skips stay as the server's defence in depth for batches that hold the same file.
+   * A path a newer batch skipped is held for the older ones. Each path is reported once: skipped (the newest reason)
+   * if any batch skipped it.
    */
   private undoTurn(chatId: Id, turnId: Id, projectId: Id | null): { batchId: Id; undo: BatchUndo } | null {
     const batches = (this.applied.get(chatId) ?? [])

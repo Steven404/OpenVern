@@ -566,7 +566,7 @@ describe('review: too-large proposals', () => {
       [
         '[OpenVern] Since your last reply the user reviewed your proposed edits:',
         '- Written: a.txt (1 of 1)',
-        '- Not written, too large to review: big.txt',
+        '- Not written, too large to apply: big.txt',
         'Nothing else is pending.',
       ].join('\n'),
     );
@@ -619,7 +619,7 @@ describe('review: legacy too-large pending files', () => {
     expect(await s.svc.takeNote(CHAT, REVIEW)).toBe(
       [
         '[OpenVern] Since your last reply the user reviewed your proposed edits:',
-        '- Not written, too large to review: big.txt',
+        '- Not written, too large to apply: big.txt',
         'Nothing else is pending.',
       ].join('\n'),
     );
@@ -644,7 +644,7 @@ describe('review: legacy too-large pending files', () => {
         '[OpenVern] Since your last reply the user reviewed your proposed edits:',
         '- Written: ok.txt (1 of 1)',
         '- Not written, changed on disk before apply: conf.txt',
-        '- Not written, too large to review: big.txt',
+        '- Not written, too large to apply: big.txt',
         'Nothing else is pending.',
       ].join('\n'),
     );
