@@ -146,6 +146,15 @@ export function createMemoryChanges(): MemoryChanges {
       undoInPlace(s, batch, 'user');
       return { batch: structuredClone(batch), changes: copy(s) };
     },
+    retryInfo: async ({ chatId, turnId, projectId }) => {
+      const elsewhere = new Set<Id>();
+      for (const b of of(chatId).applied) {
+        if (b.source !== 'auto' || b.turnId !== turnId || !b.undoable || b.undo) continue;
+        const project = batchProject.get(b.id) ?? '';
+        if (project !== (projectId ?? '')) elsewhere.add(project);
+      }
+      return { writtenElsewhere: [...elsewhere], lastMode: 'review' };
+    },
     prepareRetry: async (input) => {
       retryCalls.push(input);
       const s = of(input.chatId);

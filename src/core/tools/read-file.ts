@@ -66,6 +66,7 @@ export function createReadFileTool(opts: SandboxOptions = {}): Tool {
       if (!res.ok) return fail(res.message, summary);
 
       // Proposed edits are read through (plan G2.3): staged content replaces the disk, staged deletions hide the file.
+      // The change service shows a pending set only to a turn pinned to the project it was made for.
       const staged = ctx.changes ? await ctx.changes.read(res.rel) : null;
       if (staged?.kind === 'deleted') {
         return fail(`File not found: ${relPath} (${PROPOSED_DELETED_NOTE}).`, summary);

@@ -68,7 +68,9 @@ export function projectRoutes(core: Core): Hono {
     // Removing a project discards its chats' pending edits (they move to "Chats" and could never be applied). Each
     // chat is discarded and detached together under its change-store lock (`changeProject`), so a detach can't land
     // between Apply's project check and its writes, and a stage can't add proposals between the discard and the
-    // detach. `projects.remove` then detaches any chat that joined the project since the list, as before.
+    // detach, and `changeProject` then resets the chat's per-project Auto state (open batches closed, reads cleared).
+    // `projects.remove` then detaches any chat that joined the project since the list, as before; that path skips
+    // the reset, and batches, reads and proposals stay apart because each is bound to its project.
     for (const chat of await core.chats.list()) {
       if (chat.projectId !== id) continue;
       // LOCK ORDER: the chat's change-store lock (`changeProject`), then the chat storage lock (`chats.update`).

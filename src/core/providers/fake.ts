@@ -86,16 +86,18 @@ function editMarkers(text: string): { kind: 'edit' | 'write' | 'delete'; path: s
 }
 
 const FAKE_READ_PREFIX = 'call_fake_read_';
-/** Reads before a write or delete. Not followed by an edit, unlike `FAKE_READ_PREFIX` reads. */
-const FAKE_PREREAD_PREFIX = 'call_fake_preread_';
+/** Reads followed in the next step by a write or a delete of the same path, not by an edit. */
+const FAKE_PREREAD_WRITE_PREFIX = 'call_fake_preread_write_';
+const FAKE_PREREAD_DELETE_PREFIX = 'call_fake_preread_delete_';
 const callId = (prefix: string, i: number) => `${prefix}${i}_${crypto.randomUUID()}`;
 
 /**
  * Scripted edit turn. Step 1 (last message from the user), all in one assistant message, in marker order: read every
- * `edit` path; read every `write` / `delete` path and then write or delete it right away (the read lets Auto
- * overwrite or delete an existing file, which needs a read in the chat first; reading a new file just fails). Step 2
- * (the `edit` reads came back): `edit_file` each read file by appending a marker comment to its first non-empty line.
- * Step 3: the default final answer. Returns null when no edit tool is offered.
+ * marker's path. Step 2 (the reads came back), in the same order: `edit_file` each `edit` file that was read by
+ * appending a marker comment to its first non-empty line; `write_file` each `write` path; `delete_file` each `delete`
+ * path. The read comes a step before the write or delete because Auto lets a change through only after the model saw
+ * the file, and a read in the same response as the write doesn't count; reading a new file just fails, which a write
+ * doesn't need. Step 3: the default final answer. Returns null when no edit tool is offered.
  */
 function editScript(req: ProviderRequest, text: string): FakeStep[] | null {
   const offered = new Set(req.tools?.map((t) => t.name));
@@ -112,16 +114,13 @@ function editScript(req: ProviderRequest, text: string): FakeStep[] | null {
     if (markers.length === 0) return null;
     const steps: FakeStep[] = [...textDeltas("I'll propose those changes.")];
     markers.forEach((m, i) => {
-      if (m.kind === 'edit') {
-        steps.push(call(FAKE_READ_PREFIX, i, 'read_file', { path: m.path }));
-        return;
-      }
-      steps.push(call(FAKE_PREREAD_PREFIX, i, 'read_file', { path: m.path }));
-      if (m.kind === 'write') {
-        steps.push(
-          call('call_fake_write_', i, 'write_file', { path: m.path, content: `// created by the fake provider\n` }),
-        );
-      } else steps.push(call('call_fake_delete_', i, 'delete_file', { path: m.path }));
+      const prefix =
+        m.kind === 'edit'
+          ? FAKE_READ_PREFIX
+          : m.kind === 'write'
+            ? FAKE_PREREAD_WRITE_PREFIX
+            : FAKE_PREREAD_DELETE_PREFIX;
+      steps.push(call(prefix, i, 'read_file', { path: m.path }));
     });
     return [...steps, usage, { type: 'finish', reason: 'tool_calls' }];
   }
@@ -130,30 +129,38 @@ function editScript(req: ProviderRequest, text: string): FakeStep[] | null {
   const assistantIdx = req.messages.findLastIndex((m) => m.role === 'assistant');
   const assistant = req.messages[assistantIdx];
   if (assistant?.role === 'assistant') {
-    const reads = assistant.toolCalls.filter((c) => c.id.startsWith(FAKE_READ_PREFIX));
-    if (reads.length > 0) {
-      const steps: FakeStep[] = [];
-      for (const [i, c] of reads.entries()) {
-        const result = req.messages.find((m) => m.role === 'tool' && m.toolCallId === c.id);
-        if (result?.role !== 'tool') continue;
-        const line = result.content
-          .split('\n')
-          .slice(1)
-          .map((l) => /^\s*\d+ \| (.*)$/.exec(l)?.[1])
-          .find((l) => l?.trim());
-        if (!line) continue;
-        const path = (JSON.parse(c.argsJson) as { path: string }).path;
+    const steps: FakeStep[] = [];
+    for (const [i, c] of assistant.toolCalls.entries()) {
+      const path = () => (JSON.parse(c.argsJson) as { path: string }).path;
+      if (c.id.startsWith(FAKE_PREREAD_WRITE_PREFIX)) {
         steps.push(
-          call('call_fake_edit_', i, 'edit_file', {
-            path,
-            old_string: line,
-            new_string: `${line} // edited by the fake provider`,
-          }),
+          call('call_fake_write_', i, 'write_file', { path: path(), content: '// created by the fake provider\n' }),
         );
+        continue;
       }
-      if (steps.length > 0)
-        return [...textDeltas('Applying the edits.'), ...steps, usage, { type: 'finish', reason: 'tool_calls' }];
+      if (c.id.startsWith(FAKE_PREREAD_DELETE_PREFIX)) {
+        steps.push(call('call_fake_delete_', i, 'delete_file', { path: path() }));
+        continue;
+      }
+      if (!c.id.startsWith(FAKE_READ_PREFIX)) continue;
+      const result = req.messages.find((m) => m.role === 'tool' && m.toolCallId === c.id);
+      if (result?.role !== 'tool') continue;
+      const line = result.content
+        .split('\n')
+        .slice(1)
+        .map((l) => /^\s*\d+ \| (.*)$/.exec(l)?.[1])
+        .find((l) => l?.trim());
+      if (!line) continue;
+      steps.push(
+        call('call_fake_edit_', i, 'edit_file', {
+          path: path(),
+          old_string: line,
+          new_string: `${line} // edited by the fake provider`,
+        }),
+      );
     }
+    if (steps.length > 0)
+      return [...textDeltas('Applying the edits.'), ...steps, usage, { type: 'finish', reason: 'tool_calls' }];
   }
   return null;
 }
@@ -197,9 +204,9 @@ const SLOW_DELTA_MS = 120;
  * - `[fake:read=<path>]`: the first tool call reads `<path>` instead of `README.md` (e.g. `../x` or `.env`, to
  *   exercise the sandbox through the whole stack).
  * - `[fake:edit=<path>]`, `[fake:write=<path>]`, `[fake:delete=<path>]`: when the edit tools are offered, make that
- *   change (proposed in Review, written in Auto). `edit` reads the file, then appends a comment to its first non-empty
- *   line in the next step; `write` reads the path, then creates or overwrites it with a one-line comment; `delete`
- *   reads the path, then deletes it. Several markers make one scripted turn that changes several files.
+ *   change (proposed in Review, written in Auto). Each reads its path, then in the next step: `edit` appends a comment
+ *   to the file's first non-empty line; `write` creates or overwrites the path with a one-line comment; `delete`
+ *   deletes it. Several markers make one scripted turn that changes several files.
  * - `[fake:terminal]`: when `read_terminal` is offered, call it once (no arguments), then answer with the first line
  *   of its result verbatim (e.g. "No terminal is open in this chat. …").
  * Title requests (`maxTokens` set) ignore the markers.

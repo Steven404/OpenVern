@@ -438,7 +438,7 @@ export function DiffSurface({ chatId, params }: SurfaceProps) {
             {changes.isPending
               ? 'Loading edits…'
               : editMode === 'auto'
-                ? 'Nothing is waiting for review. In Auto, edits are written as the model works; undo a turn below.'
+                ? 'Nothing is waiting for review. In Auto, edits are written as the model works; undo edits in History.'
                 : 'No edits are waiting for review.'}
           </p>
           <AppliedList chatId={chatId} batches={applied} mode={effMode} focus={historyFocus} />

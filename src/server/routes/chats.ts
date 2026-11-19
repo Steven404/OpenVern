@@ -2,6 +2,7 @@
 
 import {
   applyChangesBody,
+  CHAT_HAS_NO_PROJECT,
   CHAT_PROJECT_CHANGED,
   createChatBody,
   EDIT_MODE_CHANGED,
@@ -138,7 +139,8 @@ export function chatRoutes(core: Core): Hono {
        * Commits the patch; `beforeCommit` runs right before the write, after the pending check. A move is refused
        * while proposals are pending, and commits under the chat's change-store lock (`changeProject`) with that check,
        * read fresh there: a stage can't slip in between the check and the write, and the move can't land between
-       * Apply's project check and its writes.
+       * Apply's project check and its writes. Once the project changed, `changeProject` resets the chat's
+       * per-project Auto state under that same lock.
        */
       const commit = (beforeCommit?: () => void) => {
         const { projectId } = patch;
@@ -196,7 +198,9 @@ export function chatRoutes(core: Core): Hono {
   // can land at any time, so a check here followed by a second read in the agent could start a turn in a mode the
   // user wasn't shown, or run the checked mode in the project a move just put the chat in. A mismatch is refused
   // (409) before anything is stored or started. The project the client showed (`expectedProjectId`) is checked
-  // against the same read, so a chat moved from another window can't run in a project the sender never saw.
+  // against the same read, so a chat moved from another window can't run in a project the sender never saw. A retry
+  // whose turn wrote into another project that still exists is refused by the agent itself (a stream error, nothing
+  // stored), right before its undo, where the run claim keeps that check valid.
   r.post(ROUTES.chatMessages, async (c) => {
     const chatId = c.req.param('id');
     const body = await readJson(c, sendMessageBody);
@@ -310,7 +314,7 @@ export function chatRoutes(core: Core): Hono {
     return c.json(
       await withIdleChat(id, async () => {
         const chat = await core.chats.get(id);
-        if (!chat.projectId) throw new CoreError('conflict', 'This chat has no project to write to.');
+        if (!chat.projectId) throw new CoreError('conflict', CHAT_HAS_NO_PROJECT);
         const project = await core.projects.get(chat.projectId);
         return core.changes.apply({
           chatId: id,
@@ -325,7 +329,9 @@ export function chatRoutes(core: Core): Hono {
   });
 
   // The Undo button of an auto batch. Needs the chat idle, like apply: a running turn may still be writing into
-  // this batch, and the claim keeps a new turn (or its retry undo) from starting while the files are restored.
+  // this batch, and the claim keeps a new turn (or its retry undo) from starting while the files are restored. The
+  // project read here finds the folder; the change service reads the chat's project again under its store lock, where
+  // a move or a detach can't commit (`changeProject`), and refuses (409, nothing restored) when the chat moved.
   r.post(ROUTES.chatBatchUndo, async (c) => {
     const id = c.req.param('id');
     const batchId = c.req.param('batchId');
@@ -337,11 +343,11 @@ export function chatRoutes(core: Core): Hono {
         async () => {
           // Read under the claim, so the project the undo is pinned to is the chat's project right now.
           const chat = await core.chats.get(id);
-          if (!chat.projectId) throw new CoreError('conflict', 'This chat has no project to write to.');
+          if (!chat.projectId) throw new CoreError('conflict', CHAT_HAS_NO_PROJECT);
           const project = await core.projects.get(chat.projectId).catch((err) => {
             // A project that no longer exists leaves the chat with nowhere to write.
             if (err instanceof CoreError && err.code === 'not_found') {
-              throw new CoreError('conflict', 'This chat has no project to write to.');
+              throw new CoreError('conflict', CHAT_HAS_NO_PROJECT);
             }
             throw err;
           });

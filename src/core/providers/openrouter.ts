@@ -158,7 +158,8 @@ function mapTools(tools: ToolSpec[]) {
 
 interface WireToolCallDelta {
   index?: number;
-  id?: string;
+  /** Not trusted to be a string: a non-string ID is ignored, so the call has none and the loop refuses it. */
+  id?: unknown;
   function?: { name?: string; arguments?: string };
 }
 interface WireChunk {
@@ -203,6 +204,35 @@ function addDetails(into: Detail[], incoming: unknown[]): void {
     }
     into.push({ ...d });
   }
+}
+
+/** Shown when an indexless tool-call delta starts a call that can't be told apart from the one before it. */
+export const AMBIGUOUS_TOOL_CALLS_MESSAGE =
+  'The model sent tool calls that can’t be told apart, so none of them ran. Try again, or pick another model.';
+
+/** Whether `args`, the arguments gathered so far, already form a whole JSON value, so more text can't continue them. */
+function isWholeJson(args: string): boolean {
+  const t = args.trim();
+  // Only text ending like a JSON object or array is parsed, so long arguments aren't re-parsed on every chunk.
+  if (!t.endsWith('}') && !t.endsWith(']')) return false;
+  try {
+    JSON.parse(t);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether an indexless delta that resolved to `p` (its ID matched `p`'s, or it had none) starts another call instead
+ * of continuing `p`: it names a function although `p` already has a name, or it adds arguments to arguments that are
+ * already complete. Argument chunks with no name continue the call.
+ */
+function startsAnotherCall(p: PendingCall, tc: WireToolCallDelta): boolean {
+  const name = tc.function?.name;
+  if (typeof name === 'string' && name !== '' && p.name !== '') return true;
+  const more = tc.function?.arguments;
+  return typeof more === 'string' && more.trim() !== '' && isWholeJson(p.args);
 }
 
 function mapFinish(reason: string): 'stop' | 'tool_calls' | 'length' | 'other' {
@@ -256,18 +286,28 @@ async function* parseStream(body: ReadableStream<Uint8Array>, signal: AbortSigna
         }
         if (delta.reasoning_details?.length) addDetails(details, delta.reasoning_details);
         for (const tc of delta.tool_calls ?? []) {
+          const id = typeof tc.id === 'string' ? tc.id : '';
           let idx = tc.index;
           if (idx === undefined) {
             // Non-conforming provider: no index. A new id starts a new call, otherwise continue the last one.
-            const byId = tc.id ? [...pending.entries()].find(([, p]) => p.id === tc.id)?.[0] : undefined;
-            idx = byId ?? (tc.id ? pending.size : Math.max(pending.size - 1, 0));
+            const byId = id ? [...pending.entries()].find(([, p]) => p.id === id)?.[0] : undefined;
+            idx = byId ?? (id ? pending.size : Math.max(pending.size - 1, 0));
+            // AN INDEXLESS CALL THAT CAN'T BE TOLD APART FAILS THE WHOLE RESPONSE: a delta that starts another call
+            // while repeating the previous call's ID, or carrying none, would otherwise be merged into that call, and
+            // the response would run a garbled call next to its siblings. The stream fails with a retryable error
+            // before any tool call is emitted (they are emitted only once the choice finishes), so none of the
+            // response's calls runs, whoever consumes the stream.
+            const target = pending.get(idx);
+            if (target && startsAnotherCall(target, tc)) {
+              throw new ProviderError('provider_error', AMBIGUOUS_TOOL_CALLS_MESSAGE, true);
+            }
           }
           let p = pending.get(idx);
           if (!p) {
             p = { id: '', name: '', args: '' };
             pending.set(idx, p);
           }
-          if (tc.id && !p.id) p.id = tc.id;
+          if (id && !p.id) p.id = id;
           if (tc.function?.name && !p.name) p.name = tc.function.name;
           if (tc.function?.arguments) p.args += tc.function.arguments;
         }

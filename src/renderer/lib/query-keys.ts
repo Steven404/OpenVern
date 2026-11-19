@@ -5,7 +5,7 @@
 //   (both under the `projectFiles(projectId)` prefix, so one invalidation refreshes open folders and the filter)
 //   projectFile(projectId, path) → ProjectFileContent
 //   homeFolder(dir) → HomeFileListing · homeFileSearch(q) → ProjectFileSearchResult (under the `homeFiles` prefix)
-//   chatChanges(chatId) → ChatChanges
+//   chatChanges(chatId) → ChatChanges (under the `allChatChanges` prefix)
 
 import type { Id } from '@shared/types';
 
@@ -30,5 +30,7 @@ export const queryKeys = {
   homeFolder: (dir: string) => ['homeFiles', dir] as const,
   homeFileSearch: (query: string) => ['homeFiles', { search: query }] as const,
   homeFile: (path: string) => ['homeFile', path] as const,
+  /** Prefix of every chat's changes (invalidation only). */
+  allChatChanges: ['chatChanges'] as const,
   chatChanges: (chatId: Id) => ['chatChanges', chatId] as const,
 };

@@ -53,6 +53,8 @@ export function ProjectMenu({ project, onMenuOpenChange }: ProjectMenuProps) {
         queryClient.invalidateQueries({ queryKey: queryKeys.chats }),
         // Open chats of this project are now loose chats: refetch every cached `chat(id)`.
         queryClient.invalidateQueries({ queryKey: ['chat'] }),
+        // Their proposals were discarded and their Auto batches can't be undone any more: refetch every chat's changes.
+        queryClient.invalidateQueries({ queryKey: queryKeys.allChatChanges }),
       ]);
     },
   });

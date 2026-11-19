@@ -211,3 +211,33 @@ describe('A failed read records nothing', () => {
     expect(await readFile(path.join(fx.root, 'README.md'), 'utf8')).toContain('# Fixture');
   });
 });
+
+describe('a write that reached the disk but not the change history', () => {
+  it('is reported as written, plus a line saying Undo covers it only while the app stays open', async () => {
+    const changes = {
+      ...svc.tools({ chatId: 'c', projectId: 'p', projectRoot: fx.root, messageId: 'm', turnId: 't', mode: 'auto' }),
+      write: async () => ({
+        file: { path: 'new.txt', kind: 'create' as const, add: 1, del: 0, hunks: [] },
+        batchId: 'b1',
+        unsaved: true as const,
+      }),
+    };
+    const tool = getProjectTools({ editMode: 'auto' }).find((t) => t.spec.name === 'write_file');
+    const result = await tool?.run({ path: 'new.txt', content: 'hello\n' }, { ...fx.ctx, changes });
+    expect(result?.ok).toBe(true);
+    expect(result?.output).toBe(`Created new.txt (1 line). Written to disk.\n${wording.autoUnsavedText()}`);
+    expect(result?.output).not.toContain('Nothing was changed');
+  });
+});
+
+describe('the write limit after CRLF line endings are kept', () => {
+  it('edit_file on a CRLF file is still refused by the tool when the result is over the limit', async () => {
+    const lines = 'x'.repeat(29);
+    await write(fx.root, 'crlf.txt', `${lines}\r\n`.repeat(2));
+    const big = `${lines}\n`.repeat(8600);
+    const result = await run('edit_file', { path: 'crlf.txt', old_string: `${lines}\n${lines}\n`, new_string: big });
+    expect(result.ok).toBe(false);
+    expect(result.output).toBe(wording.editedTooLargeText('auto', big.length + 8600));
+    expect(await readFile(path.join(fx.root, 'crlf.txt'), 'utf8')).toBe(`${lines}\r\n`.repeat(2));
+  });
+});

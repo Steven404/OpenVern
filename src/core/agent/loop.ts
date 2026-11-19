@@ -11,8 +11,10 @@
 //   ran). Stop while tools run: the in-flight tool and every not-yet-started call of that message get a persisted
 //   `ok:false` "Interrupted" ToolMessage (with `tool_call` + `tool_result` events), so the stored chat is self-consistent.
 //   `history.ts` still synthesises "Interrupted" results for legacy/dangling calls. A tool call that wrote to disk
-//   (Auto) keeps its real result even when Stop arrived meanwhile.
+//   (Auto) keeps its real result even when Stop arrived meanwhile, and even when the chat couldn't be saved: then the
+//   result is still emitted, held in memory and appended before the chat's next turn replays the history.
 
+import { CHAT_PROJECT_CHANGED, RETRY_OTHER_PROJECT } from '@shared/api';
 import {
   LIMITS,
   MAX_AGENT_STEPS,
@@ -37,6 +39,7 @@ import type {
   Usage,
   UserMessage,
 } from '@shared/types';
+import { sha256 } from '../changes/blobs';
 import { CoreError, toErrorInfo } from '../errors';
 import type { Provider, ProviderMessage, ToolSpec } from '../providers/types';
 import { redactionNote, redactSecrets } from '../security/redact';
@@ -58,8 +61,9 @@ import type {
   ProjectsService,
   RunTurnInput,
   TerminalReadBroker,
+  TurnChanges,
 } from '../types';
-import { EDIT_TOOL_NAMES, retryUndoNote, retryUndoNotice } from './edit-mode';
+import { EDIT_TOOL_NAMES, retryUndoNote, retryUndoNotice, withModeLine } from './edit-mode';
 import { buildHistory, flattenToolCall, INTERRUPTED_OUTPUT } from './history';
 import { buildIdentity } from './identity';
 import { buildSystemPrompt } from './system-prompt';
@@ -148,26 +152,42 @@ export function toChatSummary(chat: ChatSummary | Chat): ChatSummary {
 /**
  * Wraps a `ToolChanges` to notice what a tool call did: staged something (the loop then emits `changes_updated`) or
  * wrote to disk (`auto_batch_updated`, and the result is kept even after Stop). Reads are held until the loop knows
- * the result reached the model (`commitReads`).
+ * the result reached the model: kept, and appended to the chat (`commitReads`). Committed reads still wait for the
+ * end of the step (`endStep`) before the stale-read check can use them.
  */
-function trackChanges(inner: ToolChanges): TrackedChanges {
+function trackChanges(inner: TurnChanges): TrackedChanges {
   let staged: { summary: ChangeSummary | null } | undefined;
   let written: { batchId: Id } | undefined;
-  let reads: [string, Uint8Array][] = [];
+  /** The current tool call's reads, until its kept result is in the chat. */
+  let reads: HeldRead[] = [];
+  /** Reads of this step whose results are in the chat, in order, until the step is over. */
+  let stepReads: HeldRead[] = [];
   return {
     mode: inner.mode,
     read: (p) => inner.read(p),
     staged: () => inner.staged(),
-    noteRead: (p, bytes) => void reads.push([p, bytes]),
+    // The digest is taken now and the bytes dropped: a held read can wait for the rest of the step, and a step of large
+    // reads must not keep every file it read in memory until then. It is the same digest the change service would
+    // take from these bytes, so the record is the one `noteRead` would make.
+    noteRead: (p, bytes) => void reads.push({ path: p, hash: sha256(bytes) }),
     async stage(p, content) {
       const result = await inner.stage(p, content);
       staged = { summary: result.summary };
       return result;
     },
     async write(p, content, opts) {
+      // WRITES ARE NEVER HIDDEN (see the change service): `write` throws only before the project file changed, so a
+      // write that reached the disk always gets here, also when its change history couldn't be saved yet.
       const result = await inner.write(p, content, opts);
       // `batchId` is null only when nothing changed on disk.
       if (result.batchId !== null) written = { batchId: result.batchId };
+      // A write that changed the file has just recorded its own bytes as seen (or, for a delete, dropped the record),
+      // under the same resolved path as a read's. An earlier read of this step saw the bytes before it, so it must not
+      // replace that record at the end of the step: the next write would be refused as stale.
+      if (result.file) {
+        const changed = result.file.path;
+        stepReads = stepReads.filter((r) => r.path !== changed);
+      }
       return result;
     },
     reset: () => {
@@ -176,12 +196,25 @@ function trackChanges(inner: ToolChanges): TrackedChanges {
       reads = [];
     },
     commitReads: () => {
-      for (const [p, bytes] of reads) inner.noteRead(p, bytes);
+      stepReads.push(...reads);
       reads = [];
+    },
+    endStep: () => {
+      const done = stepReads;
+      stepReads = [];
+      for (const r of done) inner.noteReadHash(r.path, r.hash);
     },
     lastStage: () => staged,
     lastWrite: () => written,
   };
+}
+
+/** A read held back until the step is over: what the read record needs of it, never the file's bytes. */
+interface HeldRead {
+  /** The path as the sandbox resolved it, the record's key. */
+  path: string;
+  /** sha256 (hex) of the bytes the read returned, the record's value. */
+  hash: string;
 }
 
 interface TrackedChanges extends ToolChanges {
@@ -190,12 +223,39 @@ interface TrackedChanges extends ToolChanges {
   lastStage(): { summary: ChangeSummary | null } | undefined;
   /** The current tool call changed a project file (Auto). */
   lastWrite(): { batchId: Id } | undefined;
-  /** Records the current tool call's reads: its result is kept, so the model sees what it read. */
+  /**
+   * The current tool call's result is kept and in the chat, so the model will see what it read: its reads join the
+   * step's, which `endStep` records.
+   */
   commitReads(): void;
+  /**
+   * The step is over: records its committed reads as seen, in order. Called once per step, before the next model
+   * request, also when the step ended early (Stop, a failed save), so the reads already in the chat are never lost.
+   */
+  endStep(): void;
 }
 
 /** `extra` appended to a user message's existing note, as its own block. */
 const appendNote = (note: string | undefined, extra: string): string => (note ? `${note}\n\n${extra}` : extra);
+
+/** Shown when a model response's tool calls can't each be told apart by their ID (see `callIdsUsable`). */
+export const TOOL_CALL_IDS_ERROR =
+  'The model sent tool calls without an ID of their own, so none of them ran. Try again, or pick another model.';
+
+/**
+ * Whether every call of one model response has an ID of its own: a string, not empty, not shared with another call of
+ * the response, and not used by any call or result earlier in the chat (`used`). A provider may hand over an ID that
+ * isn't a string despite the type, and that must take this refusal too, not throw.
+ */
+function callIdsUsable(calls: readonly ToolCall[], used: ReadonlySet<string>): boolean {
+  const ids = new Set<string>();
+  for (const call of calls) {
+    const id: unknown = call.id;
+    if (typeof id !== 'string' || id.trim() === '' || ids.has(id) || used.has(id)) return false;
+    ids.add(call.id);
+  }
+  return true;
+}
 
 function interrupted(): { ok: false; output: string; summary: string } {
   return { ok: false, output: INTERRUPTED_OUTPUT, summary: 'Interrupted' };
@@ -240,6 +300,11 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
   const { chats, attachments, projects, models, provider } = deps;
   const now = deps.now ?? (() => new Date());
   const runs = new Map<Id, AbortController>();
+  /**
+   * Results of tool calls that changed a project file but couldn't be appended to the chat, per chat, in call order.
+   * In memory only (lost on a quit or crash, like an unsaved change history). Only touched by the chat's run.
+   */
+  const unrecorded = new Map<Id, ToolMessage[]>();
 
   async function runTurn(input: RunTurnInput): Promise<void> {
     const { chatId } = input;
@@ -282,6 +347,13 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
     }
   }
 
+  /** Whether a project still exists; a failure other than `not_found` is a real one. */
+  const projectExists = (id: Id): Promise<boolean> =>
+    projects.get(id).then(
+      () => true,
+      (err) => (err instanceof CoreError && err.code === 'not_found' ? false : Promise.reject(err)),
+    );
+
   async function execute(input: RunTurnInput, signal: AbortSignal, emit: Emit, state: RunState): Promise<void> {
     const { chatId, model } = input;
     let chat = await chats.get(chatId);
@@ -299,13 +371,19 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
 
     let project: Project | undefined;
     if (projectId) {
-      try {
-        project = await projects.get(projectId);
-      } catch (err) {
-        // A vanished project makes this a loose chat; anything else is a real failure.
-        if (!(err instanceof CoreError && err.code === 'not_found')) throw err;
-      }
+      // PINNED PROJECT EXISTS (invariant): the turn's project was read under the start claim. If it is gone by now (a
+      // removal committed in between), the turn fails here, before any attachment is bound, note taken, message
+      // appended, snapshot taken, undo run or history truncated. It never runs as a loose turn the user didn't send.
+      project = await projects.get(projectId).catch((err) => {
+        if (err instanceof CoreError && err.code === 'not_found') throw new CoreError('conflict', CHAT_PROJECT_CHANGED);
+        throw err;
+      });
     }
+    // A write an earlier run couldn't record goes into the chat first, before anything of this turn (a retry's
+    // check, undo and truncation included) and before the history is replayed: the model is never told "Interrupted"
+    // about a write that reached the disk. If it still can't be appended, this turn fails here, before anything of
+    // its own is stored.
+    if (unrecorded.has(chatId)) chat = await recordHeld(chatId);
 
     /** What a retry undid before starting over, for the notice on its first assistant message. */
     let retryUndo: BatchUndo | undefined;
@@ -332,16 +410,30 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
     } else {
       const lastUser = chat.messages.findLast((m): m is UserMessage => m.role === 'user');
       if (!lastUser) throw new CoreError('invalid_request', 'There is no message to retry in this chat.');
-      // RETRY ORDER (invariant): undo → note → truncate → restore.
+      const firstTurn = chat.messages.find((m) => m.role === 'user') === lastUser;
+      // RETRY ORDER (invariant): check → undo → note → truncate → restore.
+      // 0. Check (RETRY STAYS IN ITS PROJECT, invariant): a retry undoes the attempt's writes first, which it can only
+      //    do in the project they were written to. While they are still undoable in another project that still
+      //    exists, the retry is refused before anything is stored, undone, noted or truncated. The run claim keeps
+      //    this answer valid until step 1: no other run, Undo, Apply or retention can change the turn's batches
+      //    meanwhile, and a move only closes batches, which leaves them as undoable as before. A removed project's
+      //    writes can't be undone from the app any more, so they never block.
       // 1. Undo: the files the previous attempt wrote (Auto) go back to how the turn found them, whatever mode this
       //    retry runs in. Nothing else has changed yet, so if the undo throws, the history still holds the previous
       //    attempt's tool results, which say what is on disk, and the retry ends with the error.
-      // 2. Note: the files the undo had to skip still hold the previous attempt's edits. That is stored on the user
-      //    message (so a replay of the history says it too) before any later step can fail and lose it.
+      // 2. Note: the mode line is made true for the mode this retry runs in, then the files the undo had to skip
+      //    (they still hold the previous attempt's edits) are added. That is stored on the user message (so a replay
+      //    of the history says it too) before any later step can fail and lose it.
       // 3. Truncate: only once the disk is back to the turn's start (as far as it could be) does the history drop the
       //    attempt.
       // 4. Restore: last, the pending set goes back to its state at the turn's start, so proposals never sit on top
       //    of files the attempt left behind.
+      const info = deps.changes
+        ? await deps.changes.retryInfo({ chatId, turnId: lastUser.id, projectId: project?.id ?? null })
+        : null;
+      for (const other of info?.writtenElsewhere ?? []) {
+        if (await projectExists(other)) throw new CoreError('conflict', RETRY_OTHER_PROJECT);
+      }
       const undone =
         project && deps.changes
           ? await deps.changes.prepareRetry({
@@ -355,10 +447,14 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
       if (undone) {
         await emit({ type: 'auto_batch_updated', batchId: undone.batchId });
         retryUndo = undone.undo;
-        if (undone.undo.skipped.length > 0) {
-          await chats.setChangesNote(chatId, lastUser.id, appendNote(lastUser.changesNote, retryUndoNote(undone.undo)));
-          state.modified = true;
-        }
+      }
+      // A loose retry has no edit tools and no mode in effect: its note stays as it is.
+      let note = lastUser.changesNote;
+      if (project && info) note = withModeLine(note, { mode: editMode, lastMode: info.lastMode, firstTurn });
+      if (undone && undone.undo.skipped.length > 0) note = appendNote(note, retryUndoNote(undone.undo));
+      if (note !== lastUser.changesNote) {
+        await chats.setChangesNote(chatId, lastUser.id, note);
+        state.modified = true;
       }
       chat = await chats.truncateAfterLastUser(chatId);
       state.modified = true;
@@ -465,6 +561,13 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
       readAttachment: (id) => attachments.readBytes(id),
     });
 
+    // Every tool-call ID the chat already holds, on a call or a result, for the ID check below.
+    const usedCallIds = new Set<string>();
+    for (const m of chat.messages) {
+      if (m.role === 'assistant') for (const c of m.toolCalls) usedCallIds.add(c.id);
+      else if (m.role === 'tool') usedCallIds.add(m.toolCallId);
+    }
+
     // S4.4: the loop. The stuck-loop guard counts consecutive steps with the same signature (see `stepSignature`).
     let lastSignature: string | undefined;
     let repeats = 0;
@@ -518,6 +621,19 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
         // S4.5/S4.6: an abort surfaces as whatever the provider throws, so look at the signal, not the error type.
         failure = signal.aborted ? { status: 'stopped' } : { status: 'error', error: toErrorInfo(err) };
       }
+      // EVERY TOOL CALL HAS AN ID OF ITS OWN, OR NONE OF THE RESPONSE'S CALLS RUNS (invariant): the history replay pairs
+      // a call with its result by ID across the whole chat, so calls without an ID, or sharing one (with each other or
+      // with an earlier call), are replayed on a later turn with one result for all of them. The model would then have
+      // lost a file it read while the read record still lets it overwrite that file. Whatever the provider, such a
+      // response is stored and reported as an error with no tool calls, before any of them runs: nothing is written,
+      // nothing counts as read, and no unusable ID enters the chat.
+      if (!failure && !callIdsUsable(toolCalls, usedCallIds)) {
+        failure = { status: 'error', error: errorInfo('provider_error', TOOL_CALL_IDS_ERROR) };
+      }
+      // PROVIDER METADATA IS KEPT ONLY WITH THE TOOL CALLS IT CAME WITH: reasoning details may refer to the response's
+      // calls, and a failed response is stored without them, so its metadata is dropped too. Otherwise the next request
+      // to the same model would replay reasoning about calls that are no longer in the chat.
+      const keptMeta = failure && toolCalls.length > 0 ? undefined : providerMeta;
 
       const assistant: AssistantMessage = {
         id: messageId,
@@ -529,7 +645,7 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
         status: failure ? failure.status : 'complete',
         ...(failure?.status === 'error' ? { error: failure.error } : {}),
         ...(usage ? { usage } : {}),
-        ...(providerMeta !== undefined ? { providerMeta } : {}),
+        ...(keptMeta !== undefined ? { providerMeta: keptMeta } : {}),
         ...(step === 0 && firstNotice !== undefined ? { notice: firstNotice } : {}),
       };
       await chats.appendMessage(chatId, assistant);
@@ -544,6 +660,7 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
         state.completed = true;
         return;
       }
+      for (const call of toolCalls) usedCallIds.add(call.id);
 
       const toolsOffered = toolSpecs.length > 0;
       if (toolsOffered) {
@@ -556,18 +673,49 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
       }
       const flattened: string[] = text.length > 0 ? [text] : [];
       const entries: { name: string; args: string; ok: boolean; output: string }[] = [];
-      for (const call of toolCalls) {
-        stepChanges?.reset();
-        const toolMessage = await runTool(call, messageId, tools, toolContext, emit, stepChanges);
-        await chats.appendMessage(chatId, toolMessage);
-        await emit({ type: 'tool_result', message: toolMessage });
-        const staged = stepChanges?.lastStage();
-        if (staged) await emit({ type: 'changes_updated', messageId, changes: staged.summary });
-        const written = stepChanges?.lastWrite();
-        if (written) await emit({ type: 'auto_batch_updated', batchId: written.batchId });
-        if (toolsOffered) history.push({ role: 'tool', toolCallId: call.id, content: toolMessage.output });
-        else flattened.push(flattenToolCall(call, toolMessage));
-        entries.push({ name: call.name, args: call.argsJson, ok: toolMessage.ok, output: toolMessage.output });
+      // A READ AUTHORIZES WRITES ONLY FROM THE NEXT MODEL STEP (invariant): the model wrote every call of this step
+      // before any of their results existed, so a write here can't be based on what a read here returned. Reads are
+      // collected for the whole step (`commitReads`) and recorded only once it is over (`endStep`, below), before the
+      // next model request. Until then a sibling `write_file` or `delete_file` meets the record as it was before the
+      // step: refused as unread without one, refused as stale when the user changed the file since; and a sibling
+      // `edit_file` can't have a stale record refreshed for it either. Otherwise the model, with older content or none,
+      // would overwrite the user's newer bytes.
+      try {
+        for (const call of toolCalls) {
+          stepChanges?.reset();
+          const { message: toolMessage, kept } = await runTool(call, messageId, tools, toolContext, emit, stepChanges);
+          const written = stepChanges?.lastWrite();
+          try {
+            await chats.appendMessage(chatId, toolMessage);
+          } catch (err) {
+            if (!written) throw err;
+            // STOP NEVER HIDES A WRITE, a failed transcript save included: the client still gets the write's real
+            // result and the batch update, the result is held in memory (`recordHeld` appends it before the next turn
+            // replays the history), and the run ends with the storage error. Its reads are not recorded (the rule
+            // below): a held result is not in the chat yet and may never get there (a retry that truncates its attempt
+            // drops it; a restart loses it, and the call is then replayed as "Interrupted").
+            unrecorded.set(chatId, [...(unrecorded.get(chatId) ?? []), toolMessage]);
+            await emit({ type: 'tool_result', message: toolMessage });
+            await emit({ type: 'auto_batch_updated', batchId: written.batchId });
+            throw err;
+          }
+          // A READ IS RECORDED ONLY WHEN ITS CONTENT REACHED THE MODEL: only now, with the kept result in the chat,
+          // do the call's reads join the step's, to count as seen once the step is over (the rule above). A result
+          // that failed to save is replayed as "Interrupted" (it throws above), so its reads must not let a later
+          // write pass the stale-read guard.
+          if (kept) stepChanges?.commitReads();
+          await emit({ type: 'tool_result', message: toolMessage });
+          const staged = stepChanges?.lastStage();
+          if (staged) await emit({ type: 'changes_updated', messageId, changes: staged.summary });
+          if (written) await emit({ type: 'auto_batch_updated', batchId: written.batchId });
+          if (toolsOffered) history.push({ role: 'tool', toolCallId: call.id, content: toolMessage.output });
+          else flattened.push(flattenToolCall(call, toolMessage));
+          entries.push({ name: call.name, args: call.argsJson, ok: toolMessage.ok, output: toolMessage.output });
+        }
+      } finally {
+        // The step is over, also when it ended early: the reads whose results reached the chat are recorded; those of a
+        // call whose result couldn't be saved never joined them (the call is replayed as "Interrupted").
+        stepChanges?.endStep();
       }
       if (!toolsOffered) {
         // No tool definitions were sent, so providers would reject tool content: replay it as plain text, as buildHistory does.
@@ -590,6 +738,28 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
     }
 
     await emit({ type: 'error', error: errorInfo('max_steps_reached') });
+  }
+
+  /**
+   * Appends the held results of earlier writes (`unrecorded`) and returns the chat. A result whose assistant message is
+   * gone (a retry truncated that attempt after undoing it) or that the chat already holds is dropped. Throws, keeping
+   * what is still unappended, when an append fails.
+   */
+  async function recordHeld(chatId: Id): Promise<Chat> {
+    const chat = await chats.get(chatId);
+    const held = unrecorded.get(chatId) ?? [];
+    while (held.length > 0) {
+      const m = held[0] as ToolMessage;
+      const owner = chat.messages.some((x) => x.role === 'assistant' && x.toolCalls.some((c) => c.id === m.toolCallId));
+      const present = chat.messages.some((x) => x.id === m.id);
+      if (owner && !present) {
+        await chats.appendMessage(chatId, m);
+        chat.messages.push(m);
+      }
+      held.shift();
+    }
+    unrecorded.delete(chatId);
+    return chats.get(chatId);
   }
 
   /** Stop before any model call: records the same empty `stopped` assistant message a stop at stream start does. */
@@ -617,7 +787,11 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
     await emit({ type: 'assistant_end', message: assistant });
   }
 
-  /** Runs one tool call (emitting `tool_call` first). Never throws. */
+  /**
+   * Runs one tool call (emitting `tool_call` first). Never throws. `kept` is true when the message carries the tool's
+   * own result; the caller commits the call's reads only once that result is in the chat, and records them as seen
+   * when the step is over.
+   */
   async function runTool(
     call: ToolCall,
     messageId: Id,
@@ -625,12 +799,13 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
     ctx: ChatToolContext,
     emit: Emit,
     changes?: TrackedChanges,
-  ): Promise<ToolMessage> {
+  ): Promise<{ message: ToolMessage; kept: boolean }> {
     const { signal } = ctx;
     const knownSecrets = ctx.knownSecrets ?? [];
     await emit({ type: 'tool_call', messageId, toolCall: call });
     const started = now().getTime();
 
+    let kept = false;
     const execute = async (): Promise<{ ok: boolean; output: string; summary: string }> => {
       if (signal.aborted) return interrupted();
       const tool = tools.find((t) => t.spec.name === call.name);
@@ -661,10 +836,12 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
         // Stop arrived meanwhile, so the stored history (and the model, on the next turn) says what reached the disk.
         // Any other result that arrives after a stop is replaced, so what is stored never depends on a race.
         // A READ IS RECORDED ONLY WHEN ITS CONTENT REACHED THE MODEL (invariant): the reads are committed only with a
-        // result that is kept. A read replaced by "Interrupted" must not count as seen, or a later overwrite based on
-        // older content would pass the stale-read guard and undo the user's edit.
+        // result that is kept (`kept`), only after that result was appended to the chat, and they count as seen only
+        // once the step is over (the caller). A read replaced by "Interrupted", or whose result couldn't be saved (the
+        // model is then told "Interrupted"), must not count as seen, or a later overwrite based on older content would
+        // pass the stale-read guard and undo the user's edit.
         if (changes?.lastWrite() || !signal.aborted) {
-          changes?.commitReads();
+          kept = true;
           return result;
         }
         return interrupted();
@@ -682,7 +859,7 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
       output: output.count > 0 ? `${output.text}\n${redactionNote(output.count)}` : output.text,
       summary: redactSecrets(raw.summary, { known: knownSecrets }).text,
     };
-    return {
+    const message: ToolMessage = {
       id: crypto.randomUUID(),
       role: 'tool',
       createdAt: now().toISOString(),
@@ -693,6 +870,7 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
       summary: result.summary,
       durationMs: Math.max(0, now().getTime() - started),
     };
+    return { message, kept };
   }
 
   /** Trailing `chat_updated` events (S4.10). Never throws. */

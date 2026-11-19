@@ -2,7 +2,7 @@
 // lines, refusals and the next-turn note. The edit tools, the agent loop and the change service import it, so the
 // wording can change without touching their logic. Review wording is pinned by tests: change it only on purpose.
 
-import { APP_NAME, LIMITS } from '@shared/constants';
+import { APP_NAME, EDIT_MODES, LIMITS } from '@shared/constants';
 import type { ApplyConflictReason, ChangeKind, EditMode, UndoSkipReason } from '@shared/types';
 
 /** Names of the tools that stage edits. The agent offers them only when the chat may propose changes. */
@@ -157,6 +157,17 @@ export function editedTooLargeText(mode: EditMode, size: number): string {
   return `The edited file would be ${kb(size)} KB, over the ${kb(LIMITS.writeFileMaxBytes)} KB limit for ${limitFor(mode)}.`;
 }
 
+/**
+ * The bytes that would reach the disk (or the proposal) exceed `LIMITS.writeFileMaxBytes` once a CRLF file's line
+ * endings are kept. Checked by the change service on the final bytes, the authority for the limit.
+ */
+export function writtenTooLargeText(mode: EditMode, path: string, size: number): string {
+  return (
+    `${path} would be ${kb(size)} KB on disk (its CRLF line endings are kept), over the ` +
+    `${kb(LIMITS.writeFileMaxBytes)} KB limit for ${limitFor(mode)}.`
+  );
+}
+
 /** `write_file`: content exceeds `LIMITS.writeFileMaxBytes`. */
 export function contentTooLargeText(mode: EditMode, size: number): string {
   return (
@@ -184,6 +195,22 @@ export function writeNoChangeText(mode: EditMode, path: string): string {
   return mode === 'auto'
     ? autoNoChangeText(path)
     : `Proposed content for ${path} equals its content on disk, so no change is proposed for it.`;
+}
+
+/** A binary file (or one that isn't valid UTF-8) can't be the target of `edit_file` / `write_file`. */
+export function binaryFileText(path: string): string {
+  return `${path} is a binary file (or not valid UTF-8) and cannot be edited or overwritten.`;
+}
+
+/**
+ * Auto: the write reached the disk, but the chat's change history couldn't be saved yet. Added to the written result
+ * on its own line: the write happened, and the model must not be told otherwise.
+ */
+export function autoUnsavedText(): string {
+  return (
+    `${APP_NAME} couldn't save this edit to the chat's change history yet. It is on disk, and Undo covers it only ` +
+    'while the app stays open.'
+  );
 }
 
 // ---------------------------------------------------------------------------------------------------- system prompt
@@ -248,6 +275,29 @@ export const OTHER_PROJECT_PENDING_TEXT =
   "Not proposed: this chat has proposed edits for another project waiting for the user's review. Ask the user to " +
   'discard them first.';
 
+/** The new content is over `LIMITS.writeFileMaxBytes` (checked before CRLF line endings are kept). */
+export function newContentTooLargeText(path: string): string {
+  return `The new content of ${path} is over ${LIMITS.writeFileMaxBytes / 1024} KB.`;
+}
+
+/** The new content holds a NUL or a lone surrogate. */
+export function notUtf8Text(path: string): string {
+  return `${path}: only UTF-8 text can be written.`;
+}
+
+/** The new content holds a `«redacted:…»` placeholder. */
+export function placeholderContentText(path: string): string {
+  return (
+    `The content for ${path} contains a «redacted:…» placeholder. Writing it back would destroy the real secret; ` +
+    'use edit_file around it instead.'
+  );
+}
+
+/** The change service refuses to write text over a binary file. */
+export function binaryTargetText(path: string): string {
+  return `${path} is a binary file; it can't be edited or overwritten.`;
+}
+
 /** Auto: the file's bytes differ from what the tool based its change on, or from what the chat last read. */
 export function autoStaleText(path: string): string {
   return (
@@ -297,6 +347,28 @@ export function modeChangedNote(mode: EditMode): string {
         'each edit tool call succeeds, and the user can undo a whole turn.'
     : `[${APP_NAME}] Edit mode changed since your last reply: Review. Your edits are proposals again: nothing is ` +
         'written until the user applies them.';
+}
+
+/**
+ * A retried turn's note with its mode line made true for the retry's mode. The review and undo blocks stay as they
+ * are. The mode before the turn is the opposite of the mode its line announced, or, with no line, `lastMode` (what the
+ * model was told last: the turn's latest attempt kept its note true). The first turn never gets a line. The mode line
+ * is always the note's first block (`takeNote`), so an exact prefix match finds it.
+ */
+export function withModeLine(
+  note: string | undefined,
+  o: { mode: EditMode; lastMode: EditMode; firstTurn: boolean },
+): string | undefined {
+  let rest = note;
+  let announced: EditMode | null = null;
+  for (const m of EDIT_MODES) {
+    const line = modeChangedNote(m);
+    if (note === line) [rest, announced] = [undefined, m];
+    else if (note?.startsWith(`${line}\n\n`)) [rest, announced] = [note.slice(line.length + 2), m];
+  }
+  const before: EditMode = announced === null ? o.lastMode : announced === 'auto' ? 'review' : 'auto';
+  const line = !o.firstTurn && o.mode !== before ? modeChangedNote(o.mode) : undefined;
+  return [line, rest].filter((b): b is string => !!b).join('\n\n') || undefined;
 }
 
 /** One proposed file as the note reports it. */

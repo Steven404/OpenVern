@@ -11,6 +11,8 @@ import {
   alreadyProposedForDeletionText,
   autoNoChangeText,
   autoPendingText,
+  autoUnsavedText,
+  binaryFileText,
   changeFailedText,
   contentTooLargeText,
   createdText,
@@ -127,10 +129,13 @@ async function commitChange(
   rel: string,
   content: string | null,
   auto: { tool: EditToolName; baseHash: string },
-): Promise<{ ok: true; file: FileChange | null } | { ok: false; message: string }> {
+): Promise<{ ok: true; file: FileChange | null; unsaved?: true } | { ok: false; message: string }> {
   try {
-    const { file } =
-      changes.mode === 'auto' ? await changes.write(rel, content, auto) : await changes.stage(rel, content);
+    if (changes.mode === 'auto') {
+      const { file, unsaved } = await changes.write(rel, content, auto);
+      return { ok: true, file, ...(unsaved ? { unsaved } : {}) };
+    }
+    const { file } = await changes.stage(rel, content);
     return { ok: true, file };
   } catch (e) {
     if (e instanceof CoreError) return { ok: false, message: e.message };
@@ -166,37 +171,46 @@ async function prepare<S extends z.ZodType>(
   return { ok: true, data: parsed.data, changes: ctx.changes, res, summary };
 }
 
-/** The tool result for a change that reached the disk (Auto). `file` is this write's own diff. */
+/**
+ * The tool result for a change that reached the disk (Auto). `staged.file` is this write's own diff; `staged.unsaved`
+ * adds, on its own line, that the change history couldn't be saved yet (the write itself happened).
+ */
 function writtenResult(
-  file: FileChange | null,
+  staged: { file: FileChange | null; unsaved?: true },
   rel: string,
   content: string | null,
   lines: number | null,
   summary: string,
   replacements?: number,
 ): ToolResult {
-  if (!file) return succeed(autoNoChangeText(rel), summary);
-  if (file.kind === 'delete') return succeed(deletedText(rel, lines), summary);
-  if (file.kind === 'create') return succeed(createdText(rel, lineCount(content ?? '')), summary);
+  const result = writtenText(staged.file, rel, content, lines, replacements);
+  return succeed(staged.unsaved ? `${result}\n${autoUnsavedText()}` : result, summary);
+}
+
+function writtenText(
+  file: FileChange | null,
+  rel: string,
+  content: string | null,
+  lines: number | null,
+  replacements?: number,
+): string {
+  if (!file) return autoNoChangeText(rel);
+  if (file.kind === 'delete') return deletedText(rel, lines);
+  if (file.kind === 'create') return createdText(rel, lineCount(content ?? ''));
   const { excerpt, omitted } = diffExcerpt(file);
-  return succeed(
-    writtenEditText({
-      path: rel,
-      add: file.add,
-      del: file.del,
-      excerpt,
-      omitted,
-      ...(replacements !== undefined ? { replacements } : {}),
-      ...(file.tooLarge ? { tooLarge: true } : {}),
-    }),
-    summary,
-  );
+  return writtenEditText({
+    path: rel,
+    add: file.add,
+    del: file.del,
+    excerpt,
+    omitted,
+    ...(replacements !== undefined ? { replacements } : {}),
+    ...(file.tooLarge ? { tooLarge: true } : {}),
+  });
 }
 
 function blockedByState(cur: Current, rel: string, summary: string): ToolResult | null {
-  if (cur.state === 'binary') {
-    return fail(`${rel} is a binary file (or not valid UTF-8) and cannot be edited or overwritten.`, summary);
-  }
+  if (cur.state === 'binary') return fail(binaryFileText(rel), summary);
   if (cur.state === 'other') return fail(cur.message, summary);
   return null;
 }
@@ -316,7 +330,7 @@ export function createEditFileTool(opts: EditToolOptions = {}): Tool {
 
       const staged = await commitChange(changes, rel, next, { tool: 'edit_file', baseHash: cur.hash });
       if (!staged.ok) return fail(staged.message, summary);
-      if (changes.mode === 'auto') return writtenResult(staged.file, rel, next, null, summary, found.length);
+      if (changes.mode === 'auto') return writtenResult(staged, rel, next, null, summary, found.length);
       if (!staged.file) return succeed(editNoChangeText(changes.mode, rel), summary);
       const { excerpt, omitted } = diffExcerpt(staged.file);
       return succeed(
@@ -375,7 +389,7 @@ export function createWriteFileTool(opts: EditToolOptions = {}): Tool {
       const baseHash = cur.state === 'text' || cur.state === 'missing' ? cur.hash : '';
       const staged = await commitChange(changes, rel, content, { tool: 'write_file', baseHash });
       if (!staged.ok) return fail(staged.message, summary);
-      if (changes.mode === 'auto') return writtenResult(staged.file, rel, content, null, summary);
+      if (changes.mode === 'auto') return writtenResult(staged, rel, content, null, summary);
       if (!staged.file) return succeed(writeNoChangeText(changes.mode, rel), summary);
       if (staged.file.kind === 'create') return succeed(createResultText(rel, lineCount(content)), summary);
       const { excerpt, omitted } = diffExcerpt(staged.file);
@@ -416,7 +430,7 @@ export function createDeleteFileTool(opts: EditToolOptions = {}): Tool {
       const lines = cur.state === 'text' ? lineCount(cur.content) : null;
       const staged = await commitChange(changes, rel, null, { tool: 'delete_file', baseHash: cur.hash });
       if (!staged.ok) return fail(staged.message, summary);
-      if (changes.mode === 'auto') return writtenResult(staged.file, rel, null, lines, summary);
+      if (changes.mode === 'auto') return writtenResult(staged, rel, null, lines, summary);
       return succeed(deleteResultText(rel, lines), summary);
     },
   };

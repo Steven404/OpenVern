@@ -4,7 +4,7 @@
 import { randomUUID } from 'node:crypto';
 import { promises as fs, constants as fsConstants } from 'node:fs';
 import path from 'node:path';
-import { APPLY_PROJECT_CHANGED, PROPOSALS_OTHER_PROJECT } from '@shared/api';
+import { APPLY_PROJECT_CHANGED, CHAT_HAS_NO_PROJECT, PROPOSALS_OTHER_PROJECT } from '@shared/api';
 import { EDIT_MODES, LIMITS } from '@shared/constants';
 import type {
   AppliedBatch,
@@ -26,19 +26,24 @@ import {
   autoStaleText,
   autoUnreadText,
   autoWriteFailedText,
+  binaryTargetText,
   modeChangedNote,
+  newContentTooLargeText,
+  notUtf8Text,
   OTHER_PROJECT_PENDING_TEXT,
+  placeholderContentText,
   tooLargeToReviewText,
   tooManyProposedText,
   undoneNote,
+  writtenTooLargeText,
 } from '../agent/edit-mode';
 import { CoreError } from '../errors';
 import { consoleLogger, isNotFound, type StorageLogger, writeFileAtomic } from '../storage/json-file';
 import { withFileLock } from '../storage/mutex';
 import { type DataPaths, dataPaths } from '../storage/paths';
 import { resolveInProject, type SandboxOptions, sameFoldedRel } from '../tools/sandbox';
-import type { EditToolName, ToolChanges } from '../tools/types';
-import type { ChangesService } from '../types';
+import type { EditToolName } from '../tools/types';
+import type { ChangesService, TurnChanges } from '../types';
 import { type BlobStore, createBlobStore, sha256 } from './blobs';
 import { applyHunks, detectEol, diffFile, finishFileChange, sameLines } from './diff';
 import { buildNote, type ChangeEvent, type NoteFile } from './note';
@@ -118,6 +123,11 @@ const batchSchema = z.object({
   undo: batchUndoSchema.optional(),
   /** Auto, while undoable. Dropped (and its blobs collected) once undone or past retention. */
   undoData: z.array(undoEntrySchema).optional(),
+  /**
+   * Auto: set when the chat's project changed after this batch's last write (`changeProject`). No later write joins
+   * it; Undo is unaffected. Never sent.
+   */
+  closed: z.literal(true).optional(),
 });
 type StoredBatch = z.infer<typeof batchSchema>;
 const noteFileSchema = z.object({
@@ -223,6 +233,8 @@ export interface ChangesServiceDeps {
    * A throw counts as a failed write.
    */
   beforeWrite?: (info: { op: 'auto' | 'apply' | 'undo'; chatId: Id; path: string }) => Promise<void> | void;
+  /** Test hook: runs under the chat's store lock right before its store file is written. A throw fails that save. */
+  beforeStoreWrite?: (info: { chatId: Id }) => Promise<void> | void;
 }
 
 const byPath = <T extends { path: string }>(a: T, b: T): number => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
@@ -261,9 +273,9 @@ function pendingOf(store: Store): PendingChanges | null {
  */
 type ProjectCheck = Id | null | undefined;
 
-/** The API shape of a stored batch: `undoData` and `projectId` are never sent. */
+/** The API shape of a stored batch: `undoData`, `projectId` and `closed` are never sent. */
 function batchOf(b: StoredBatch, project: ProjectCheck): AppliedBatch {
-  const { source = 'review', turnId, projectId, undo, undoData, ...rest } = b;
+  const { source = 'review', turnId, projectId, undo, undoData, closed: _closed, ...rest } = b;
   const undoable =
     source === 'auto' &&
     undo === undefined &&
@@ -297,21 +309,17 @@ const textOf = (bytes: Buffer): string | null => (bytes.includes(0) ? null : dec
 
 /** Throws when `content` can't be written: too big, not plain UTF-8 text, or holding a redaction placeholder. */
 function validateContent(rel: string, content: string): void {
+  // A cheap early bound on the content as sent; the final bytes (CRLF kept) are checked again before any write.
   if (Buffer.byteLength(content) > LIMITS.writeFileMaxBytes) {
-    throw new CoreError('file_too_large', `The new content of ${rel} is over ${LIMITS.writeFileMaxBytes / 1024} KB.`);
+    throw new CoreError('file_too_large', newContentTooLargeText(rel));
   }
   if (
     content.includes('\0') ||
     /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/.test(content)
   ) {
-    throw new CoreError('unsupported_file', `${rel}: only UTF-8 text can be written.`);
+    throw new CoreError('unsupported_file', notUtf8Text(rel));
   }
-  if (PLACEHOLDER.test(content)) {
-    throw new CoreError(
-      'invalid_request',
-      `The content for ${rel} contains a «redacted:…» placeholder. Writing it back would destroy the real secret; use edit_file around it instead.`,
-    );
-  }
+  if (PLACEHOLDER.test(content)) throw new CoreError('invalid_request', placeholderContentText(rel));
 }
 
 /** Keeps a CRLF file CRLF when the model wrote plain LF. */
@@ -319,8 +327,6 @@ function keepCrlf(base: string | null, next: string | null): string | null {
   if (next !== null && base && detectEol(base) === '\r\n' && !next.includes('\r')) return next.replace(/\n/g, '\r\n');
   return next;
 }
-
-const binaryText = (rel: string) => `${rel} is a binary file; it can't be edited or overwritten.`;
 
 const unsafeStoreText =
   "This chat's change history can't be opened safely: a folder or file in the app's data folder is a symbolic link or not a regular file. Nothing was read or changed.";
@@ -517,20 +523,26 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
   const newId = deps.newId ?? randomUUID;
 
   /**
-   * What each chat has seen of each file: path → sha256 of the bytes `read_file` last returned from disk, or of what
-   * the chat itself last wrote. In memory only (empty after a restart, so the model reads again), recorded in both
-   * modes, enforced in Auto. Map order is insertion order, so the first key is the oldest.
+   * What each chat has seen of each file, per project: (project, path) → sha256 of the bytes `read_file` last returned
+   * from disk, or of what the chat itself last wrote. In memory only (empty after a restart, so the model reads
+   * again), recorded in both modes, enforced in Auto. Map order is insertion order, so the first key is the oldest.
+   * READS STAY IN THEIR PROJECT (invariant): a record is made and checked with the turn's pinned project, so a read in
+   * one project never lets a write through in another, even for identical bytes at the same path.
    */
   const seen = new Map<Id, Map<string, string>>();
 
-  function remember(chatId: Id, rel: string, hash: string): void {
+  /** NUL appears in neither a project id nor a project-relative path. */
+  const seenKey = (projectId: Id, rel: string): string => `${projectId}\u0000${rel}`;
+
+  function remember(chatId: Id, projectId: Id, rel: string, hash: string): void {
     let record = seen.get(chatId);
     if (!record) {
       record = new Map();
       seen.set(chatId, record);
     }
-    record.delete(rel);
-    record.set(rel, hash);
+    const key = seenKey(projectId, rel);
+    record.delete(key);
+    record.set(key, hash);
     while (record.size > MAX_SEEN_PATHS) {
       const oldest = record.keys().next().value;
       if (oldest === undefined) break;
@@ -538,9 +550,12 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
     }
   }
 
-  const forget = (chatId: Id, rel: string): void => {
-    seen.get(chatId)?.delete(rel);
+  const forget = (chatId: Id, projectId: Id, rel: string): void => {
+    seen.get(chatId)?.delete(seenKey(projectId, rel));
   };
+
+  const seenHash = (chatId: Id, projectId: Id, rel: string): string | undefined =>
+    seen.get(chatId)?.get(seenKey(projectId, rel));
 
   /** Warnings about the change storage itself go to the console when no logger is given, as other stored files do. */
   const storeLogger = deps.logger ?? consoleLogger;
@@ -608,30 +623,112 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
   const blobsFor = (chatId: Id): BlobStore => createBlobStore(paths.root, paths.changesBlobDir(chatId));
 
   /**
-   * Read-modify-write under the chat's store lock. `fn` must not call `load` or `mutate` (the lock isn't re-entrant).
+   * Change stores whose last save failed after this chat's project files had already changed. In memory only (lost on
+   * a crash or quit). While present it is the chat's store: every read starts from a clone of it, and the next
+   * successful save clears it.
+   */
+  const unsaved = new Map<Id, Store>();
+
+  /** The chat's store as this process knows it: the unsaved copy (cloned), else the file. Under the store lock only. */
+  async function current(chatId: Id, file: string): Promise<Store | null> {
+    const held = unsaved.get(chatId);
+    return held ? structuredClone(held) : failClosed(() => readStore(file));
+  }
+
+  /** Saves the store (test hook first); success clears the unsaved copy. Throws like `writeStore`. Under the store lock. */
+  async function save(chatId: Id, file: string, store: Store): Promise<void> {
+    await failClosed(async () => {
+      await deps.beforeStoreWrite?.({ chatId });
+      await writeStore(file, store);
+    });
+    unsaved.delete(chatId);
+  }
+
+  /**
+   * Read-modify-write under the chat's store lock, for operations that change no project file. `fn` must not call
+   * `load`, `mutate` or `mutateFiles` (the lock isn't re-entrant).
    * LOCK ORDER: this store lock is taken first; inside `fn`, at most one project-file write lock at a time
    * (`withWriteLock`), never another chat's store lock. `fn` may read the chat's project (`chatProjectId`, which takes
-   * only the chat file's own lock, briefly, and never while a write lock is held). A throw leaves the stored file
-   * unchanged.
+   * only the chat file's own lock, briefly, and never while a write lock is held). `fn` works on a copy: a throw, or a
+   * failed save, leaves the chat's store as it was. A successful save also persists an earlier unsaved store.
    */
   async function mutate<T>(chatId: Id, fn: (store: Store) => Promise<T> | T): Promise<T> {
     const file = storeFileOf(chatId);
     return withFileLock(file, async () => {
-      const store = (await failClosed(() => readStore(file))) ?? emptyStore();
+      const store = (await current(chatId, file)) ?? emptyStore();
       const result = await fn(store);
-      await failClosed(() => writeStore(file, store));
+      await save(chatId, file, store);
       return result;
+    });
+  }
+
+  /**
+   * Read-modify-write for operations that change project files. LOCK ORDER as `mutate`. `fn` calls `diskChanged()`
+   * right after each successful rename or unlink of a project file, and must not throw after that.
+   * WRITES ARE NEVER HIDDEN (invariant): once a project file changed, the operation resolves with what it did, even
+   * when the change history can't be saved. Then the store stays in `unsaved`, authoritative until a later save
+   * succeeds, a warning is logged, and the result says `saved: false`.
+   * 1. Flush first: an unsaved store is saved before anything else. If that fails the operation is refused (`refused`
+   *    builds the error; an unsafe store keeps its own) before any project file is touched, so a chat never has more
+   *    than one unrecorded mutation.
+   * 2. Then as `mutate`, except for the failed save after `diskChanged()` above.
+   * BLOBS OUTLIVE THE SAVED STORE (invariant): a stored original is deleted only once a store that no longer references
+   * it has been saved, here, right after that save. Until then the last saved store (what a restart reads) may still
+   * offer Undo from it. While a store is unsaved nothing is collected, so every blob that either the saved store or
+   * the unsaved one references stays. `fn` never collects, except to drop a blob that only its own failed write added.
+   */
+  async function mutateFiles<T>(
+    chatId: Id,
+    fn: (store: Store, diskChanged: () => void) => Promise<T>,
+    refused: () => CoreError = () => new CoreError('internal'),
+  ): Promise<{ value: T; saved: boolean }> {
+    const file = storeFileOf(chatId);
+    return withFileLock(file, async () => {
+      const held = unsaved.get(chatId);
+      if (held) {
+        await save(chatId, file, held).catch((err) => {
+          storeLogger.warn(`changes: could not save the change history: ${String(err)}`);
+          throw err instanceof CoreError ? err : refused();
+        });
+      }
+      const store = (await current(chatId, file)) ?? emptyStore();
+      let changed = false;
+      const value = await fn(store, () => {
+        changed = true;
+      });
+      let saved = true;
+      try {
+        await save(chatId, file, store);
+      } catch (err) {
+        if (!changed) throw err;
+        saved = false;
+        unsaved.set(chatId, store);
+        storeLogger.warn(`changes: a project file changed but the change history could not be saved: ${String(err)}`);
+      }
+      // Never throws (`collectBlobs` catches): the operation's result stands.
+      if (saved) await collectBlobs(chatId, store);
+      return { value, saved };
     });
   }
 
   async function load(chatId: Id): Promise<Store> {
     const file = storeFileOf(chatId);
-    return (await withFileLock(file, () => failClosed(() => readStore(file)))) ?? emptyStore();
+    return (await withFileLock(file, () => current(chatId, file))) ?? emptyStore();
   }
 
   async function chatProject(chatId: Id): Promise<ProjectCheck> {
     if (!deps.chatProjectId) return undefined;
     return deps.chatProjectId(chatId).catch(() => null);
+  }
+
+  /**
+   * The project a non-empty pending set was made for: its binding; for an unbound set (an older build's) the chat's
+   * current project, or `fallback` when that can't be read. Same rule as `stage` and `apply`.
+   */
+  async function pendingOrigin(store: Store, chatId: Id, fallback: Id): Promise<ProjectCheck> {
+    if (store.pendingProjectId !== undefined) return store.pendingProjectId;
+    const current = await chatProject(chatId);
+    return current === undefined ? fallback : current;
   }
 
   function clearPending(store: Store): void {
@@ -650,11 +747,39 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
     clearPending(store);
   }
 
-  /** Deletes the blobs no batch references any more. Under the store lock only. */
+  /**
+   * Deletes the blobs no batch of `store` references any more. Under the store lock only, and only with a store that
+   * is saved (see BLOBS OUTLIVE THE SAVED STORE in `mutateFiles`).
+   */
   const collectBlobs = (chatId: Id, store: Store): Promise<void> =>
     blobsFor(chatId)
       .collect(referencedBlobs(store))
       .catch((err) => deps.logger?.warn(`changes: could not clean up stored originals: ${String(err)}`));
+
+  /**
+   * MOVE RESETS AUTO STATE (invariant): once a chat's project has changed, nothing the chat saw or wrote in the old
+   * project carries over: every open Auto batch is closed (no later write joins it, the same turn's included) and the
+   * chat's read records are cleared, for every project. Under the store lock only, right after the commit. Never
+   * throws: the move itself has committed; a failed save keeps the store in memory (`unsaved`).
+   */
+  async function resetForMove(chatId: Id, file: string, store: Store | null): Promise<void> {
+    seen.delete(chatId);
+    if (!store) return; // no change history: still no store file
+    let closed = 0;
+    for (const b of store.applied) {
+      if (b.source === 'auto' && !b.closed && !b.undo && b.undoData !== undefined) {
+        b.closed = true;
+        closed += 1;
+      }
+    }
+    if (closed === 0) return;
+    try {
+      await save(chatId, file, store);
+    } catch (err) {
+      unsaved.set(chatId, store);
+      storeLogger.warn(`changes: could not save the closed batches after a move: ${String(err)}`);
+    }
+  }
 
   // -------------------------------------------------------------------------------------------- staging (Review)
 
@@ -678,13 +803,8 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
       // non-empty set (an older build's store) counts as made for the chat's current project, as `apply` treats it;
       // without a way to read that project, as made for the staging turn's. The chat's project is read under the store
       // lock, where a move can't change it (see `changeProject`).
-      if (store.files.length > 0) {
-        let origin: ProjectCheck = store.pendingProjectId;
-        if (origin === undefined) {
-          const current = await chatProject(chatId);
-          origin = current === undefined ? projectId : current;
-        }
-        if (origin !== projectId) throw new CoreError('conflict', OTHER_PROJECT_PENDING_TEXT);
+      if (store.files.length > 0 && (await pendingOrigin(store, chatId, projectId)) !== projectId) {
+        throw new CoreError('conflict', OTHER_PROJECT_PENDING_TEXT);
       }
       let rec = store.files.find((f) => f.path === rel);
       const isNew = rec === undefined;
@@ -696,7 +816,7 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
           if (!info.isFile()) throw badPath(`${rel} is not a regular file.`);
           const bytes = await fs.readFile(target.abs);
           const text = textOf(bytes);
-          if (text === null && content !== null) throw new CoreError('unsupported_file', binaryText(rel));
+          if (text === null && content !== null) throw new CoreError('unsupported_file', binaryTargetText(rel));
           base = {
             path: rel,
             baseHash: sha256(bytes),
@@ -711,10 +831,15 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
         }
         rec = base;
       } else if (rec.binary && content !== null) {
-        throw new CoreError('unsupported_file', binaryText(rel));
+        throw new CoreError('unsupported_file', binaryTargetText(rel));
       }
 
       const next = keepCrlf(rec.baseContent, content);
+      // The limit holds for the bytes the proposal would write, CRLF line endings included. The throw leaves the set
+      // unchanged.
+      if (next !== null && Buffer.byteLength(next) > LIMITS.writeFileMaxBytes) {
+        throw new CoreError('file_too_large', writtenTooLargeText('review', rel, Buffer.byteLength(next)));
+      }
 
       rec.content = next;
       rec.lastMessageId = messageId;
@@ -756,7 +881,7 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
     relPath: string,
     content: string | null,
     opts: { tool: EditToolName; baseHash: string },
-  ): Promise<{ file: FileChange | null; batchId: Id | null }> {
+  ): Promise<{ file: FileChange | null; batchId: Id | null; unsaved?: true }> {
     const { chatId, projectId, projectRoot } = turn;
     if (content !== null) validateContent(relPath, content);
     const target = await resolveTarget(projectRoot, relPath, deps.sandbox);
@@ -765,13 +890,16 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
     // This first resolution pins the write (see PINNED ROOT).
     const pin: Pin = { root: target.root, abs: target.abs };
 
-    return mutate(chatId, async (store) => {
+    const writeInStore = async (
+      store: Store,
+      diskChanged: () => void,
+    ): Promise<{ file: FileChange | null; batchId: Id | null }> => {
       // Writing over a pending proposal would make its review meaningless; the pending set stays untouched. Compared
       // case- and Unicode-folded: a spelling that might be the same file on this disk is refused too.
       if (store.files.some((f) => sameFoldedRel(f.path, rel))) throw new CoreError('conflict', autoPendingText(rel));
 
       const blobs = blobsFor(chatId);
-      // LOCK ORDER: the chat's store lock (held by `mutate`), then this one file's write lock. No other lock inside.
+      // LOCK ORDER: the chat's store lock (held by `mutateFiles`), then this one file's write lock. No other lock inside.
       return withWriteLock(target.abs, async () => {
         const disk = await readOnDisk(target.abs).catch((err) => {
           deps.logger?.warn(`auto write: could not read ${rel}: ${String(err)}`);
@@ -788,23 +916,37 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
         // Stale-read guard: never overwrite bytes this chat hasn't seen. `edit_file` may go without a read, since its
         // old_string must match the current text exactly; replacing or deleting a whole file needs one.
         if (current) {
-          const seenHash = seen.get(chatId)?.get(rel);
-          if (seenHash === undefined && opts.tool !== 'edit_file') {
+          const lastSeen = seenHash(chatId, projectId, rel);
+          if (lastSeen === undefined && opts.tool !== 'edit_file') {
             throw new CoreError('conflict', autoUnreadText(rel));
           }
-          if (seenHash !== undefined && seenHash !== currentHash) throw new CoreError('conflict', autoStaleText(rel));
-          if (current.text === null && content !== null) throw new CoreError('unsupported_file', binaryText(rel));
+          if (lastSeen !== undefined && lastSeen !== currentHash) throw new CoreError('conflict', autoStaleText(rel));
+          if (current.text === null && content !== null) throw new CoreError('unsupported_file', binaryTargetText(rel));
         } else if (content === null) {
           throw new CoreError('not_found', `${rel} does not exist.`);
         }
 
         const next = keepCrlf(current?.text ?? null, content);
         const nextBytes = next === null ? null : Buffer.from(next, 'utf8');
+        // The limit holds for the bytes that reach the disk, CRLF line endings included: checked before the blob, the
+        // folders or the mutation.
+        if (nextBytes !== null && nextBytes.length > LIMITS.writeFileMaxBytes) {
+          throw new CoreError('file_too_large', writtenTooLargeText('auto', rel, nextBytes.length));
+        }
         if (current && nextBytes?.equals(current.bytes)) return { file: null, batchId: null };
 
-        // The turn's open batch, or a new one. Nothing is stored until the write has succeeded.
+        // The turn's open batch, or a new one. Nothing is stored until the write has succeeded. A BATCH NEVER SPANS
+        // PROJECTS (invariant): only a batch of this turn written into this same project and not closed by a move
+        // (see `changeProject`) is joined, so Undo of one batch can never touch a file the turn wrote in another
+        // project.
         const open = store.applied.find(
-          (b) => b.source === 'auto' && b.turnId === turn.turnId && !b.undo && b.undoData !== undefined,
+          (b) =>
+            b.source === 'auto' &&
+            b.turnId === turn.turnId &&
+            b.projectId === projectId &&
+            !b.closed &&
+            !b.undo &&
+            b.undoData !== undefined,
         );
         const batch: StoredBatch = open ?? {
           id: newId(),
@@ -851,15 +993,20 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
             logger: deps.logger,
           });
           if (refused) throw refused;
+          // The project file has changed: from here on nothing may throw (WRITES ARE NEVER HIDDEN).
+          diskChanged();
         } catch (err) {
-          // The store is unchanged; drop a blob that only this failed write referenced.
+          // Drop a blob that only this failed write referenced. `store` is still exactly the saved store (an unsaved
+          // one was flushed first and nothing has been recorded yet), so no blob it references can go.
           await collectBlobs(chatId, store);
           if (err instanceof CoreError) throw err;
           deps.logger?.warn(`auto write: could not write ${rel}: ${String(err)}`);
           throw new CoreError('internal', autoWriteFailedText(rel));
         }
 
-        // Record: the file's diff from before the turn to now, and what Undo will compare against.
+        // Record: the file's diff from before the turn to now, and what Undo will compare against. None of this throws:
+        // `blobs.get` returns null on failure and `diffFile` is pure. The originals retention dropped are collected by
+        // `mutateFiles`, once this store is saved.
         const afterHash = nextBytes === null ? null : sha256(nextBytes);
         entry.afterHash = afterHash;
         // A binary original diffs as empty, as in a review proposal.
@@ -889,14 +1036,21 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
         if (batch.written.length === 0) store.applied = store.applied.filter((b) => b !== batch);
         store.applied = store.applied.slice(-MAX_APPLIED);
         store.diskSeq = (store.diskSeq ?? 0) + 1;
-        if (afterHash === null) forget(chatId, rel);
-        else remember(chatId, rel, afterHash);
-        await collectBlobs(chatId, store);
+        if (afterHash === null) forget(chatId, projectId, rel);
+        else remember(chatId, projectId, rel, afterHash);
 
         const base = current ? (current.text ?? '') : null;
         return { file: diffFile(rel, base, next), batchId: batch.id };
       });
-    });
+    };
+
+    const { value, saved } = await mutateFiles(
+      chatId,
+      writeInStore,
+      // A history that still can't be saved refuses the write before the project file is touched.
+      () => new CoreError('internal', autoWriteFailedText(rel)),
+    );
+    return saved ? value : { ...value, unsaved: true };
   }
 
   // -------------------------------------------------------------------------------------------- undo (Auto)
@@ -916,7 +1070,7 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
     // The project root is pinned for the whole undo, the file's path from this first resolution (see PINNED ROOT).
     if (!target.ok || target.rel !== e.path || target.root !== project.real) return 'blocked';
     const pin: Pin = { root: target.root, abs: target.abs };
-    // LOCK ORDER: the chat's store lock (held by the caller's `mutate`), then this one file's write lock.
+    // LOCK ORDER: the chat's store lock (held by the caller's `mutateFiles`), then this one file's write lock.
     return withWriteLock(target.abs, async () => {
       // Never touch a file that changed after the turn: Undo must not destroy later work.
       const untouched = (disk: OnDisk): boolean =>
@@ -951,8 +1105,9 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
   }
 
   /**
-   * Undoes one batch in place (it must still have its undo data). Under the chat's store lock only. `project.real` is
-   * the project's real root, pinned once by the caller for the whole undo (see PINNED ROOT).
+   * Undoes one batch in place (it must still have its undo data). Under the chat's store lock only (`mutateFiles`,
+   * whose `diskChanged` is called for each restored file; nothing here throws). `project.real` is the project's real
+   * root, pinned once by the caller for the whole undo (see PINNED ROOT).
    */
   async function undoInStore(
     chatId: Id,
@@ -960,6 +1115,7 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
     store: Store,
     batch: StoredBatch,
     by: BatchUndo['by'],
+    diskChanged: () => void,
   ): Promise<BatchUndo> {
     const blobs = blobsFor(chatId);
     const restored: string[] = [];
@@ -967,16 +1123,19 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
     for (const e of [...(batch.undoData ?? [])].sort(byPath)) {
       const reason = await undoFile(chatId, project, e, blobs);
       if (reason) skipped.push({ path: e.path, reason });
-      else restored.push(e.path);
+      else {
+        diskChanged();
+        restored.push(e.path);
+      }
     }
     const undo: BatchUndo = { at: now().toISOString(), by, restored, skipped };
     batch.undo = undo;
     delete batch.undoData;
     if (restored.length > 0) store.diskSeq = (store.diskSeq ?? 0) + 1;
-    for (const p of restored) forget(chatId, p);
+    for (const p of restored) forget(chatId, batch.projectId ?? '', p);
     // A user's undo goes into the next note; a retry's doesn't (the retried message's note says it instead).
     if (by === 'user') store.undone = [...(store.undone ?? []), { restored, skipped }];
-    await collectBlobs(chatId, store);
+    // The batch's originals are collected by `mutateFiles`, once this store is saved.
     return undo;
   }
 
@@ -1013,14 +1172,14 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
     revision: number;
     decisions: Record<string, Record<string, HunkDecision>>;
   }): Promise<{ batch: AppliedBatch; changes: ChatChanges }> {
-    return mutate(input.chatId, async (store) => {
+    const { value } = await mutateFiles(input.chatId, async (store, diskChanged) => {
       // PROPOSALS STAY IN THEIR PROJECT (invariant): checked under the store lock, before anything is written, and the
       // lock is held through the writes. The chat's current project is read here, not taken from the caller: a move or
       // a detach commits under this same lock (`changeProject`), so the project can't change between this check and
       // the last write. The project `projectRoot` belongs to (what the caller read earlier), the project the proposals
       // were made for (unbound = the chat's current one) and the project the client showed (when sent) must all be
       // the chat's current project. Otherwise nothing is written and the set stays pending, so the user can discard it.
-      // LOCK ORDER: the chat's store lock (held by `mutate`), then the chat's file lock for this read (`chatProjectId`,
+      // LOCK ORDER: the chat's store lock (held by `mutateFiles`), then the chat's file lock for this read (`chatProjectId`,
       // released at once), then the per-file write locks below.
       const read = await chatProject(input.chatId);
       const project = read === undefined ? input.projectId : read;
@@ -1068,20 +1227,26 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
           continue;
         }
 
-        const target = await resolveTarget(input.projectRoot, rec.path, deps.sandbox);
-        if (!target.ok || target.rel !== rec.path || target.root !== realRoot) {
+        // NOTHING THROWS PAST A WRITE (see `mutateFiles`): an earlier file may already be on disk, so every failure from
+        // here to the end of this file (resolving, the conflict check, building the text, the write) refuses this file
+        // as `blocked`, and the apply goes on and is recorded.
+        const target = await resolveTarget(input.projectRoot, rec.path, deps.sandbox).catch((err) => {
+          deps.logger?.warn(`apply: could not resolve ${rec.path}: ${String(err)}`);
+          return null;
+        });
+        if (!target?.ok || target.rel !== rec.path || target.root !== realRoot) {
           conflicts.push({ path: rec.path, reason: 'blocked' });
           continue;
         }
         const pin: Pin = { root: target.root, abs: target.abs };
-        // LOCK ORDER: the chat's store lock (held by `mutate`), then this one file's write lock, released before the
+        // LOCK ORDER: the chat's store lock (held by `mutateFiles`), then this one file's write lock, released before the
         // next file. The hash check and the write happen under it, so an auto write in another chat can't slip in.
         const outcome = await withWriteLock(target.abs, async (): Promise<ApplyConflictReason | null> => {
-          const check = await checkConflict(input.projectRoot, rec, change.kind, pin);
-          if ('reason' in check) return check.reason;
-          rejectedHunks += rejected;
-          skippedHunks += undecided;
           try {
+            const check = await checkConflict(input.projectRoot, rec, change.kind, pin);
+            if ('reason' in check) return check.reason;
+            rejectedHunks += rejected;
+            skippedHunks += undecided;
             const text = change.kind === 'delete' ? null : applyHunks(rec.baseContent, rec.content, accepted);
             if (text !== null) await fs.mkdir(path.dirname(check.abs), { recursive: true });
             await deps.beforeWrite?.({ op: 'apply', chatId: input.chatId, path: rec.path });
@@ -1100,11 +1265,15 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
             deps.logger?.warn(`apply: could not write ${rec.path}: ${String(err)}`);
             return 'blocked';
           }
+        }).catch((err): ApplyConflictReason => {
+          deps.logger?.warn(`apply: could not lock ${rec.path}: ${String(err)}`);
+          return 'blocked';
         });
         if (outcome !== null) {
           conflicts.push({ path: rec.path, reason: outcome });
           continue;
         }
+        diskChanged();
         written.push(
           accepted.length === change.hunks.length ? change : finishFileChange(change.path, change.kind, accepted),
         );
@@ -1128,14 +1297,14 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
         ...(tooLarge.length > 0 ? { tooLarge } : {}),
       });
       if (written.length > 0 || conflicts.length > 0) {
+        // Auto batches may drop off the list; `mutateFiles` collects their originals once this store is saved.
         store.applied = [...store.applied, batch].slice(-MAX_APPLIED);
-        // Auto batches may have dropped off the list: their originals are no longer needed.
-        await collectBlobs(input.chatId, store);
       }
       if (written.length > 0) store.diskSeq = (store.diskSeq ?? 0) + 1;
       clearPending(store);
       return { batch: batchOf(batch, read), changes: chatChangesOf(store, read) };
     });
+    return value;
   }
 
   // -------------------------------------------------------------------------------------------- service
@@ -1146,7 +1315,17 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
       return chatChangesOf(await load(chatId), project);
     },
 
-    tools({ chatId, projectId, projectRoot, messageId, turnId, mode }): ToolChanges {
+    tools({ chatId, projectId, projectRoot, messageId, turnId, mode }): TurnChanges {
+      /**
+       * OVERLAYS STAY IN THEIR PROJECT (invariant): proposals are read through only by a turn pinned to their project,
+       * so a turn in another project sees that project's disk, never proposals made elsewhere.
+       * LOCK ORDER: the store lock (`load`, released), then, for an unbound set only, the chat file's lock.
+       */
+      async function ownPending(): Promise<StoredFile[]> {
+        const store = await load(chatId);
+        if (store.files.length === 0) return [];
+        return (await pendingOrigin(store, chatId, projectId)) === projectId ? store.files : [];
+      }
       return {
         mode,
         async read(relPath) {
@@ -1154,12 +1333,12 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
           // Not resolvable: let the read tool report the problem against the disk.
           const key = target.ok ? target.rel : null;
           if (key === null) return null;
-          const rec = (await load(chatId)).files.find((f) => f.path === key);
+          const rec = (await ownPending()).find((f) => f.path === key);
           if (!rec) return null;
           return rec.content === null ? { kind: 'deleted' } : { kind: 'staged', content: rec.content };
         },
         async staged() {
-          return (await load(chatId)).files.sort(byPath).map((f) => ({ path: f.path, kind: kindOf(f) }));
+          return [...(await ownPending())].sort(byPath).map((f) => ({ path: f.path, kind: kindOf(f) }));
         },
         async stage(relPath, content) {
           if (mode !== 'review') throw new Error('stage() is for Review turns; this turn is in Auto.');
@@ -1169,8 +1348,13 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
           if (mode !== 'auto') throw new Error('write() is for Auto turns; this turn is in Review.');
           return autoWrite({ chatId, projectId, projectRoot, messageId, turnId }, relPath, content, opts);
         },
+        // Recorded under this turn's pinned project, also when the loop commits a read late, after a move.
         noteRead(relPath, bytes) {
-          remember(chatId, relPath, sha256(bytes));
+          remember(chatId, projectId, relPath, sha256(bytes));
+        },
+        // The same record from the digest of the bytes, taken by the loop when the tool read them.
+        noteReadHash(relPath, hash) {
+          remember(chatId, projectId, relPath, hash);
         },
       };
     },
@@ -1238,67 +1422,114 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
     // pending check, so it can't land between a stage and the move's check, or between Apply's project check and its
     // writes (both run under this lock). Reads the store without writing it, so a chat with no change history gets no
     // store file; `discard` writes it at once, before `commit`.
-    // LOCK ORDER: this store lock first, then whatever `commit` takes (the chat storage lock, then the chat's file
-    // lock). `commit` must not call this service: the store lock isn't re-entrant.
+    // MOVE RESETS AUTO STATE (invariant): once the chat's project has changed (read before and after `commit`, also
+    // when `commit` threw after writing), its per-project Auto state is reset still under this lock (`resetForMove`).
+    // A no-op or refused move resets nothing; without `chatProjectId`, any successful commit resets.
+    // LOCK ORDER: this store lock first, then the chat's file lock for the `before` read (released), then whatever
+    // `commit` takes (the chat storage lock, then the chat's file lock), then the chat's file lock for the `after`
+    // read. `commit` must not call this service: the store lock isn't re-entrant.
     changeProject: async (chatId, commit) => {
       const file = storeFileOf(chatId);
       return withFileLock(file, async () => {
-        const store = await failClosed(() => readStore(file));
+        const store = await current(chatId, file);
+        const before = await chatProject(chatId);
         const pending = store !== null && store.files.length > 0;
         let discarded = false;
         const discard = async (): Promise<void> => {
           if (!store || !pending || discarded) return;
           discardPending(store);
-          await failClosed(() => writeStore(file, store));
+          await save(chatId, file, store);
           discarded = true;
         };
-        return commit({ pending, discard });
+        let committed = false;
+        try {
+          const result = await commit({ pending, discard });
+          committed = true;
+          return result;
+        } finally {
+          const after = before === undefined ? undefined : await chatProject(chatId);
+          const moved = before === undefined ? committed : after !== before;
+          if (moved) await resetForMove(chatId, file, store);
+        }
       });
     },
 
-    undoBatch: ({ chatId, projectId, projectRoot, batchId }) =>
-      mutate(chatId, async (store) => {
+    undoBatch: async ({ chatId, projectId, projectRoot, batchId }) => {
+      const { value } = await mutateFiles(chatId, async (store, diskChanged) => {
         const batch = store.applied.find((b) => b.id === batchId);
         // Throwing before any change also keeps an unknown chat from getting an empty store file.
         if (!batch) throw new CoreError('not_found', 'These edits were not found.');
-        if (batch.source !== 'auto' || batch.undo || !batch.undoData || batch.projectId !== projectId) {
+        // The chat's current project is read here, under the store lock, not taken from the caller: a move or a detach
+        // commits under this same lock (`changeProject`), so it can't land between this check and the last restore.
+        // LOCK ORDER: the store lock (held by `mutateFiles`), then the chat's file lock for this read (released at
+        // once), then one file's write lock at a time.
+        const read = await chatProject(chatId);
+        const current = read === undefined ? projectId : read;
+        if (current === null) throw new CoreError('conflict', CHAT_HAS_NO_PROJECT);
+        if (current !== projectId) throw notUndoable();
+        if (batch.source !== 'auto' || batch.undo || !batch.undoData || batch.projectId !== current) {
           throw notUndoable();
         }
-        await undoInStore(chatId, { root: projectRoot, real: await pinRoot(projectRoot) }, store, batch, 'user');
-        return { batch: batchOf(batch, projectId), changes: chatChangesOf(store, projectId) };
-      }),
+        const project = { root: projectRoot, real: await pinRoot(projectRoot) };
+        await undoInStore(chatId, project, store, batch, 'user', diskChanged);
+        return { batch: batchOf(batch, current), changes: chatChangesOf(store, current) };
+      });
+      return value;
+    },
 
-    prepareRetry: ({ chatId, projectId, projectRoot, turnId, mode }) =>
-      mutate(chatId, async (store) => {
+    retryInfo: async ({ chatId, turnId, projectId }) => {
+      const store = await load(chatId);
+      const elsewhere = new Set<Id>();
+      for (const b of store.applied) {
+        if (b.source !== 'auto' || b.turnId !== turnId || b.undo || b.undoData === undefined) continue;
+        if ((b.projectId ?? '') !== (projectId ?? '')) elsewhere.add(b.projectId ?? '');
+      }
+      return { writtenElsewhere: [...elsewhere], lastMode: store.lastMode ?? 'review' };
+    },
+
+    prepareRetry: async ({ chatId, projectId, projectRoot, turnId, mode }) => {
+      const { value } = await mutateFiles(chatId, async (store, diskChanged) => {
         store.lastMode = mode;
-        // Batches past retention or written into another project can't be undone; they are left as they are.
-        const batches = store.applied.filter(
-          (b) =>
-            b.source === 'auto' &&
-            b.turnId === turnId &&
-            !b.undo &&
-            b.undoData !== undefined &&
-            b.projectId === projectId,
-        );
-        let result: { batchId: Id; undo: BatchUndo } | null = null;
+        // Batches past retention or written into another project can't be undone; they are left as they are. A batch
+        // closed by a move is undone like any other of the turn in this project.
+        // NEWEST FIRST (invariant): a move splits a turn's writes into several batches, and two of them can hold the
+        // same file (the pinned turn wrote it again after the move). Each batch's entry expects the bytes its own write
+        // left, which only holds once every later write of that file has been undone, so the batches are undone in the
+        // reverse of the order they were opened in (`applied` is in that order). Oldest first would skip the first
+        // write as `changed_since` and then restore its bytes from the second one's original.
+        const batches = store.applied
+          .filter(
+            (b) =>
+              b.source === 'auto' &&
+              b.turnId === turnId &&
+              !b.undo &&
+              b.undoData !== undefined &&
+              b.projectId === projectId,
+          )
+          .reverse();
         const project = { root: projectRoot, real: batches.length > 0 ? await pinRoot(projectRoot) : null };
-        for (const batch of batches) {
-          const undo = await undoInStore(chatId, project, store, batch, 'retry');
+        const undos: BatchUndo[] = [];
+        for (const batch of batches) undos.push(await undoInStore(chatId, project, store, batch, 'retry', diskChanged));
+        const last = undos.at(-1);
+        const oldest = batches.at(-1);
+        let result: { batchId: Id; undo: BatchUndo } | null = null;
+        if (last && oldest) {
+          // One report per path: a file any batch had to skip is reported as skipped (the reason of the newest batch
+          // that skipped it), so the model reads it again; the others are restored.
+          const skipped = new Map<string, BatchUndo['skipped'][number]>();
+          for (const u of undos) for (const s of u.skipped) if (!skipped.has(s.path)) skipped.set(s.path, s);
+          const restored = new Set(undos.flatMap((u) => u.restored).filter((p) => !skipped.has(p)));
           result = {
-            batchId: batch.id,
-            undo: result
-              ? {
-                  ...undo,
-                  restored: [...result.undo.restored, ...undo.restored].sort(),
-                  skipped: [...result.undo.skipped, ...undo.skipped].sort(byPath),
-                }
-              : undo,
+            batchId: oldest.id,
+            undo: { ...last, restored: [...restored].sort(), skipped: [...skipped.values()].sort(byPath) },
           };
         }
-        // The retry starts over: the model must read again before overwriting anything.
+        // The retry starts over: the model must read again before overwriting anything, in every project.
         seen.delete(chatId);
         return result;
-      }),
+      });
+      return value;
+    },
 
     removeForChat: async (chatId) => {
       const file = storeFileOf(chatId);
@@ -1306,6 +1537,7 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
       // Under the store lock (keyed by the store file's path), so no write of this chat can add a blob while its
       // folder goes.
       await withFileLock(file, async () => {
+        unsaved.delete(chatId);
         // A `changes/` folder that isn't a real folder (a link planted in the data dir) is left alone, like an unsafe
         // blob folder below: the chat itself is still removed, and nothing outside storage is deleted.
         const dir = await checkStoreDir({ create: false }).catch((err) => {

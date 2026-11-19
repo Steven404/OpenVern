@@ -114,9 +114,10 @@ describe('Auto card', () => {
     const undo = vi.spyOn(client, 'undoChatBatch');
     fireEvent.click(within(await autoCard()).getByTestId('undo-button'));
     const dialog = await screen.findByTestId('undo-dialog');
-    expect(within(dialog).getByText("Undo this turn's edits?")).toBeTruthy();
+    expect(within(dialog).getByText('Undo these edits?')).toBeTruthy();
     for (const f of batch.written) expect(within(dialog).getByText(f.path)).toBeTruthy();
-    expect(dialog.textContent).toContain('A file that changed after the turn is left as it is.');
+    expect(dialog.textContent).toContain('OpenVern puts these 2 files back as they were before these edits:');
+    expect(dialog.textContent).toContain('A file that changed after these edits is left as it is.');
     fireEvent.click(within(dialog).getByTestId('undo-cancel'));
     await waitFor(() => expect(screen.queryByTestId('undo-dialog')).toBeNull());
     expect(undo).not.toHaveBeenCalled();
@@ -349,7 +350,7 @@ describe('Diff panel: Auto', () => {
     const p = await waitFor(() => panel());
     expect(
       await within(p).findByText(
-        'Nothing is waiting for review. In Auto, edits are written as the model works; undo a turn below.',
+        'Nothing is waiting for review. In Auto, edits are written as the model works; undo edits in History.',
       ),
     ).toBeTruthy();
     expect(within(p).queryByText('No edits are waiting for review.')).toBeNull();

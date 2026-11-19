@@ -222,13 +222,27 @@ export interface Core {
 
 // ── v0.2 (plan §4.7) ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * A step's `ToolChanges`, as the agent loop holds it. `noteReadHash` records a read the loop held back, from the digest
+ * it took when the tool read the file: a read waits for the end of its step before it counts as seen, and the loop
+ * keeps only the path and digest meanwhile, never the bytes, so a step of large reads holds no file in memory.
+ */
+export interface TurnChanges extends ToolChanges {
+  /**
+   * Same record as `noteRead(relPath, bytes)`, from `sha256` (lowercase hex, as `sha256` in `changes/blobs.ts`
+   * computes) of those bytes.
+   */
+  noteReadHash(relPath: string, sha256: string): void;
+}
+
 export interface ChangesService {
   get(chatId: Id): Promise<ChatChanges>;
   /**
    * One per assistant step: stages and writes are attributed to `messageId`. `turnId` = the user message that started
    * the turn; `mode` = the turn's edit mode (picks `stage` or `write`); `projectId` = the project the turn is pinned
    * to. A stage binds an empty pending set to `projectId` and is refused (`conflict`) while the set holds another
-   * project's proposals.
+   * project's proposals. `read` / `staged` show the pending set only when it was made for `projectId`; `noteRead`
+   * records under `projectId`, and a write joins only an open batch of the same turn and project.
    */
   tools(input: {
     chatId: Id;
@@ -237,7 +251,7 @@ export interface ChangesService {
     messageId: Id;
     turnId: Id;
     mode: EditMode;
-  }): ToolChanges;
+  }): TurnChanges;
   /**
    * At a new user message: remember the pending set, and the project it was made for, so a retry of this turn can
    * restore both. An unbound set is recorded as made for the chat's current project.
@@ -275,7 +289,9 @@ export interface ChangesService {
    * Runs `commit`, a change of the chat's project (a move, or a detach when its project is removed), under the chat's
    * store lock, so it can't land between a stage and the pending check, or between Apply's project check and its
    * writes. `pending` = proposals were pending when the lock was taken; `discard()` drops them (recorded for the next
-   * note, like `discard`) and saves that at once. LOCK ORDER: the store lock first, then whatever `commit` takes (the
+   * note, like `discard`) and saves that at once. When the chat's project changed (read before and after `commit`),
+   * still under the lock, the chat's per-project Auto state is reset: open Auto batches are closed (no later write
+   * joins them) and its read records are cleared. LOCK ORDER: the store lock first, then whatever `commit` takes (the
    * chat storage lock). `commit` must not call this service.
    */
   changeProject<T>(
@@ -284,13 +300,24 @@ export interface ChangesService {
   ): Promise<T>;
   /**
    * The Undo button: restores the batch's files that are still exactly as the turn left them and reports the rest.
-   * Throws `not_found` (unknown batch) or `conflict` (a review batch, already undone, past retention, or written into
-   * another project).
+   * Under the store lock, the chat's current project is read again and must be `projectId`. Throws `not_found`
+   * (unknown batch) or `conflict` (`CHAT_HAS_NO_PROJECT` when the chat has no project; otherwise the chat moved, a
+   * review batch, already undone, past retention, or written into another project).
    */
   undoBatch(input: { chatId: Id; projectId: Id; projectRoot: string; batchId: Id }): Promise<UndoBatchResponse>;
   /**
-   * Before a retry: undo every auto batch of `turnId` that isn't undone yet, forget what the chat has seen, and record
-   * `mode` as the last noted mode. Adds nothing to the next note. Null when there was nothing to undo.
+   * Before a retry, read-only (no store file is created). `writtenElsewhere`: the projects other than `projectId`
+   * (`null` = a loose retry) where the turn's Auto writes are still undoable (not undone, undo data kept).
+   * `lastMode`: the last noted mode (a store without one counts as 'review'), what the model was last told.
+   */
+  retryInfo(input: { chatId: Id; turnId: Id; projectId: Id | null }): Promise<{
+    writtenElsewhere: Id[];
+    lastMode: EditMode;
+  }>;
+  /**
+   * Before a retry: undo every auto batch of `turnId` written into `projectId` that isn't undone yet, forget what the
+   * chat has seen, and record `mode` as the last noted mode. Adds nothing to the next note. Null when there was
+   * nothing to undo.
    */
   prepareRetry(input: {
     chatId: Id;

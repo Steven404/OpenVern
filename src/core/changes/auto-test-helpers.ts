@@ -20,6 +20,8 @@ export interface AutoSetupOptions {
   /** Put the data dir inside the project (and deny it to the sandbox), as the app can be configured to. */
   dataDirInsideProject?: boolean;
   chatProjectId?: (chatId: Id) => Promise<Id | null>;
+  /** Also create a second project folder (`rootB`), for tests that move a chat between projects. */
+  secondProject?: boolean;
 }
 
 /** A gate: `entered` resolves once someone called `hold()`, and `hold()` waits until `open()`. */
@@ -120,7 +122,10 @@ export async function setupAuto(opts: AutoSetupOptions = {}) {
   await fs.mkdir(outside);
   const realOutside = await fs.realpath(outside);
 
-  const hooks: { beforeWrite?: (info: WriteHookInfo) => Promise<void> | void } = {};
+  const hooks: {
+    beforeWrite?: (info: WriteHookInfo) => Promise<void> | void;
+    beforeStoreWrite?: (info: { chatId: Id }) => Promise<void> | void;
+  } = {};
   const sandbox: SandboxOptions | undefined = opts.dataDirInsideProject
     ? { deniedRoots: [await fs.realpath(dataDir)] }
     : undefined;
@@ -129,7 +134,13 @@ export async function setupAuto(opts: AutoSetupOptions = {}) {
     sandbox,
     chatProjectId: opts.chatProjectId,
     beforeWrite: (info) => hooks.beforeWrite?.(info),
+    beforeStoreWrite: (info) => hooks.beforeStoreWrite?.(info),
   });
+  let rootB: string | undefined;
+  if (opts.secondProject) {
+    await fs.mkdir(path.join(base, 'project-b'));
+    rootB = await fs.realpath(path.join(base, 'project-b'));
+  }
 
   const abs = (rel: string) => path.join(realRoot, rel);
   const seed = async (rel: string, data: string | Buffer, mode?: number) => {
@@ -204,6 +215,7 @@ export async function setupAuto(opts: AutoSetupOptions = {}) {
     svc,
     hooks,
     root: realRoot,
+    rootB,
     dataDir,
     outside: realOutside,
     abs,
