@@ -5,9 +5,11 @@ import { CHAT_PROJECT_CHANGED, RETRY_OTHER_PROJECT } from '@shared/api';
 import type { AgentEvent } from '@shared/events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { type AutoSetup, setupAuto } from '../changes/auto-test-helpers';
+import { sha256 } from '../changes/blobs';
 import type { FakeScript, FakeStep } from '../providers/fake';
 import { getProjectTools } from '../tools';
-import type { ToolChanges } from '../tools/types';
+import type { GetProjectTools } from '../tools/types';
+import type { TurnChanges } from '../types';
 import {
   autoStaleText,
   autoUnreadText,
@@ -19,24 +21,31 @@ import {
   retryUndoNotice,
 } from './edit-mode';
 import { INTERRUPTED_OUTPUT } from './history';
+import { TOOL_CALL_IDS_ERROR } from './loop';
 import { createHarness, type Harness, PROJECT } from './test-helpers';
 
 const reply: FakeStep[] = [
   { type: 'text_delta', delta: 'Done' },
   { type: 'finish', reason: 'stop' },
 ];
-const calls = (...items: [string, object][]): FakeStep[] => [
-  ...items.map(
-    ([name, args], i): FakeStep => ({
-      type: 'tool_call',
-      call: { id: `call-${i}`, name, argsJson: JSON.stringify(args) },
-    }),
-  ),
-  { type: 'finish', reason: 'tool_calls' },
-];
+/** Model responses scripted so far in this test: a call ID is never reused in a chat, as the loop requires. */
+let responses = 0;
+const calls = (...items: [string, object][]): FakeStep[] => {
+  const n = responses++;
+  return [
+    ...items.map(
+      ([name, args], i): FakeStep => ({
+        type: 'tool_call',
+        call: { id: `call-${n}-${i}`, name, argsJson: JSON.stringify(args) },
+      }),
+    ),
+    { type: 'finish', reason: 'tool_calls' },
+  ];
+};
 let s: AutoSetup;
 let h: Harness;
 beforeEach(async () => {
+  responses = 0;
   s = await setupAuto({ secondProject: true });
   await s.seed('a.txt', 'original\n');
 });
@@ -44,8 +53,8 @@ afterEach(async () => {
   vi.restoreAllMocks();
   await rm(path.dirname(s.root), { recursive: true, force: true });
 });
-async function setup(script: FakeScript, auto = true) {
-  h = await createHarness({ script, changes: s.svc, projectRoot: s.root, getProjectTools });
+async function setup(script: FakeScript, auto = true, tools: GetProjectTools = getProjectTools) {
+  h = await createHarness({ script, changes: s.svc, projectRoot: s.root, getProjectTools: tools });
   // Avoid unrelated title requests when counting model calls.
   await h.chats.update(h.chatId, { title: 'Test', editMode: auto ? 'auto' : 'review' });
   return h;
@@ -326,7 +335,7 @@ describe('Auto agent loop with real files', () => {
     const original = s.svc.tools.bind(s.svc);
     vi.spyOn(s.svc, 'tools').mockImplementation((input) => {
       const inner = original(input);
-      const wrapped: ToolChanges = {
+      const wrapped: TurnChanges = {
         ...inner,
         // Stop lands after the tool has checked the signal and while the change service is writing.
         write: async (...args) => {
@@ -511,19 +520,156 @@ describe('Auto agent loop with real files', () => {
       const append = h.chats.appendMessage.bind(h.chats);
       let failing = true;
       vi.spyOn(h.chats, 'appendMessage').mockImplementation(async (chatId, message) => {
-        if (failing && message.role === 'tool' && message.toolCallId === 'call-1') {
+        if (failing && message.role === 'tool' && message.toolCallId === 'call-0-1') {
           throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
         }
         return append(chatId, message);
       });
       const first = await h.run();
       expect(first.some((e) => e.type === 'error')).toBe(true);
-      expect(h.messages().filter((m) => m.role === 'tool')).toMatchObject([{ toolCallId: 'call-0', ok: true }]);
+      expect(h.messages().filter((m) => m.role === 'tool')).toMatchObject([{ toolCallId: 'call-0-0', ok: true }]);
 
       failing = false;
       const next = await h.run({ newUserMessage: { text: 'go on', attachmentIds: [] } });
       expect(results(next)).toMatchObject([{ ok: true }, { ok: false, output: autoUnreadText('b.txt') }]);
       expect(await s.read('a.txt')).toBe('overwrite\n');
+      expect(await s.read('b.txt')).toBe('bee\n');
+    });
+
+    it('a read held for the end of its step keeps the digest of what it read, never the bytes', async () => {
+      // The tool's buffer is wiped once the read is noted: a read held by reference would be recorded as all zeros at
+      // the end of the step, and the write a step later refused as stale.
+      const wipeAfterNote: GetProjectTools = (o) =>
+        getProjectTools(o).map((tool) =>
+          tool.spec.name !== 'read_file'
+            ? tool
+            : {
+                ...tool,
+                run: (args, ctx) => {
+                  const changes = ctx.changes;
+                  if (!changes) return tool.run(args, ctx);
+                  const noteRead = (p: string, bytes: Uint8Array) => {
+                    changes.noteRead(p, bytes);
+                    bytes.fill(0);
+                  };
+                  return tool.run(args, { ...ctx, changes: { ...changes, noteRead } });
+                },
+              },
+        );
+      const original = s.svc.tools.bind(s.svc);
+      const recorded: [string, string][] = [];
+      vi.spyOn(s.svc, 'tools').mockImplementation((input) => {
+        const inner = original(input);
+        const wrapped: TurnChanges = {
+          ...inner,
+          noteRead: () => {
+            throw new Error('the loop hands the change service a digest, not the bytes');
+          },
+          noteReadHash: (p, hash) => {
+            recorded.push([p, hash]);
+            inner.noteReadHash(p, hash);
+          },
+        };
+        return wrapped;
+      });
+      await setup(
+        (_, i) =>
+          i === 0
+            ? calls(['read_file', { path: 'a.txt' }])
+            : i === 1
+              ? calls(['write_file', { path: 'a.txt', content: 'overwrite\n' }])
+              : reply,
+        true,
+        wipeAfterNote,
+      );
+      expect(results(await h.run())).toMatchObject([{ ok: true }, { name: 'write_file', ok: true }]);
+      expect(recorded).toEqual([['a.txt', sha256(Buffer.from('original\n'))]]);
+      expect(await s.read('a.txt')).toBe('overwrite\n');
+    });
+  });
+
+  describe('every tool call of a response needs an ID of its own, or none of them runs', () => {
+    const withIds = (...items: [string, string, object][]): FakeStep[] => [
+      ...items.map(
+        ([id, name, args]): FakeStep => ({ type: 'tool_call', call: { id, name, argsJson: JSON.stringify(args) } }),
+      ),
+      { type: 'finish', reason: 'tool_calls' },
+    ];
+    /** Runs `response` as the first step, then a turn that overwrites a.txt, which needs a read of it first. */
+    async function refusedThenOverwrite(response: FakeStep[]) {
+      await setup((_, i) =>
+        i === 0 ? response : i === 1 ? calls(['write_file', { path: 'a.txt', content: 'overwrite\n' }]) : reply,
+      );
+      const first = await h.run();
+      expect(first.filter((e) => e.type === 'tool_call' || e.type === 'tool_result')).toEqual([]);
+      expect(first.filter((e) => e.type === 'error')).toMatchObject([
+        { error: { code: 'provider_error', message: TOOL_CALL_IDS_ERROR } },
+      ]);
+      expect(h.messages().filter((m) => m.role === 'tool')).toEqual([]);
+      expect(h.messages().at(-1)).toMatchObject({ role: 'assistant', status: 'error', toolCalls: [] });
+      expect(h.provider.calls).toHaveLength(1);
+      expect(await s.exists('new.txt')).toBe(false);
+      // Nothing counts as read: the overwrite on the next turn is refused.
+      const next = results(await h.run({ newUserMessage: { text: 'go on', attachmentIds: [] } }));
+      expect(next).toMatchObject([{ ok: false, output: autoUnreadText('a.txt') }]);
+      expect(await s.read('a.txt')).toBe('original\n');
+    }
+
+    it('a call with an empty ID: no call of the response runs', async () => {
+      await refusedThenOverwrite(
+        withIds(['', 'read_file', { path: 'a.txt' }], ['w', 'write_file', { path: 'new.txt', content: 'new' }]),
+      );
+    });
+
+    it('two calls sharing an ID: no call of the response runs', async () => {
+      await refusedThenOverwrite(
+        withIds(['dup', 'read_file', { path: 'a.txt' }], ['dup', 'write_file', { path: 'new.txt', content: 'new' }]),
+      );
+    });
+
+    it('two reads sharing an ID, then Stop: the next turn can’t overwrite the file whose content it never got back', async () => {
+      await s.seed('b.txt', 'bee\n');
+      const controller = new AbortController();
+      await setup((_, i) =>
+        i === 0
+          ? withIds(['same', 'read_file', { path: 'a.txt' }], ['same', 'read_file', { path: 'b.txt' }])
+          : i === 1
+            ? calls(['write_file', { path: 'a.txt', content: 'overwrite\n' }])
+            : reply,
+      );
+      // Stop lands once the second read's result is in the chat, before the next model request.
+      const save = h.chats.appendMessage.bind(h.chats);
+      vi.spyOn(h.chats, 'appendMessage').mockImplementation(async (chatId, message) => {
+        const saved = await save(chatId, message);
+        if (message.role === 'tool' && message.output.includes('bee')) controller.abort();
+        return saved;
+      });
+      await h.run({ signal: controller.signal });
+      expect(h.provider.calls).toHaveLength(1);
+
+      const next = await h.run({ newUserMessage: { text: 'go on', attachmentIds: [] } });
+      // Whatever the replay showed for the first call, a.txt's content didn't reach the model as such.
+      expect(results(next)).toMatchObject([{ ok: false, output: autoUnreadText('a.txt') }]);
+      expect(await s.read('a.txt')).toBe('original\n');
+    });
+
+    it('a call reusing an ID from an earlier step: no call of the response runs', async () => {
+      await s.seed('b.txt', 'bee\n');
+      await setup((_, i) =>
+        i === 0
+          ? withIds(['x', 'read_file', { path: 'a.txt' }])
+          : i === 1
+            ? withIds(['x', 'read_file', { path: 'b.txt' }])
+            : i === 2
+              ? calls(['write_file', { path: 'b.txt', content: 'overwrite\n' }])
+              : reply,
+      );
+      const first = await h.run();
+      expect(results(first)).toMatchObject([{ name: 'read_file', ok: true }]);
+      expect(first.filter((e) => e.type === 'error')).toMatchObject([{ error: { message: TOOL_CALL_IDS_ERROR } }]);
+      expect(h.messages().filter((m) => m.role === 'tool')).toHaveLength(1);
+      const next = results(await h.run({ newUserMessage: { text: 'go on', attachmentIds: [] } }));
+      expect(next).toMatchObject([{ ok: false, output: autoUnreadText('b.txt') }]);
       expect(await s.read('b.txt')).toBe('bee\n');
     });
   });

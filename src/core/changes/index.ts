@@ -42,8 +42,8 @@ import { consoleLogger, isNotFound, type StorageLogger, writeFileAtomic } from '
 import { withFileLock } from '../storage/mutex';
 import { type DataPaths, dataPaths } from '../storage/paths';
 import { resolveInProject, type SandboxOptions, sameFoldedRel } from '../tools/sandbox';
-import type { EditToolName, ToolChanges } from '../tools/types';
-import type { ChangesService } from '../types';
+import type { EditToolName } from '../tools/types';
+import type { ChangesService, TurnChanges } from '../types';
 import { type BlobStore, createBlobStore, sha256 } from './blobs';
 import { applyHunks, detectEol, diffFile, finishFileChange, sameLines } from './diff';
 import { buildNote, type ChangeEvent, type NoteFile } from './note';
@@ -1315,7 +1315,7 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
       return chatChangesOf(await load(chatId), project);
     },
 
-    tools({ chatId, projectId, projectRoot, messageId, turnId, mode }): ToolChanges {
+    tools({ chatId, projectId, projectRoot, messageId, turnId, mode }): TurnChanges {
       /**
        * OVERLAYS STAY IN THEIR PROJECT (invariant): proposals are read through only by a turn pinned to their project,
        * so a turn in another project sees that project's disk, never proposals made elsewhere.
@@ -1351,6 +1351,10 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
         // Recorded under this turn's pinned project, also when the loop commits a read late, after a move.
         noteRead(relPath, bytes) {
           remember(chatId, projectId, relPath, sha256(bytes));
+        },
+        // The same record from the digest of the bytes, taken by the loop when the tool read them.
+        noteReadHash(relPath, hash) {
+          remember(chatId, projectId, relPath, hash);
         },
       };
     },

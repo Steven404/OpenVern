@@ -7,8 +7,7 @@ import path from 'node:path';
 import type { ApplyChangesResponse, UndoBatchResponse } from '@shared/api';
 import type { ChangeKind, ChangeSummary, ChatChanges, FileChange, Id } from '@shared/types';
 import { structuredPatch } from 'diff';
-import type { ChangesService } from '../types';
-import type { ToolChanges } from './types';
+import type { ChangesService, TurnChanges } from '../types';
 
 interface Entry {
   kind: ChangeKind;
@@ -91,7 +90,7 @@ export function createFakeChangesService(): FakeChangesService {
         diskSeq: 0,
       };
     },
-    tools({ chatId, projectRoot, messageId, mode }): ToolChanges {
+    tools({ chatId, projectRoot, messageId, mode }): TurnChanges {
       const map = forChat(chatId);
       return {
         mode,
@@ -123,6 +122,7 @@ export function createFakeChangesService(): FakeChangesService {
           throw new Error('not implemented in the fake');
         },
         noteRead() {},
+        noteReadHash() {},
       };
     },
     async snapshot(chatId, userMessageId) {

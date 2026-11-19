@@ -222,6 +222,19 @@ export interface Core {
 
 // ── v0.2 (plan §4.7) ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * A step's `ToolChanges`, as the agent loop holds it. `noteReadHash` records a read the loop held back, from the digest
+ * it took when the tool read the file: a read waits for the end of its step before it counts as seen, and the loop
+ * keeps only the path and digest meanwhile, never the bytes, so a step of large reads holds no file in memory.
+ */
+export interface TurnChanges extends ToolChanges {
+  /**
+   * Same record as `noteRead(relPath, bytes)`, from `sha256` (lowercase hex, as `sha256` in `changes/blobs.ts`
+   * computes) of those bytes.
+   */
+  noteReadHash(relPath: string, sha256: string): void;
+}
+
 export interface ChangesService {
   get(chatId: Id): Promise<ChatChanges>;
   /**
@@ -238,7 +251,7 @@ export interface ChangesService {
     messageId: Id;
     turnId: Id;
     mode: EditMode;
-  }): ToolChanges;
+  }): TurnChanges;
   /**
    * At a new user message: remember the pending set, and the project it was made for, so a retry of this turn can
    * restore both. An unbound set is recorded as made for the chat's current project.

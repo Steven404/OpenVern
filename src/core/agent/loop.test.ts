@@ -653,7 +653,8 @@ describe('errors', () => {
 describe('stuck-loop guard', () => {
   it('an identical call with an identical result stops after MAX_REPEATED_TOOL_STEPS steps', async () => {
     const h = await createHarness({
-      script: scriptFromTurns([callTools([['c', 'read_file', '{"path":"a"}']])]),
+      // A fresh call ID per step, as the loop requires; the stuck-loop signature ignores IDs.
+      script: (_req, i) => callTools([[`c${i}`, 'read_file', '{"path":"a"}']]),
     });
     const events = await h.run();
     expect(h.provider.calls).toHaveLength(MAX_REPEATED_TOOL_STEPS);
@@ -723,16 +724,18 @@ describe('stuck-loop guard', () => {
 
   it('parallel steps: the same calls in another order count as the same step', async () => {
     const h = await createHarness({
-      script: scriptFromTurns([
-        callTools([
-          ['a', 'read_file', '{"path":"a"}'],
-          ['b', 'read_file', '{"path":"b"}'],
-        ]),
-        callTools([
-          ['b', 'read_file', '{"path":"b"}'],
-          ['a', 'read_file', '{"path":"a"}'],
-        ]),
-      ]),
+      script: (_req, i) =>
+        callTools(
+          i % 2 === 0
+            ? [
+                [`a${i}`, 'read_file', '{"path":"a"}'],
+                [`b${i}`, 'read_file', '{"path":"b"}'],
+              ]
+            : [
+                [`b${i}`, 'read_file', '{"path":"b"}'],
+                [`a${i}`, 'read_file', '{"path":"a"}'],
+              ],
+        ),
     });
     const events = await h.run();
     expect(h.provider.calls).toHaveLength(MAX_REPEATED_TOOL_STEPS);

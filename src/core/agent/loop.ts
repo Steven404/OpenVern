@@ -39,6 +39,7 @@ import type {
   Usage,
   UserMessage,
 } from '@shared/types';
+import { sha256 } from '../changes/blobs';
 import { CoreError, toErrorInfo } from '../errors';
 import type { Provider, ProviderMessage, ToolSpec } from '../providers/types';
 import { redactionNote, redactSecrets } from '../security/redact';
@@ -60,6 +61,7 @@ import type {
   ProjectsService,
   RunTurnInput,
   TerminalReadBroker,
+  TurnChanges,
 } from '../types';
 import { EDIT_TOOL_NAMES, retryUndoNote, retryUndoNotice, withModeLine } from './edit-mode';
 import { buildHistory, flattenToolCall, INTERRUPTED_OUTPUT } from './history';
@@ -153,18 +155,21 @@ export function toChatSummary(chat: ChatSummary | Chat): ChatSummary {
  * the result reached the model: kept, and appended to the chat (`commitReads`). Committed reads still wait for the
  * end of the step (`endStep`) before the stale-read check can use them.
  */
-function trackChanges(inner: ToolChanges): TrackedChanges {
+function trackChanges(inner: TurnChanges): TrackedChanges {
   let staged: { summary: ChangeSummary | null } | undefined;
   let written: { batchId: Id } | undefined;
   /** The current tool call's reads, until its kept result is in the chat. */
-  let reads: [string, Uint8Array][] = [];
+  let reads: HeldRead[] = [];
   /** Reads of this step whose results are in the chat, in order, until the step is over. */
-  let stepReads: [string, Uint8Array][] = [];
+  let stepReads: HeldRead[] = [];
   return {
     mode: inner.mode,
     read: (p) => inner.read(p),
     staged: () => inner.staged(),
-    noteRead: (p, bytes) => void reads.push([p, bytes]),
+    // The digest is taken now and the bytes dropped: a held read can wait for the rest of the step, and a step of large
+    // reads must not keep every file it read in memory until then. It is the same digest the change service would
+    // take from these bytes, so the record is the one `noteRead` would make.
+    noteRead: (p, bytes) => void reads.push({ path: p, hash: sha256(bytes) }),
     async stage(p, content) {
       const result = await inner.stage(p, content);
       staged = { summary: result.summary };
@@ -181,7 +186,7 @@ function trackChanges(inner: ToolChanges): TrackedChanges {
       // replace that record at the end of the step: the next write would be refused as stale.
       if (result.file) {
         const changed = result.file.path;
-        stepReads = stepReads.filter(([rel]) => rel !== changed);
+        stepReads = stepReads.filter((r) => r.path !== changed);
       }
       return result;
     },
@@ -197,11 +202,19 @@ function trackChanges(inner: ToolChanges): TrackedChanges {
     endStep: () => {
       const done = stepReads;
       stepReads = [];
-      for (const [p, bytes] of done) inner.noteRead(p, bytes);
+      for (const r of done) inner.noteReadHash(r.path, r.hash);
     },
     lastStage: () => staged,
     lastWrite: () => written,
   };
+}
+
+/** A read held back until the step is over: what the read record needs of it, never the file's bytes. */
+interface HeldRead {
+  /** The path as the sandbox resolved it, the record's key. */
+  path: string;
+  /** sha256 (hex) of the bytes the read returned, the record's value. */
+  hash: string;
 }
 
 interface TrackedChanges extends ToolChanges {
@@ -224,6 +237,23 @@ interface TrackedChanges extends ToolChanges {
 
 /** `extra` appended to a user message's existing note, as its own block. */
 const appendNote = (note: string | undefined, extra: string): string => (note ? `${note}\n\n${extra}` : extra);
+
+/** Shown when a model response's tool calls can't each be told apart by their ID (see `callIdsUsable`). */
+export const TOOL_CALL_IDS_ERROR =
+  'The model sent tool calls without an ID of their own, so none of them ran. Try again, or pick another model.';
+
+/**
+ * Whether every call of one model response has an ID of its own: not empty, not shared with another call of the
+ * response, and not used by any call or result earlier in the chat (`used`).
+ */
+function callIdsUsable(calls: readonly ToolCall[], used: ReadonlySet<string>): boolean {
+  const ids = new Set<string>();
+  for (const call of calls) {
+    if (call.id.trim() === '' || ids.has(call.id) || used.has(call.id)) return false;
+    ids.add(call.id);
+  }
+  return true;
+}
 
 function interrupted(): { ok: false; output: string; summary: string } {
   return { ok: false, output: INTERRUPTED_OUTPUT, summary: 'Interrupted' };
@@ -529,6 +559,13 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
       readAttachment: (id) => attachments.readBytes(id),
     });
 
+    // Every tool-call ID the chat already holds, on a call or a result, for the ID check below.
+    const usedCallIds = new Set<string>();
+    for (const m of chat.messages) {
+      if (m.role === 'assistant') for (const c of m.toolCalls) usedCallIds.add(c.id);
+      else if (m.role === 'tool') usedCallIds.add(m.toolCallId);
+    }
+
     // S4.4: the loop. The stuck-loop guard counts consecutive steps with the same signature (see `stepSignature`).
     let lastSignature: string | undefined;
     let repeats = 0;
@@ -582,6 +619,15 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
         // S4.5/S4.6: an abort surfaces as whatever the provider throws, so look at the signal, not the error type.
         failure = signal.aborted ? { status: 'stopped' } : { status: 'error', error: toErrorInfo(err) };
       }
+      // EVERY TOOL CALL HAS AN ID OF ITS OWN, OR NONE OF THE RESPONSE'S CALLS RUNS (invariant): the history replay pairs
+      // a call with its result by ID across the whole chat, so calls without an ID, or sharing one (with each other or
+      // with an earlier call), are replayed on a later turn with one result for all of them. The model would then have
+      // lost a file it read while the read record still lets it overwrite that file. Whatever the provider, such a
+      // response is stored and reported as an error with no tool calls, before any of them runs: nothing is written,
+      // nothing counts as read, and no unusable ID enters the chat.
+      if (!failure && !callIdsUsable(toolCalls, usedCallIds)) {
+        failure = { status: 'error', error: errorInfo('provider_error', TOOL_CALL_IDS_ERROR) };
+      }
 
       const assistant: AssistantMessage = {
         id: messageId,
@@ -608,6 +654,7 @@ export function createAgentService(deps: AgentServiceDeps): AgentService {
         state.completed = true;
         return;
       }
+      for (const call of toolCalls) usedCallIds.add(call.id);
 
       const toolsOffered = toolSpecs.length > 0;
       if (toolsOffered) {
