@@ -3,7 +3,8 @@
 // compute `baseHash` from the disk the way the edit tools do.
 
 import { execFileSync } from 'node:child_process';
-import { promises as fs, constants as fsConstants } from 'node:fs';
+import { existsSync, promises as fs, constants as fsConstants, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { EditMode, Id } from '@shared/types';
 import { vi } from 'vitest';
@@ -22,6 +23,20 @@ export interface AutoSetupOptions {
   chatProjectId?: (chatId: Id) => Promise<Id | null>;
   /** Also create a second project folder (`rootB`), for tests that move a chat between projects. */
   secondProject?: boolean;
+}
+
+/**
+ * Whether the temp folder's volume treats `probe.txt` and `PROBE.txt` as one file (APFS and NTFS by default). Tests of
+ * one file reached under two spellings need it; tests of two files differing only by case need the opposite.
+ */
+export function tempVolumeIgnoresCase(): boolean {
+  const dir = mkdtempSync(path.join(tmpdir(), 'openvern-case-probe-'));
+  try {
+    writeFileSync(path.join(dir, 'probe.txt'), '');
+    return existsSync(path.join(dir, 'PROBE.txt'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 /** A gate: `entered` resolves once someone called `hold()`, and `hold()` waits until `open()`. */

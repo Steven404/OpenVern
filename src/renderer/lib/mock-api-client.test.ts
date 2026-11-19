@@ -1023,6 +1023,34 @@ describe('MockApiClient Auto mode', () => {
     expect(again.some((e) => e.type === 'auto_batch_updated')).toBe(false);
   });
 
+  /** Adds a second spelling of the batch's first file to it, as a case-only rename mid-turn leaves on the server. */
+  function respellFirstFile(api: MockApiClient, chatId: string, batchId: string): [string, string] {
+    const inner = api as unknown as { applied: Map<string, { id: string; written: { path: string }[] }[]> };
+    const batch = inner.applied.get(chatId)?.find((b) => b.id === batchId);
+    const first = batch?.written[0];
+    if (!batch || !first) throw new Error('no batch to respell');
+    const other = first.path.toUpperCase();
+    batch.written = [...batch.written, { ...first, path: other }];
+    return [first.path, other];
+  }
+
+  it('spellings of one file are undone together or not at all: Undo and Retry skip both as blocked', async () => {
+    const { api, git } = await seeded();
+    for (const via of ['undo', 'retry'] as const) {
+      const chat = await autoChatIn(api, git.id);
+      await editTurn(api, chat.id);
+      const batch = (await api.getChatChanges(chat.id)).applied[0];
+      const spellings = respellFirstFile(api, chat.id, batch?.id ?? '');
+      const others = (batch?.written ?? []).map((f) => f.path).filter((p) => !spellings.includes(p));
+      if (via === 'undo') await api.undoChatBatch(chat.id, batch?.id ?? '');
+      else await collect(api.retry(chat.id, { model: MODEL, expectedEditMode: 'auto' }, sig()));
+      const undo = (await api.getChatChanges(chat.id)).applied.find((b) => b.id === batch?.id)?.undo;
+      expect(undo?.restored).toEqual(others.sort());
+      expect(undo?.skipped).toEqual(expect.arrayContaining(spellings.map((path) => ({ path, reason: 'blocked' }))));
+      expect(undo?.skipped).toHaveLength(2);
+    }
+  });
+
   it('keeps undo for the newest autoUndoTurns auto batches only', async () => {
     const { api, git } = await seeded();
     const chat = await autoChatIn(api, git.id);

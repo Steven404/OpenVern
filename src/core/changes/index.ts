@@ -239,6 +239,43 @@ export interface ChangesServiceDeps {
 
 const byPath = <T extends { path: string }>(a: T, b: T): number => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
 
+/**
+ * SPELLINGS OF ONE FILE ARE UNDONE TOGETHER OR NOT AT ALL (invariant): Undo entries are keyed by exact path, but a turn
+ * can reach one file under two spellings (the user renames `a.txt` to `A.txt` while the reply runs, and the reply then
+ * rewrites `A.txt`). Each entry expects the bytes its own write left, so handling the spellings one by one can skip one
+ * and still act on the other: once the user renames the file back and restores the first write's bytes, the `A.txt`
+ * entry is skipped and the `a.txt` entry (a create) deletes the user's file. So the paths that share a fold with
+ * another, different path in the same undo are returned here, and every one of them is skipped as `blocked` before
+ * anything touches the disk. The fold is the sandbox's
+ * (`sameFoldedRel`, as the write lock uses): it over-groups look-alikes the volume keeps apart, and on a case-sensitive
+ * volume it groups names that are distinct files. Over-grouping only makes Undo more conservative (those files keep
+ * the turn's edits and are reported), never destructive. A path with no other spelling is undone as usual.
+ */
+export function respelledPaths(paths: Iterable<string>, platform: NodeJS.Platform = process.platform): Set<string> {
+  const unique = [...new Set(paths)];
+  const out = new Set<string>();
+  for (let i = 0; i < unique.length; i++) {
+    for (let j = i + 1; j < unique.length; j++) {
+      const a = unique[i] as string;
+      const b = unique[j] as string;
+      if (sameFoldedRel(a, b, platform)) {
+        out.add(a);
+        out.add(b);
+      }
+    }
+  }
+  return out;
+}
+
+/** The held reason for `p`: its own, or that of any held spelling of the same file (see `respelledPaths`). */
+function heldReason(held: ReadonlyMap<string, UndoSkipReason> | undefined, p: string): UndoSkipReason | undefined {
+  if (!held) return undefined;
+  const own = held.get(p);
+  if (own) return own;
+  for (const [k, reason] of held) if (sameFoldedRel(k, p)) return reason;
+  return undefined;
+}
+
 const kindOf = (f: StoredFile): ChangeKind =>
   f.baseContent === null ? 'create' : f.content === null ? 'delete' : 'modify';
 
@@ -1107,8 +1144,10 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
   /**
    * Undoes one batch in place (it must still have its undo data). Under the chat's store lock only (`mutateFiles`,
    * whose `diskChanged` is called for each restored file; nothing here throws). `project.real` is the project's real
-   * root, pinned once by the caller for the whole undo (see PINNED ROOT). A path in `held` was skipped by a later batch
-   * of the same undo: it is never touched and is reported as skipped for that reason.
+   * root, pinned once by the caller for the whole undo (see PINNED ROOT). A path in `held`, or any spelling of one (see
+   * `respelledPaths`), was skipped by a later batch of the same undo: it is never touched and is reported as skipped
+   * for that reason. SPELLINGS OF ONE FILE ARE UNDONE TOGETHER OR NOT AT ALL (see `respelledPaths`): entries of this
+   * batch whose paths share a fold are all skipped as `blocked`, decided before the first file is touched.
    */
   async function undoInStore(
     chatId: Id,
@@ -1122,8 +1161,13 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
     const blobs = blobsFor(chatId);
     const restored: string[] = [];
     const skipped: BatchUndo['skipped'] = [];
-    for (const e of [...(batch.undoData ?? [])].sort(byPath)) {
-      const reason = held?.get(e.path) ?? (await undoFile(chatId, project, e, blobs));
+    const entries = [...(batch.undoData ?? [])].sort(byPath);
+    const respelled = respelledPaths(entries.map((e) => e.path));
+    for (const e of entries) {
+      const reason =
+        heldReason(held, e.path) ??
+        (respelled.has(e.path) ? 'blocked' : null) ??
+        (await undoFile(chatId, project, e, blobs));
       if (reason) skipped.push({ path: e.path, reason });
       else {
         diskChanged();
@@ -1507,7 +1551,11 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
         // A SKIP HOLDS FOR OLDER BATCHES (invariant): once a later batch skips a path, no older batch touches it. The
         // later write is what the skip protects (the user changed the file after it, perhaps back to the bytes an
         // older write left), so an older batch whose entry happens to match must not delete or overwrite it. Paths a
-        // later batch restored go on to the older batches as usual.
+        // later batch restored go on to the older batches as usual. A held path also holds every other spelling of
+        // it (see `respelledPaths`).
+        // SPELLINGS OF ONE FILE ARE UNDONE TOGETHER OR NOT AT ALL (invariant, see `respelledPaths`), across all the
+        // batches undone here: a path with another spelling in any of them is held as `blocked` before the first
+        // batch touches the disk, so no batch undoes either spelling.
         const batches = store.applied
           .filter(
             (b) =>
@@ -1522,6 +1570,9 @@ export function createChangesService(deps: ChangesServiceDeps): ChangesService {
         const undos: BatchUndo[] = [];
         // Each path's first skip, newest batch first: carried into every older batch and kept as the reported reason.
         const held = new Map<string, UndoSkipReason>();
+        for (const p of respelledPaths(batches.flatMap((b) => (b.undoData ?? []).map((e) => e.path)))) {
+          held.set(p, 'blocked');
+        }
         for (const batch of batches) {
           const undo = await undoInStore(chatId, project, store, batch, 'retry', diskChanged, held);
           for (const s of undo.skipped) if (!held.has(s.path)) held.set(s.path, s.reason);

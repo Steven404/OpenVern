@@ -6,8 +6,17 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { autoUnreadText, modeChangedNote } from '../agent/edit-mode';
 import { cleanupTempDirs } from '../storage/test-helpers';
-import { makeFifo, releaseFifo, setupAuto, swapProjectRoot, watchFileReads, within } from './auto-test-helpers';
+import {
+  makeFifo,
+  releaseFifo,
+  setupAuto,
+  swapProjectRoot,
+  tempVolumeIgnoresCase,
+  watchFileReads,
+  within,
+} from './auto-test-helpers';
 import { sha256 } from './blobs';
+import { respelledPaths } from './index';
 
 cleanupTempDirs();
 
@@ -707,4 +716,73 @@ describe('prepareRetry', () => {
     expect(await s.read('f1.txt')).toBe('n1\n');
     expect((await s.retry('t21'))?.undo.restored).toEqual(['f21.txt']);
   }, 30_000);
+});
+
+// SPELLINGS OF ONE FILE ARE UNDONE TOGETHER OR NOT AT ALL: entries are keyed by exact path, so one turn reaching one
+// file under two spellings leaves an entry for each. Every entry of such a group is skipped (blocked) before the disk is
+// touched; an entry with no other spelling is undone as usual.
+describe('spellings of one file are undone together or not at all', () => {
+  it('respelledPaths groups paths that differ only by letter case or Unicode form, and nothing else', () => {
+    for (const platform of ['darwin', 'linux'] as const) {
+      expect(respelledPaths(['a.txt', 'b.txt', 'a.txt'], platform)).toEqual(new Set());
+      expect(respelledPaths(['overlap.txt', 'other.txt', 'OVERLAP.txt'], platform)).toEqual(
+        new Set(['overlap.txt', 'OVERLAP.txt']),
+      );
+      expect(respelledPaths(['Dir/a.txt', 'dir/a.txt', 'dir/b.txt'], platform)).toEqual(
+        new Set(['Dir/a.txt', 'dir/a.txt']),
+      );
+      // NFC and NFD spellings of the same name.
+      expect(respelledPaths(['café.txt', 'café.txt'], platform)).toEqual(new Set(['café.txt', 'café.txt']));
+      // Three spellings form one group.
+      expect(respelledPaths(['x.md', 'X.md', 'x.MD', 'y.md'], platform)).toEqual(new Set(['x.md', 'X.md', 'x.MD']));
+    }
+    // On darwin the sandbox's coarser fold also groups names the volume stores as one (long s), as the write lock does.
+    expect(respelledPaths(['poſt.txt', 'post.txt'], 'darwin')).toEqual(new Set(['poſt.txt', 'post.txt']));
+    expect(respelledPaths(['poſt.txt', 'post.txt'], 'linux')).toEqual(new Set());
+  });
+
+  const R1 = 'first write\n';
+  const R2 = 'second write\n';
+
+  /**
+   * One turn creates overlap.txt (R1); the user renames it to OVERLAP.txt; the turn reads and rewrites OVERLAP.txt (R2)
+   * and also creates other.txt. Then the user renames the file back and puts back the first write's bytes.
+   */
+  async function turnOverTwoSpellings() {
+    const s = await setupAuto();
+    const tc = s.turn();
+    await s.put(tc, 'overlap.txt', R1);
+    await fs.rename(s.abs('overlap.txt'), s.abs('OVERLAP.txt'));
+    await s.readPut(tc, 'OVERLAP.txt', R2);
+    await s.put(tc, 'other.txt', 'other\n');
+    const applied = (await s.get()).applied;
+    expect(applied.map((b) => b.written.map((f) => f.path))).toEqual([['OVERLAP.txt', 'other.txt', 'overlap.txt']]);
+    await fs.rename(s.abs('OVERLAP.txt'), s.abs('overlap.txt'));
+    await fs.writeFile(s.abs('overlap.txt'), R1);
+    return { s, batchId: applied[0]?.id as string };
+  }
+
+  const skippedBoth = [
+    { path: 'OVERLAP.txt', reason: 'blocked' },
+    { path: 'overlap.txt', reason: 'blocked' },
+  ];
+  const NEEDS_CASE_INSENSITIVE = 'needs a case-insensitive temp volume, where overlap.txt and OVERLAP.txt are one file';
+
+  it('undoBatch: both spellings are skipped (blocked), the user’s file is kept; other.txt is undone as usual', async (ctx) => {
+    ctx.skip(!tempVolumeIgnoresCase(), NEEDS_CASE_INSENSITIVE);
+    const { s, batchId } = await turnOverTwoSpellings();
+    const res = await s.undo(batchId);
+    expect(res.batch.undo).toMatchObject({ restored: ['other.txt'], skipped: skippedBoth });
+    expect(await s.read('overlap.txt')).toBe(R1);
+    expect(await s.exists('other.txt')).toBe(false);
+  });
+
+  it('prepareRetry: both spellings are skipped (blocked), the user’s file is kept; other.txt is undone as usual', async (ctx) => {
+    ctx.skip(!tempVolumeIgnoresCase(), NEEDS_CASE_INSENSITIVE);
+    const { s } = await turnOverTwoSpellings();
+    const res = await s.retry('t1');
+    expect(res?.undo).toMatchObject({ by: 'retry', restored: ['other.txt'], skipped: skippedBoth });
+    expect(await s.read('overlap.txt')).toBe(R1);
+    expect(await s.exists('other.txt')).toBe(false);
+  });
 });

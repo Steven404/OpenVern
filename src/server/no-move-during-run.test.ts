@@ -2,7 +2,7 @@
 // (409) then, and a turn can't start while a move or a removal covering its chat is committing. So a turn's writes stay
 // in one project and one batch. Through the real routes, the real agent and the real change service.
 
-import { mkdir, mkdtemp, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { CHAT_PROJECT_CHANGED, MOVE_WHILE_RUNNING, REMOVE_WHILE_RUNNING, type UndoBatchResponse } from '@shared/api';
@@ -12,12 +12,18 @@ import type { ChatChanges } from '@shared/types';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createCore } from '../core';
-import { gate } from '../core/changes/auto-test-helpers';
+import { gate, tempVolumeIgnoresCase } from '../core/changes/auto-test-helpers';
 import { createFakeProvider, type FakeProvider } from '../core/providers/fake';
 import { createFileSecretStore } from '../core/storage';
 import type { Core } from '../core/types';
 import { createApp } from './app';
 import { collectEvents } from './test-helpers';
+
+const IGNORES_CASE = tempVolumeIgnoresCase();
+const NEEDS_CASE_INSENSITIVE =
+  'needs a case-insensitive temp volume: on a case-sensitive one overlap.txt and OVERLAP.txt are two files, so the rename can’t make one file of them';
+const NEEDS_CASE_SENSITIVE =
+  'needs a case-sensitive temp volume: on a case-insensitive one overlap.txt and OVERLAP.txt are one file';
 
 const MODEL = 'anthropic/claude-sonnet-5.5';
 const R1 = 'first write\n';
@@ -468,5 +474,108 @@ describe('a turn can no longer be split by a move, so Undo and Retry keep the us
       skipped: [{ path: 'f.txt', reason: 'changed_since' }],
     });
     expect(await readFile(file, 'utf8')).toBe(R1);
+  });
+});
+
+// SPELLINGS OF ONE FILE ARE UNDONE TOGETHER OR NOT AT ALL: one turn reaches one file under two spellings, so its one
+// batch holds an entry for each. Handled one by one, the second spelling's entry was blocked and the first one's (a
+// create, whose bytes the user had put back) deleted the user's file.
+describe('one batch holding two spellings of one file: Undo and Retry leave the user’s file alone', () => {
+  /**
+   * An Auto turn creates overlap.txt (R1); mid-turn the user renames it to OVERLAP.txt; the turn reads and rewrites
+   * OVERLAP.txt (R2). Then the user renames it back to overlap.txt and puts back the first write's bytes (R1).
+   */
+  async function turnOverTwoSpellings(): Promise<{ chatId: string; batchId: string; file: string }> {
+    const chatId = await autoChat();
+    const hold = gate();
+    script(
+      [
+        [tool('c1', 'write_file', { path: 'overlap.txt', content: R1 })],
+        // Held here: the user renames the file case-only while the turn runs.
+        [tool('c2', 'read_file', { path: 'OVERLAP.txt' })],
+        [tool('c3', 'write_file', { path: 'OVERLAP.txt', content: R2 })],
+      ],
+      { gate: hold, holdBefore: 2 },
+    );
+    const sent = Promise.resolve(send(chatId)).then(collectEvents);
+    await hold.entered;
+    try {
+      await rename(path.join(dirA, 'overlap.txt'), path.join(dirA, 'OVERLAP.txt'));
+    } finally {
+      hold.open();
+    }
+    expect(types(await sent)).not.toContain('error');
+    expect(await readFile(path.join(dirA, 'OVERLAP.txt'), 'utf8')).toBe(R2);
+    // One batch, keyed by exact path: an entry for each spelling.
+    const applied = (await getChanges(chatId)).applied;
+    expect(applied.map((b) => b.written.map((f) => [f.path, f.kind]))).toEqual([
+      [
+        ['OVERLAP.txt', 'modify'],
+        ['overlap.txt', 'create'],
+      ],
+    ]);
+    // The user renames it back and restores the first write's bytes.
+    await rename(path.join(dirA, 'OVERLAP.txt'), path.join(dirA, 'overlap.txt'));
+    const file = path.join(dirA, 'overlap.txt');
+    await writeFile(file, R1);
+    return { chatId, batchId: applied[0]?.id ?? '', file };
+  }
+
+  const bothSkipped = [
+    { path: 'OVERLAP.txt', reason: 'blocked' },
+    { path: 'overlap.txt', reason: 'blocked' },
+  ];
+
+  async function expectUserFileKept(file: string) {
+    expect(await readFile(file, 'utf8')).toBe(R1);
+    expect((await readdir(dirA)).filter((n) => n.toLowerCase() === 'overlap.txt')).toEqual(['overlap.txt']);
+  }
+
+  it('direct Undo of the batch skips both spellings (blocked) and keeps overlap.txt with the user’s bytes', async (ctx) => {
+    ctx.skip(!IGNORES_CASE, NEEDS_CASE_INSENSITIVE);
+    const { chatId, batchId, file } = await turnOverTwoSpellings();
+    const undone = await call(`/api/chats/${chatId}/changes/batches/${batchId}/undo`, { method: 'POST', json: {} });
+    expect(undone.status).toBe(200);
+    expect(((await undone.json()) as UndoBatchResponse).batch.undo).toMatchObject({
+      by: 'user',
+      restored: [],
+      skipped: bothSkipped,
+    });
+    await expectUserFileKept(file);
+  });
+
+  it('Retry of the turn skips both spellings (blocked) and keeps overlap.txt with the user’s bytes', async (ctx) => {
+    ctx.skip(!IGNORES_CASE, NEEDS_CASE_INSENSITIVE);
+    const { chatId, file } = await turnOverTwoSpellings();
+    script([]);
+    const events = await collectEvents(await retry(chatId));
+    expect(types(events)).not.toContain('error');
+    await expectUserFileKept(file);
+    expect((await getChanges(chatId)).applied[0]?.undo).toMatchObject({
+      by: 'retry',
+      restored: [],
+      skipped: bothSkipped,
+    });
+  });
+
+  // On a case-sensitive volume the two names are two files. The fold can't tell that apart from one file under two
+  // spellings, so both are conservatively skipped (blocked): each keeps the turn's bytes, and neither is deleted.
+  it('two distinct files differing only by case (case-sensitive volume) are both conservatively skipped', async (ctx) => {
+    ctx.skip(IGNORES_CASE, NEEDS_CASE_SENSITIVE);
+    const chatId = await autoChat();
+    script([
+      [tool('c1', 'write_file', { path: 'overlap.txt', content: R1 })],
+      [tool('c2', 'write_file', { path: 'OVERLAP.txt', content: R2 })],
+    ]);
+    expect(types(await collectEvents(await send(chatId)))).not.toContain('error');
+    const batchId = (await getChanges(chatId)).applied[0]?.id ?? '';
+    const undone = await call(`/api/chats/${chatId}/changes/batches/${batchId}/undo`, { method: 'POST', json: {} });
+    expect(undone.status).toBe(200);
+    expect(((await undone.json()) as UndoBatchResponse).batch.undo).toMatchObject({
+      restored: [],
+      skipped: bothSkipped,
+    });
+    expect(await readFile(path.join(dirA, 'overlap.txt'), 'utf8')).toBe(R1);
+    expect(await readFile(path.join(dirA, 'OVERLAP.txt'), 'utf8')).toBe(R2);
   });
 });

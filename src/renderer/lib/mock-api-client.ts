@@ -146,6 +146,19 @@ const UNDO_RUNNING = 'Wait for the response to finish before undoing edits.';
 const UNDO_NO_PROJECT = 'This chat has no project to write to.';
 const UNDO_GONE = 'These edits can no longer be undone.';
 
+/**
+ * One file's spellings share this key: NFC plus lower case, the part of the server's `sameFoldedRel` that holds on
+ * every platform (the renderer doesn't import `@core`; the server also folds further on darwin).
+ */
+const spellingKey = (p: string): string => p.normalize('NFC').toLowerCase();
+
+/** Like the server's `respelledPaths`: the paths that share a spelling key with another, different path. */
+function respelledPaths(paths: readonly string[]): Set<string> {
+  const byKey = new Map<string, Set<string>>();
+  for (const p of paths) byKey.set(spellingKey(p), (byKey.get(spellingKey(p)) ?? new Set()).add(p));
+  return new Set([...byKey.values()].filter((g) => g.size > 1).flatMap((g) => [...g]));
+}
+
 /** Must match `INTERRUPTED_OUTPUT` in `src/core/agent/history.ts` (the renderer doesn't import `@core`). */
 const INTERRUPTED_OUTPUT = 'Interrupted: the run was stopped before this tool finished.';
 
@@ -861,8 +874,10 @@ export class MockApiClient implements ApiClient {
   }
 
   /**
-   * The mock has no disk to differ from what the turn wrote, so every file is restored, except a path in `held`: like
-   * the server, a path a later batch of the same retry skipped is never touched by an older one and keeps that reason.
+   * The mock has no disk to differ from what the turn wrote, so every file is restored, except a path in `held` (or
+   * any spelling of one): like the server, a path a later batch of the same retry skipped is never touched by an older
+   * one and keeps that reason. SPELLINGS OF ONE FILE ARE UNDONE TOGETHER OR NOT AT ALL, as on the server: paths of the
+   * batch that are another's spelling (`respelledPaths`) are all skipped as `blocked`.
    */
   private restore(
     chatId: Id,
@@ -871,8 +886,13 @@ export class MockApiClient implements ApiClient {
     held: ReadonlyMap<string, UndoSkipReason> = new Map(),
   ): BatchUndo {
     const undo: BatchUndo = { at: now(), by, restored: [], skipped: [] };
-    for (const p of batch.written.map((f) => f.path).sort()) {
-      const reason = held.get(p);
+    const paths = batch.written.map((f) => f.path).sort();
+    const respelled = respelledPaths(paths);
+    for (const p of paths) {
+      const reason =
+        held.get(p) ??
+        [...held].find(([k]) => spellingKey(k) === spellingKey(p))?.[1] ??
+        (respelled.has(p) ? 'blocked' : undefined);
       if (reason) undo.skipped.push({ path: p, reason });
       else undo.restored.push(p);
     }
@@ -903,13 +923,15 @@ export class MockApiClient implements ApiClient {
    * first like the server. A move is refused while a turn runs, so a turn writes into one batch per project; the
    * newest-first order and the held skips stay as the server's defence in depth for batches that hold the same file.
    * A path a newer batch skipped is held for the older ones. Each path is reported once: skipped (the newest reason)
-   * if any batch skipped it.
+   * if any batch skipped it. A path with another spelling in any of the batches is held as `blocked` from the start, so
+   * no batch undoes either spelling.
    */
   private undoTurn(chatId: Id, turnId: Id, projectId: Id | null): { batchId: Id; undo: BatchUndo } | null {
     const batches = (this.applied.get(chatId) ?? [])
       .filter((b) => b.source === 'auto' && b.turnId === turnId && !b.undo && b.projectId === (projectId ?? undefined))
       .reverse();
     const held = new Map<string, UndoSkipReason>();
+    for (const p of respelledPaths(batches.flatMap((b) => b.written.map((f) => f.path)))) held.set(p, 'blocked');
     const restored = new Set<string>();
     let result: { batchId: Id; undo: BatchUndo } | null = null;
     for (const batch of batches) {
